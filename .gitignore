@@ -1,0 +1,21 @@
+# Downloaded assets — never commit (see README for sources + licenses)
+assets/
+
+# Training logs and outputs
+logs/
+outputs/
+wandb/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# Editors / misc
+.vscode/
+.idea/
+*.swp
+.DS_Store
