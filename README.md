@@ -14,7 +14,7 @@ config in this repo is derived from.
 scripts/00_inspect_scene.py        scene inspection: joint report, stability + door tests
 scripts/01_make_mug_physics_usd.py derive a physics-enabled YCB mug USD
 scripts/rsl_rl/{train,play}.py     RSL-RL entry points (harvested Isaac Lab template shims)
-source/dishwasher_sim_isaaclab/    the installable task package (env cfgs, mdp terms, robot cfgs)
+source/dishwasher_tasks/    the installable task package (env cfgs, mdp terms, robot cfgs)
 assets/                            downloaded assets (gitignored — see below)
 docs/                              environment, joint report, how-to-play
 logs/                              training logs (gitignored)
@@ -22,15 +22,28 @@ logs/                              training logs (gitignored)
 
 ## Setup
 
-Everything runs through Isaac Lab's wrapper from the Isaac Lab root:
+Everything runs through Isaac Lab's wrapper (`/workspace/isaaclab/isaaclab.sh -p`), from this
+project root:
 
 ```bash
-# install the task package (editable)
-/workspace/isaaclab/isaaclab.sh -p -m pip install -e source/dishwasher_sim_isaaclab
+# 1. install the task package (editable)
+/workspace/isaaclab/isaaclab.sh -p -m pip install -e source/dishwasher_tasks
 
-# download the ArtVIP dishwasher assets (~82 MB) into assets/artvip/
-/workspace/isaaclab/isaaclab.sh -p scripts/01_download_assets.py   # or see docs/environment.md
+# 2. download the ArtVIP dishwasher assets (~82 MB) into assets/artvip/
+/workspace/isaaclab/isaaclab.sh -p -c "from huggingface_hub import snapshot_download; \
+  snapshot_download(repo_id='X-Humanoid/ArtVIP', repo_type='dataset', \
+  allow_patterns=['Articulated_objects/major_appliances/dishwasher/**'], local_dir='assets/artvip')"
+
+# 3. generate the RL-ready dishwasher USD + joint report (also runs the stability/door tests)
+/workspace/isaaclab/isaaclab.sh -p scripts/00_inspect_scene.py --headless --test_door
+
+# 4. (optional, for the mug) derive the physics-enabled YCB mug
+/workspace/isaaclab/isaaclab.sh -p scripts/01_make_mug_physics_usd.py
 ```
+
+> Note: the Python package is named `dishwasher_tasks` (not `dishwasher_sim_isaaclab`) on purpose —
+> a package with the same name as this repo directory gets shadowed by a namespace package when
+> Kit scans extension paths, which breaks imports at app boot.
 
 ## Train / Play
 

@@ -41,6 +41,25 @@ Discovered 2026-07-28 on an NVIDIA Brev Isaac Launchable instance.
 - `scripts/reinforcement_learning/rsl_rl/train.py` / `play.py` still work but emit a
   `DeprecationWarning`; the current entry is `./isaaclab.sh train --rl_library rsl_rl --task <ID>`.
 
+## Hard-won launcher findings (this project's scripts work around these)
+
+1. **Boot-first requirement.** The stock template scripts resolve the env config *before* Kit
+   boots (`hydra_task_config` / `resolve_task_config` + `launch_simulation(env_cfg, ...)`).
+   For this project's config that pattern crashes natively (`free(): invalid pointer`) during
+   Kit startup — deterministically, from any working directory, while the same flow works for
+   in-tree tasks. This project's `scripts/rsl_rl/train.py`, `play.py`, and `zero_agent.py`
+   therefore launch `AppLauncher` **first** and import/resolve everything afterwards (the same
+   pattern as the in-tree tutorials), which is reliable.
+2. **`sim` must be a `PresetCfg`.** The launcher machinery expects `env_cfg.sim` to be an
+   `isaaclab_tasks.utils.PresetCfg` wrapper (as all in-tree tasks do). The env config uses a
+   PhysX-only `DishwasherSimCfg(PresetCfg)`; standalone scripts resolve it via
+   `isaaclab_tasks.utils.hydra.resolve_presets(env_cfg)`.
+3. **Package name vs. repo name.** The Python package is `dishwasher_tasks`, not
+   `dishwasher_sim_isaaclab`: Kit's extension scan turns a directory whose name matches an
+   importable package into a shadowing namespace package (`unknown location` ImportErrors).
+4. **`./isaaclab.sh -p` exits 0 even when the wrapped script crashes** — verify success from
+   log content, never from the exit code.
+
 ## Asset root
 
 Resolved from `apps/isaaclab.python.kit` by `isaaclab.utils.assets`:
