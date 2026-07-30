@@ -1,12 +1,12 @@
-# Copyright (c) 2026, dishwasher_tasks project.
+# Copyright (c) 2026, dishsim project.
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Generate the RL-ready derived copy of the ArtVIP dishwasher USD.
+"""Generate the passive-door derived copy of the ArtVIP dishwasher USD.
 
 The derived copy (``model_<variant>_rl.usda``, written next to the original) removes the
 world-weld fixed joint and neutralizes the authored door drive — see
-``dishwasher_tasks/utils/usd_prep.py`` for details. Running this is optional if you run
+``src/dishsim/usd_prep.py`` for details. Running this is optional if you run
 ``scripts/00_inspect_scene.py`` first (it generates the file on demand).
 
 Run with:
@@ -19,7 +19,7 @@ import os
 import sys
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(PROJECT_ROOT, "source", "dishwasher_tasks"))
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 parser = argparse.ArgumentParser(description="Prepare the RL-ready dishwasher USD.")
 parser.add_argument("--variant", type=str, default="dishwasher_2", help="ArtVIP dishwasher variant name.")
@@ -28,7 +28,7 @@ args = parser.parse_args()
 
 
 def main():
-    from dishwasher_tasks.utils import make_dishwasher_rl_usd
+    from dishsim.usd_prep import make_dishwasher_rl_usd
 
     pattern = os.path.join(
         PROJECT_ROOT, "assets", "artvip", "Articulated_objects", "major_appliances", "dishwasher",

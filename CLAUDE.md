@@ -4,109 +4,115 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Isaac Lab RL environments where a UR5e + Robotiq 2F-85 opens the door of an articulated ArtVIP
-dishwasher (`Isaac-Open-Dishwasher-UR5e-v0` / `-Play-v0`). Runs on Isaac Sim **6.0.1-rc.7** +
-Isaac Lab **3.0.0** at `/workspace/isaaclab` (this repo is nested inside that tree, but is an
-independent git repo). Never upgrade or downgrade Isaac Sim / Isaac Lab. Everything runs
-`--headless` on a single NVIDIA L4: default `--num_envs 512`, hard cap 1024, state-based
-observations only.
+v0 of the lab's dishwasher-loading project: **classical motion planning, not RL.** A UR5e +
+Robotiq 2F-85 starts with a plate welded to its TCP; OMPL (RRT-Connect, 6-D joint space) plans a
+collision-free path to a slot in the lower rack of an articulated ArtVIP dishwasher (door locked
+open at 90°), the weld is released, and placement stability is verified. The collision world
+(`src/dishsim/collision_world.py`) is a standalone Kit-free module because a future MCTS
+rearrangement planner will reuse it for thousands of queries. The old RL door-opening pipeline
+lives on the `archive/rl-door-opening` branch.
+
+Runs on Isaac Sim **6.0.1-rc.7** + Isaac Lab **3.0.0** at `/workspace/isaaclab` (this repo is
+nested inside that tree, but is an independent git repo). Never upgrade or downgrade Isaac Sim /
+Isaac Lab. Everything runs `--headless` on a single NVIDIA L4 / 8 vCPU / 30 GiB; media capture
+additionally needs `--enable_cameras`.
 
 The parent tree's `CLAUDE.md`/`AGENTS.md` (IsaacLab contributor rules) mostly targets the Isaac
 Lab source itself — its changelog-fragment and `./isaaclab.sh -f` pre-commit workflow do **not**
 apply here. What does carry over: commit-message conventions and **no AI attribution/co-author
 lines in commits**.
 
+**Git is handled by the user, not by Claude** — no branches, commits, or pushes from sessions;
+end each work phase with a summary and a suggested commit message instead.
+
 ## Commands
 
-All Python goes through the Isaac Lab wrapper, run from this project root so `logs/` resolves:
+Isaac-side work goes through `scripts/run_kit.sh` (exports the Isaac env, then
+`exec isaaclab.sh -p "$@"` — required because the venv-resolved interpreter lacks
+`EXP_PATH`/`LD_LIBRARY_PATH`; bare `isaaclab.sh -p` dies at Kit boot with `KeyError: 'EXP_PATH'`).
+Pure planning work uses the venv python directly. Run from this project root:
 
 ```bash
-# one-time setup
-/workspace/isaaclab/isaaclab.sh -p -m pip install -e source/dishwasher_tasks
-# assets (~82 MB, gitignored) — see README.md for the snapshot_download one-liner
+# scene inspection: regenerates docs/joint_report.md, stability + passive-door tests
+scripts/run_kit.sh scripts/00_inspect_scene.py --headless --test_door
 
-# scene inspection: regenerates docs/joint_report.md and the derived RL USD,
-# runs the 500-step stability check and the three-part passive-door test
-/workspace/isaaclab/isaaclab.sh -p scripts/00_inspect_scene.py --headless --test_door
+# derive the physics-enabled YCB plate (mug fallback: --object 025_mug)
+scripts/run_kit.sh scripts/01_make_prop_physics_usd.py --object 029_plate
 
-# smoke test the env (300 zero-action steps)
-/workspace/isaaclab/isaaclab.sh -p scripts/zero_agent.py --task Isaac-Open-Dishwasher-UR5e-v0 --num_envs 4 --headless
+# planning-stack tests (venv, no Kit; plugin autoload off — hydra's plugin breaks outside Kit)
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m pytest tests/
 
-# train (~3 s/iteration at 512 envs; 200 iterations ≈ 12 min)
-/workspace/isaaclab/isaaclab.sh -p scripts/rsl_rl/train.py --task Isaac-Open-Dishwasher-UR5e-v0 --num_envs 512 --headless
-
-# play latest checkpoint / record a clip
-/workspace/isaaclab/isaaclab.sh -p scripts/rsl_rl/play.py --task Isaac-Open-Dishwasher-UR5e-Play-v0 --num_envs 16 --headless --enable_cameras --video --video_length 400
+# phase entry points (see README phase table): 05 kit smoke, 10 v0 scene, 12–14 collision
+# world, 15 goal configs, 20 plan-and-place, 30 report
 ```
 
 **`./isaaclab.sh -p` exits 0 even when the wrapped script crashes.** Always verify success from
-log content (iteration lines, `[RESULT] PASS`, absence of tracebacks / `free(): invalid
-pointer`), never from the exit code.
+log content (`[RESULT] PASS`, absence of tracebacks / `free(): invalid pointer`), never from the
+exit code.
 
 ## Launcher landmines (why the scripts look the way they do)
 
-Full write-up in `docs/environment.md`; violating any of these produces native crashes or
-silent import shadowing, not clean errors:
+Full write-up in `docs/environment.md`; violating these produces native crashes or silent
+import shadowing, not clean errors:
 
-1. **Boot-first**: every entry script launches `AppLauncher` *before* importing
-   `dishwasher_tasks` or resolving any env cfg. The stock Isaac Lab template flow
-   (hydra/`resolve_task_config` + `launch_simulation(env_cfg, ...)` pre-boot) crashes Kit with
-   `free(): invalid pointer` for this project's config. Do not "simplify" the scripts back to
-   the template pattern, and keep module-scope `pxr`/`omni` imports out of the package
-   (`utils/usd_prep.py` imports pxr lazily inside the function for this reason).
-2. **`env_cfg.sim` must be a `PresetCfg` wrapper** (`DishwasherSimCfg`), not a plain
-   `SimulationCfg`. Standalone scripts collapse it with
-   `isaaclab_tasks.utils.hydra.resolve_presets(env_cfg)` after boot.
-3. **The package is `dishwasher_tasks`, deliberately not matching the repo directory name** —
-   Kit's extension scan turns a same-named directory into a namespace package that shadows the
-   real one. Don't rename either side to match the other.
+1. **Boot-first**: every Kit entry script launches `AppLauncher` *before* importing `dishsim`,
+   `isaaclab.*` scene modules, or `pxr`. Standalone scripts construct
+   `SimulationContext(sim_utils.SimulationCfg(..., physics=PhysxCfg()))` directly — no gym, no
+   PresetCfg machinery.
+2. **The package is `dishsim`, deliberately not matching the repo directory name** — Kit's
+   extension scan turns a same-named directory into a namespace package that shadows the real
+   one. Keep module-scope `pxr`/`omni` imports out of the package (lazy in-function imports,
+   see `src/dishsim/usd_prep.py`).
+3. **Isaac Lab 3.0 API**: quaternions are **XYZW** everywhere; data buffers are `ProxyArray` —
+   append `.torch` (and `.torch.clone()`, since tensor methods aren't forwarded); kinematic
+   writes use the keyword-only `*_index` methods (`write_joint_position_to_sim_index`, ...).
+4. **Fabric staleness**: `use_fabric=True` (default) means live-stage prim transforms are stale
+   mid-sim. Extract geometry from file stages pre-boot, or right after `sim.reset()`, or run
+   extraction/parity scripts with `use_fabric=False`. Physics-backed `.data` buffers are always
+   correct.
 
 ## Architecture
 
-`source/dishwasher_tasks/dishwasher_tasks/` (pip-installed editable):
+`src/dishsim/` (single project package; `scripts/*` add `src/` to `sys.path`, the venv installs
+it editable):
 
-- `robots/ur5e_robotiq_2f85.py` — `UR5E_ROBOTIQ_2F_85_CFG`. The UR5e USD carries the gripper as
-  a variant (`Gripper=Robotiq_2f_85`); a local mirror under `assets/robots/` is preferred over
-  the live Nucleus S3 fetch. Two things here are load-bearing:
-  `articulation_root_prim_path="/root_joint"` (the asset has a second, disabled
-  ArticulationRootAPI on the gripper subtree), and the gripper actuator gains + armature 0.001 +
-  passive damping 0.05 — without them the near-massless mimic-joint finger cluster resonates and
-  explodes when the arm moves fast.
-- `robots/dishwasher.py` — `DISHWASHER_CFG` with the passive door: stiffness 0, damping 5,
-  friction 0.6. The friction **is the door latch**: the bottom-hinged door is gravity-unstable
-  at 0°, so lowering it makes every episode start with the door falling open. Points at the
-  derived `model_dishwasher_2_rl.usda`.
-- `utils/usd_prep.py` — derives that RL copy: removes ArtVIP's world-weld `FixedJoint` (body1
-  set, no body0 — it pins the machine at its authored world pose and blows up any relocated,
-  cloned spawn) and zeroes the authored door drive (a per-degree-units spring toward 90° that
-  kicks the door during the physics-reset step). The downloaded originals are never modified.
-- `tasks/manager_based/dishwasher/` — cabinet-task-shaped manager-based env:
-  `open_dishwasher_env_cfg.py` (robot-agnostic scene/rewards/terminations),
-  `config/ur5e/joint_pos_env_cfg.py` (robot, actions, ee_frame, reward params, `_PLAY`),
-  `config/ur5e/agents/rsl_rl_ppo_cfg.py` (new-style rsl-rl 5.0 `actor=`/`critic=` cfg),
-  `mdp/` (door-adapted ports of the cabinet reward/observation terms plus the
-  `door_open_sustained` termination).
+- `robots.py` — `UR5E_ROBOTIQ_2F_85_CFG` + `DISHWASHER_CFG` (+ `DISHWASHER_V0_CFG` from Phase
+  C). Load-bearing details: `articulation_root_prim_path="/root_joint"` (the asset has a second,
+  disabled ArticulationRootAPI on the gripper subtree); gripper armature 0.001 + damping 0.05
+  (the near-massless mimic-joint finger cluster resonates and explodes without them). Only
+  `finger_joint` may ever be commanded on the gripper (0 = open, ~0.8 = closed — inverted vs.
+  Franka); in v0 the gripper is **frozen** at a fixed aperture and never actuated; the five
+  mimic-driven joints stay untouched always.
+- `usd_prep.py` — derived dishwasher USDs. Removes ArtVIP's world-weld `FixedJoint` (body1 set,
+  no body0 — pins the machine at its authored pose and blows up any relocated spawn).
+  `make_dishwasher_rl_usd` also zeroes the authored door drive (passive door, used by the
+  inspection script); Phase C adds `make_dishwasher_v0_usd` (door locked open). Downloaded
+  originals are never modified.
+- `config.py` (Phase C) — every tunable: grasp transform (defined ONCE), gripper aperture, slot
+  tolerances, CoACD params, collision margin, plan budgets, camera poses. Tune here, not inline.
+- `collision_world.py` (Phase D) — Kit-free FCL world loaded from `assets/cache/` +
+  `scene_state.json` manifest (frames asserted at load). No `pxr`/`isaaclab` imports here, ever.
 
-Numeric provenance: every prim path, joint name, frame offset, and placement number in the env
-configs is a *measured* value recorded in `docs/joint_report.md` (generated by
-`scripts/00_inspect_scene.py`) and `docs/asset_survey.md`. If you change the dishwasher variant,
-robot home pose, or scene layout, re-run the inspection script and take the new numbers from the
-report — don't eyeball them. Two traps encoded there: spawn poses place the articulation **root
-link** frame (for the dishwasher that's `E_body_5` at the machine's rear corner, not the asset
-origin), and this Isaac Lab is XYZW-quaternion / `.torch`-ProxyArray throughout (2.x tutorial
-snippets are wrong on both counts).
-
-Only `finger_joint` is actuated on the gripper (0 = open, ~0.8 rad = closed — inverted vs. the
-Franka convention, which is why `mdp/rewards.py:grasp_handle` differs in sign from the cabinet
-original). The five mimic-driven finger joints must stay out of the action space.
+Numeric provenance: every prim path, joint name, frame offset, and placement number is a
+*measured* value recorded in `docs/joint_report.md` (generated by `scripts/00_inspect_scene.py`)
+and `docs/asset_survey.md`. If you change the dishwasher variant, robot home pose, or scene
+layout, re-run the inspection script and take the new numbers from the report — don't eyeball
+them. Two traps encoded there: spawn poses place the articulation **root link** frame (for the
+dishwasher that's `E_body_5`, not the asset origin), and this Isaac Lab is XYZW-quaternion /
+`.torch`-ProxyArray throughout (2.x tutorial snippets are wrong on both counts).
 
 ## Ground rules
 
-- `assets/` and `logs/` are gitignored; never commit them (asset sources + licenses are in
-  README.md). The preserved first-run artifacts live in `docs/first_run/`.
-- The dishwasher base stays fixed (`fix_root_link=True`) at all times.
-- Ask the user before: downloads over 2 GB, training runs expected to exceed 30 minutes, or
-  opening/exposing ports. GUI verification happens only via the streaming client — pause and ask
-  the user to connect.
-- Commit style: imperative ~50-char subject, wrapped body explaining what/why, one commit per
-  logical milestone, no AI attribution lines.
+- `assets/`, `media/`, `results/`, `logs/` are gitignored; never commit them (asset sources +
+  licenses in README.md). Curated report figures go to `docs/figures/` (tracked).
+- **Every phase that produces a result inside Isaac Sim must also produce PNG/MP4 evidence**
+  under `media/<phase>/` (the user cannot watch the viewport). Headless capture =
+  `--headless --enable_cameras`; fixed front/top/iso cameras from `config.py`; short 720p clips.
+- One frame convention everywhere, asserted in code: robot base frame, meters, Z-up, XYZW.
+- The dishwasher base stays fixed (`fix_root_link=True`); the v0 door stays locked open; the
+  plate stays welded to the TCP until the release step.
+- Ask the user before: downloads over 2 GB, runs expected to exceed 30 minutes, opening ports,
+  or installs that restructure the container (ROS/MoveIt especially). GUI verification happens
+  only via the streaming client — pause and ask the user to connect.
+- Suggested commit style (user commits): imperative ~50-char subject, wrapped body explaining
+  what/why, one commit per phase, no AI attribution lines.

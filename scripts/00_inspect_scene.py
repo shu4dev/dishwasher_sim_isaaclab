@@ -1,4 +1,4 @@
-# Copyright (c) 2026, dishwasher_tasks project.
+# Copyright (c) 2026, dishsim project.
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
@@ -64,12 +64,11 @@ from isaaclab_physx.physics import PhysxCfg
 
 from pxr import Gf, Usd, UsdGeom, UsdPhysics
 
-# make the (not yet pip-installed) project package importable
-sys.path.insert(0, os.path.join(PROJECT_ROOT, "source", "dishwasher_tasks"))
+# make the (not necessarily pip-installed) project package importable
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
-from dishwasher_tasks.robots import DISHWASHER_CFG, UR5E_ROBOTIQ_2F_85_CFG  # noqa: E402
-from dishwasher_tasks.robots.ur5e_robotiq_2f85 import UR5E_USD_PATH  # noqa: E402
-from dishwasher_tasks.utils import make_dishwasher_rl_usd  # noqa: E402
+from dishsim.robots import DISHWASHER_CFG, UR5E_ROBOTIQ_2F_85_CFG, UR5E_USD_PATH  # noqa: E402
+from dishsim.usd_prep import make_dishwasher_rl_usd  # noqa: E402
 
 DISHWASHER_DIR = os.path.join(PROJECT_ROOT, "assets", "artvip", "Articulated_objects", "major_appliances", "dishwasher")
 
@@ -420,7 +419,7 @@ def main():
     if args_cli.with_mug:
         mug_usd = os.path.join(PROJECT_ROOT, "assets", "props", "025_mug_physics.usd")
         if not os.path.isfile(mug_usd):
-            raise FileNotFoundError(f"{mug_usd} missing — run scripts/01_make_mug_physics_usd.py first.")
+            raise FileNotFoundError(f"{mug_usd} missing — run scripts/01_make_prop_physics_usd.py --object 025_mug first.")
         scene_cfg.side_table = AssetBaseCfg(
             prim_path="{ENV_REGEX_NS}/SideTable",
             spawn=sim_utils.CuboidCfg(

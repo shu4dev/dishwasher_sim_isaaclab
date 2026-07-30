@@ -1,13 +1,22 @@
 # Environment
 
-Discovered 2026-07-28 on an NVIDIA Brev Isaac Launchable instance.
+Discovered 2026-07-28 on an NVIDIA Brev Isaac Launchable instance; re-verified 2026-07-29 on a
+fresh instance of the same launchable (the original instance was recycled — only committed work
+survived; `assets/`, `logs/`, and pip installs had to be recreated).
+
+> **v0 pivot (2026-07-29):** the project moved from RL door-opening to classical OMPL placement
+> planning (see README). The RL pipeline lives on in git history (branch
+> `archive/rl-door-opening`). OMPL is CPU-bound, so the vCPU count below now matters more than
+> the GPU.
 
 ## Hardware
 
 | Item | Value |
 |---|---|
+| CPU | AMD EPYC 7R13, **8 vCPU** |
+| RAM | **30 GiB** (no swap) |
 | GPU | NVIDIA L4, 23 GB VRAM (Ada), driver 595.71.05, CUDA 13.2 |
-| Disk | ~147 GB free on `/` (overlay) |
+| Disk | ~146 GB free on `/` (overlay) |
 | OS | Linux 6.17.0-1019-aws |
 
 ## Software stack
@@ -45,18 +54,21 @@ Discovered 2026-07-28 on an NVIDIA Brev Isaac Launchable instance.
 
 1. **Boot-first requirement.** The stock template scripts resolve the env config *before* Kit
    boots (`hydra_task_config` / `resolve_task_config` + `launch_simulation(env_cfg, ...)`).
-   For this project's config that pattern crashes natively (`free(): invalid pointer`) during
+   For this project's config that pattern crashed natively (`free(): invalid pointer`) during
    Kit startup — deterministically, from any working directory, while the same flow works for
-   in-tree tasks. This project's `scripts/rsl_rl/train.py`, `play.py`, and `zero_agent.py`
-   therefore launch `AppLauncher` **first** and import/resolve everything afterwards (the same
-   pattern as the in-tree tutorials), which is reliable.
-2. **`sim` must be a `PresetCfg`.** The launcher machinery expects `env_cfg.sim` to be an
-   `isaaclab_tasks.utils.PresetCfg` wrapper (as all in-tree tasks do). The env config uses a
-   PhysX-only `DishwasherSimCfg(PresetCfg)`; standalone scripts resolve it via
-   `isaaclab_tasks.utils.hydra.resolve_presets(env_cfg)`.
-3. **Package name vs. repo name.** The Python package is `dishwasher_tasks`, not
-   `dishwasher_sim_isaaclab`: Kit's extension scan turns a directory whose name matches an
-   importable package into a shadowing namespace package (`unknown location` ImportErrors).
+   in-tree tasks. Every Kit entry script in this repo therefore launches `AppLauncher`
+   **first** and imports/resolves everything afterwards (the same pattern as the in-tree
+   tutorials), which is reliable.
+2. **`sim` must be a `PresetCfg`** — for the gym/manager-env workflow. The v0 standalone
+   scripts sidestep the whole mechanism by constructing
+   `SimulationContext(sim_utils.SimulationCfg(..., physics=PhysxCfg()))` directly (the pattern
+   in `scripts/00_inspect_scene.py`); only gym-registered tasks need the
+   `PresetCfg`/`resolve_presets` dance.
+3. **Package name vs. repo name.** The Python package is `dishsim` (under `src/`, previously
+   `dishwasher_tasks`), never `dishwasher_sim_isaaclab`: Kit's extension scan turns a directory
+   whose name matches an importable package into a shadowing namespace package
+   (`unknown location` ImportErrors). Keep module-scope `pxr`/`omni` imports out of the package
+   (lazy in-function imports, see `src/dishsim/usd_prep.py`).
 4. **`./isaaclab.sh -p` exits 0 even when the wrapped script crashes** — verify success from
    log content, never from the exit code.
 
@@ -102,14 +114,45 @@ Two findings from the smoke-test process:
 2. `./isaaclab.sh -p` **exits 0 even when the wrapped script crashes** — success must be verified
    from the log output (iteration lines / absence of tracebacks), never from the exit code.
 
-## Train / play invocations for this project
+## v0 planning stack (Phase B)
+
+The RL train/play entry points were removed in the v0 pivot (recoverable from the
+`archive/rl-door-opening` branch). The v0 stack adds a venv plus CPU planning dependencies:
 
 ```bash
-cd /workspace/isaaclab/dishwasher_sim_isaaclab
-# train
-/workspace/isaaclab/isaaclab.sh -p scripts/rsl_rl/train.py \
-    --task Isaac-Open-Dishwasher-UR5e-v0 --num_envs 512 --headless
-# play
-/workspace/isaaclab/isaaclab.sh -p scripts/rsl_rl/play.py \
-    --task Isaac-Open-Dishwasher-UR5e-Play-v0 --num_envs 16
+/isaac-sim/kit/python/bin/python3 -m venv --system-site-packages /workspace/isaaclab/env_isaaclab
+/workspace/isaaclab/env_isaaclab/bin/pip install ompl python-fcl coacd trimesh matplotlib imageio pytest
+/workspace/isaaclab/env_isaaclab/bin/pip install -e /workspace/isaaclab/dishwasher_sim_isaaclab
 ```
+
+| Item | Value |
+|---|---|
+| venv | `/workspace/isaaclab/env_isaaclab` (`--system-site-packages`, wrapper-native path) |
+| ompl | 2.0.1 (cp312 manylinux wheel; **nanobind bindings** — see API notes below) |
+| python-fcl | 0.7.0.11 |
+| coacd | 1.0.11 |
+| trimesh | 4.12.2 in the venv (in-Kit resolves to 4.11.1 from `omni.pip.compute` via PYTHONPATH precedence) |
+| matplotlib | 3.11.1 |
+| imageio | 2.37.4 in the venv (in-Kit: 2.37.2 from the prebundle) |
+| imageio-ffmpeg | 0.6.0 (preinstalled, bundled static ffmpeg 7.0.2 — no system ffmpeg) |
+| pin (Pinocchio) | 4.1.0 (preinstalled — validates the hand-rolled UR5e analytic IK in `tests/`) |
+| pytest | 9.1.1 (system site) |
+
+**OMPL 2.0 nanobind API notes** (differs from the old Py++ bindings all tutorials show):
+`setStateValidityChecker` accepts a plain Python callable; there is no `ob.StateValidityCheckerFn`
+and no `ob.State(space)` constructor — allocate states with `space.allocState()` and index them.
+`ob.GoalStates` exists (Phase F uses it).
+
+### Venv/wrapper interactions (hard-won, 2026-07-29)
+
+1. **Kit boot needs `scripts/run_kit.sh`.** With `env_isaaclab` present, `isaaclab.sh -p`
+   resolves to the bare venv interpreter, which lacks the env `_isaac_sim/python.sh` exports
+   (`EXP_PATH`/`CARB_APP_PATH`/`ISAAC_PATH`, kit `LD_LIBRARY_PATH`, kit `PYTHONPATH`);
+   `AppLauncher` then dies with `KeyError: 'EXP_PATH'`. Every Kit entry script therefore runs
+   through `scripts/run_kit.sh` (exports that env, then `exec isaaclab.sh -p "$@"`). Non-Kit
+   invocations (`pip`, pxr-only scripts, pytest) work with the bare venv python directly.
+2. **pytest needs `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`.** The system site-packages carry hydra,
+   whose auto-registered pytest plugin imports `yaml` — a module that only exists inside Kit's
+   `pip_prebundle` paths, so collection crashes outside Kit. Disabling plugin autoload avoids
+   the whole class of problem:
+   `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m pytest tests/`

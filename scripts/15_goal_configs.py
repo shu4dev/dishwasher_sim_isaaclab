@@ -1,0 +1,241 @@
+# Copyright (c) 2026, dishsim project.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""Phase E: derive rack slots, generate IK goal sets, render the evidence.
+
+Computation (slots + goal sets) is Kit-free (``dishsim.placement`` + the FCL world) and runs
+first; the Kit session then poses the robot at accepted and rejected configurations for
+labeled contact sheets. Outputs:
+
+- ``assets/cache/slots/slots.json``, ``goal_sets.json`` (with per-slot rejection funnels)
+- ``media/E/slot_detection.png`` (top-down rack wires + slot cells)
+- ``media/E/accepted_slot<k>_sheet.png`` (robot at accepted goal configs)
+- ``media/E/rejected_sheet.png`` (labeled rejected configs: limit / collision + pair)
+
+Run with:
+    scripts/run_kit.sh scripts/15_goal_configs.py --headless --enable_cameras
+"""
+
+"""Launch Isaac Sim Simulator first."""
+
+import argparse
+import os
+
+from isaaclab.app import AppLauncher
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+parser = argparse.ArgumentParser(description="Slot frames + IK goal sets + contact sheets.")
+parser.add_argument("--seed", type=int, default=11)
+parser.add_argument("--out_dir", type=str, default=os.path.join(PROJECT_ROOT, "media", "E"))
+parser.add_argument("--sheets_per_slot", type=int, default=6)
+AppLauncher.add_app_launcher_args(parser)
+args_cli = parser.parse_args()
+
+app_launcher = AppLauncher(args_cli)
+simulation_app = app_launcher.app
+
+"""Rest everything follows."""
+
+import sys
+
+import numpy as np
+import torch
+
+import isaaclab.sim as sim_utils
+from isaaclab.scene import InteractiveScene
+from isaaclab.sim import SimulationContext
+from isaaclab_physx.physics import PhysxCfg
+
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
+
+from dishsim import config  # noqa: E402
+from dishsim import placement  # noqa: E402
+from dishsim import scene as dscene  # noqa: E402
+from dishsim.collision_world import CollisionWorld  # noqa: E402
+from dishsim.media import CameraRig, contact_sheet  # noqa: E402
+from dishsim.transforms import T_inv, T_to_pos_quat, make_T  # noqa: E402
+from dishsim.ur5e_kin import ik_wrist3_all  # noqa: E402
+
+FAILURES: list[str] = []
+
+
+def check(name: str, ok: bool, detail: str = "") -> None:
+    print(f"[{'OK' if ok else 'FAIL'}] {name}{': ' + detail if detail else ''}")
+    if not ok:
+        FAILURES.append(name)
+
+
+def render_slot_detection(slots, out_png: str) -> None:
+    """Top-down plot: rack wire vertices (base frame) + slot cells + reach circle."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import trimesh
+
+    from dishsim.geometry import load_manifest
+
+    manifest = load_manifest()
+    entry = manifest["statics"]["E_shelf_1_04"]
+    mesh = trimesh.load(os.path.join(config.CACHE_DIR, entry["mesh"]), force="mesh")
+    T = np.array(entry["T_base_body"])
+    verts = (T @ np.hstack([mesh.vertices, np.ones((len(mesh.vertices), 1))]).T).T[:, :3]
+
+    fig, ax = plt.subplots(figsize=(9, 7))
+    ax.scatter(verts[:, 0], verts[:, 1], s=0.2, c="0.55", linewidths=0, label="rack wires")
+    for s in slots:
+        cx, cy = s.T_base_slot[0, 3], s.T_base_slot[1, 3]
+        half = s.width_m / 2.0
+        ax.add_patch(plt.Rectangle((cx - half, cy - half), 2 * half, 2 * half, fill=False, ec="tab:blue"))
+        ax.annotate(str(s.slot_id), (cx, cy), ha="center", va="center", color="tab:red", fontsize=12)
+    ax.add_patch(plt.Circle((0, -config.ROBOT_BASE_POS_W[1]), 0.0, fill=False))
+    ax.scatter([0], [0], marker="*", s=140, c="k", label="robot base")
+    theta = np.linspace(0, 2 * np.pi, 128)
+    ax.plot(config.UR5E_REACH_M * np.cos(theta), config.UR5E_REACH_M * np.sin(theta), "k--", lw=0.8, label="0.85 m reach")
+    ax.set_aspect("equal")
+    ax.set_xlabel("x [m] (robot-base frame)")
+    ax.set_ylabel("y [m]")
+    ax.legend(loc="upper left", fontsize=8)
+    ax.set_title("Lower-rack slot derivation (top-down)")
+    os.makedirs(os.path.dirname(out_png), exist_ok=True)
+    fig.savefig(out_png, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[INFO] slot detection plot: {out_png}")
+
+
+def main() -> None:
+    rng = np.random.default_rng(args_cli.seed)
+
+    # ---- Kit-free computation ------------------------------------------------------------
+    world = CollisionWorld(self_check=True)
+    slots = placement.derive_slots_from_rack()
+    print(f"[INFO] derived {len(slots)} slots")
+    for s in slots:
+        print(f"[INFO]   slot {s.slot_id}: center base-frame "
+              f"({s.T_base_slot[0,3]:.3f}, {s.T_base_slot[1,3]:.3f}, {s.T_base_slot[2,3]:.3f}), "
+              f"cell {s.width_m*100:.1f} cm")
+
+    goal_sets = []
+    for s in slots:
+        gs = placement.goal_configs(s, world, rng)
+        goal_sets.append(gs)
+        print(f"[INFO] slot {s.slot_id}: {len(gs.configs)} goal configs "
+              f"(funnel: {gs.n_pose_samples} poses -> {gs.n_ik_solutions} IK "
+              f"-> -{gs.n_limit_reject} limits -> -{gs.n_collision_reject} collision)")
+    slots_path, goals_path = placement.save_slots(slots, goal_sets, os.path.join(config.CACHE_DIR, "slots"))
+    print(f"[INFO] wrote {slots_path} and {goals_path}")
+
+    nonempty = [g for g in goal_sets if len(g.configs) > 0]
+    check("at least 3 slots with non-empty goal sets", len(nonempty) >= 3,
+          f"{len(nonempty)}/{len(slots)} slots feasible")
+
+    render_slot_detection(slots, os.path.join(args_cli.out_dir, "slot_detection.png"))
+
+    # rejected examples for the media sheet (with reasons)
+    rejected: list[tuple[np.ndarray, str]] = []
+    T_obj_w3 = T_inv(np.array(world.manifest["object"]["T_wrist3_obj"]))
+    for s in slots:
+        if len(rejected) >= 6:
+            break
+        for T_base_obj in placement.sample_goal_poses(s, 8, rng):
+            sols = ik_wrist3_all(T_base_obj @ T_obj_w3)
+            for q in sols:
+                hit, pairs = world.in_collision(q, return_pairs=True)
+                if hit:
+                    reason = f"collision: {pairs[0][0]} vs {pairs[0][1]}" if pairs else "collision"
+                    rejected.append((q, f"slot {s.slot_id} | {reason}"))
+                    break
+            if len(rejected) >= 6:
+                break
+
+    if not args_cli.enable_cameras:
+        print("[WARN] cameras disabled — no contact sheets (run with --enable_cameras)")
+        print(f"[RESULT] {'PASS' if not FAILURES else 'FAIL: ' + ', '.join(FAILURES)}")
+        if FAILURES:
+            raise SystemExit(1)
+        return
+
+    # ---- Kit pass: pose the robot and shoot contact sheets --------------------------------
+    sim = SimulationContext(
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg(),
+                                gravity=(0.0, 0.0, 0.0))
+    )
+    scene = InteractiveScene(dscene.make_scene_cfg(with_object=True))
+    dscene.author_weld(scene.stage)
+    rig = CameraRig(config.CAMERAS, hw=(480, 854))  # smaller tiles for sheets
+    sim.reset()
+    rig.apply_poses(sim.device)
+    dscene.write_default_states(scene)
+    dt = sim.get_physics_dt()
+    robot = scene["robot"]
+    obj = scene["carried_object"]
+    for _ in range(120):
+        dscene.hold_targets(scene)
+        scene.write_data_to_sim()
+        sim.step()
+        scene.update(dt)
+    joint_template = robot.data.joint_pos.torch.clone()
+    arm_ids, _ = robot.find_joints(config.ARM_JOINTS, preserve_order=True)
+    device = joint_template.device
+    T_w_base = make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W)
+    T_w3_obj = np.array(world.manifest["object"]["T_wrist3_obj"])
+
+    from dishsim.ur5e_kin import fk_wrist3  # noqa: PLC0415
+
+    def pose_at(q: np.ndarray) -> None:
+        full = joint_template.clone()
+        full[:, arm_ids] = torch.tensor(q, dtype=full.dtype, device=device)
+        robot.write_joint_position_to_sim_index(position=full)
+        robot.write_joint_velocity_to_sim_index(velocity=torch.zeros_like(full))
+        robot.set_joint_position_target_index(target=full)
+        T_w_obj = T_w_base @ fk_wrist3(q) @ T_w3_obj
+        pos, quat = T_to_pos_quat(T_w_obj)
+        pose_t = torch.tensor(np.concatenate([pos, quat])[None], dtype=full.dtype, device=device)
+        obj.write_root_pose_to_sim_index(root_pose=pose_t)
+        obj.write_root_velocity_to_sim_index(root_velocity=torch.zeros((1, 6), dtype=full.dtype, device=device))
+        for _ in range(2):
+            scene.write_data_to_sim()
+            sim.step()
+            scene.update(dt)
+        rig.update(dt)
+
+    def shot(q: np.ndarray) -> np.ndarray:
+        pose_at(q)
+        T_w_obj = T_w_base @ fk_wrist3(q) @ T_w3_obj
+        target = T_w_obj[:3, 3]
+        rig.set_view("iso", target + np.array([-0.45, 0.45, 0.35]), target, sim.device)
+        for _ in range(3):
+            sim.step()
+            scene.update(dt)
+            rig.update(dt)
+        return rig.grab()["iso"]
+
+    sheet_count = 0
+    for gs in goal_sets:
+        if len(gs.configs) == 0 or sheet_count >= 4:
+            continue
+        take = min(args_cli.sheets_per_slot, len(gs.configs))
+        idxs = np.linspace(0, len(gs.configs) - 1, take).astype(int)
+        images = [shot(np.array(gs.configs[i])) for i in idxs]
+        labels = [f"slot {gs.slot_id} | goal config {i}" for i in idxs]
+        out = contact_sheet(images, labels, os.path.join(args_cli.out_dir, f"accepted_slot{gs.slot_id}_sheet.png"), cols=3)
+        print(f"[INFO] accepted sheet: {out}")
+        sheet_count += 1
+    check("accepted contact sheets rendered", sheet_count >= 3, f"{sheet_count} sheets")
+
+    if rejected:
+        images = [shot(q) for q, _ in rejected]
+        labels = [label for _, label in rejected]
+        out = contact_sheet(images, labels, os.path.join(args_cli.out_dir, "rejected_sheet.png"), cols=3)
+        print(f"[INFO] rejected sheet: {out} ({len(rejected)} configs)")
+
+    print(f"[RESULT] {'PASS' if not FAILURES else 'FAIL: ' + ', '.join(FAILURES)}")
+    if FAILURES:
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()
+    simulation_app.close()

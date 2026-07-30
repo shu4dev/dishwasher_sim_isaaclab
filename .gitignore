@@ -1,7 +1,13 @@
-# Downloaded assets — never commit (see README for sources + licenses)
+# Downloaded assets — never commit (see README for sources + licenses).
+# Includes derived USDs and the collision-world cache (assets/cache/), all regenerable.
 assets/
 
-# Training logs and outputs
+# Visual-evidence media and planning results stay on disk for review; only curated
+# copies under docs/figures/ are tracked.
+media/
+results/
+
+# Logs and outputs
 logs/
 outputs/
 wandb/
