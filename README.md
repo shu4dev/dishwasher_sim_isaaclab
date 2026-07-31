@@ -87,7 +87,7 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m 
 | C2 — grasp calibration | `scripts/11_calibrate_grasp.py` | measured pinch constants, `docs/grasp_calibration.md`, force curve |
 | D — collision world | `scripts/12…14_*.py` | FCL world + Isaac parity report |
 | E — placement goals | `scripts/15_goal_configs.py` | slot frames + IK goal sets, `docs/success_criteria.md` |
-| F — plan & place | `scripts/20_plan_and_place.py` | per-trial JSON + MP4 in `results/`, `media/F/` |
+| F — plan & place | `scripts/20…21_*.py` | per-trial JSON + MP4 in `results/`, `media/F/`, planner visual PNG |
 | G — benchmark | `scripts/30_make_report.py` | `docs/v0_report.md`, `docs/slides_notes.md` |
 
 ## Asset sources and licenses

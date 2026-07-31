@@ -16,7 +16,7 @@ This module must stay importable without Kit *and* without the planning venv (nu
 import math
 import os
 
-from . import ASSETS_DIR
+from . import ASSETS_DIR, PROJECT_ROOT
 
 # ---------------------------------------------------------------------------------------------
 # frame convention (asserted by scene.assert_frames and the collision-world manifest)
@@ -62,6 +62,58 @@ RACK_JOINT_TARGETS = {
     "PrismaticJoint_dishwasher_2_down": RACK_LOWER_EXT_M,
     "PrismaticJoint_dishwasher_2_up": RACK_UPPER_EXT_M,
 }
+
+# Rack-state scenarios. "lower_out" is the v0 baseline (its values MUST stay equal to the
+# literals above so the existing assets/cache/ keeps validating). min_feasible_slots feeds
+# Phase E's feasibility gate: 0 means "zero feasible slots is an acceptable, reportable
+# outcome" (deep-cavity scenarios), not a broken run.
+SCENARIOS = {
+    "lower_out": {"rack_lower_m": -0.20, "rack_upper_m": 0.0, "min_feasible_slots": 3},
+    "both_out": {"rack_lower_m": -0.20, "rack_upper_m": -0.20, "min_feasible_slots": 0},
+    "both_in": {"rack_lower_m": 0.0, "rack_upper_m": 0.0, "min_feasible_slots": 0},
+    # hardest still-solvable upper extension (Kit-free screen on the baseline cache, seed 11:
+    # 0.060 m -> slots 1-3 keep ~1600 configs; 0.075 -> ~500; 0.090 -> zero everywhere)
+    "upper_partial": {"rack_lower_m": -0.20, "rack_upper_m": -0.075, "min_feasible_slots": 1},
+}
+SCENARIO_NAME = "lower_out"  # active scenario; switch via apply_scenario() BEFORE scene imports
+
+
+def apply_scenario(name: str) -> None:
+    """Activate a rack-state scenario by rewriting the rack targets in place.
+
+    Must run before importing :mod:`dishsim.robots`/:mod:`dishsim.scene` (they bind rack
+    values and the derived-USD path at import time). ``geometry.config_hash`` reads these
+    attributes at call time, so per-scenario caches invalidate correctly.
+
+    Args:
+        name: Key into :data:`SCENARIOS`.
+    """
+    global RACK_LOWER_EXT_M, RACK_UPPER_EXT_M, RACK_JOINT_TARGETS, SCENARIO_NAME
+    if name not in SCENARIOS:
+        raise ValueError(f"unknown scenario {name!r} (choices: {sorted(SCENARIOS)})")
+    sc = SCENARIOS[name]
+    RACK_LOWER_EXT_M = sc["rack_lower_m"]
+    RACK_UPPER_EXT_M = sc["rack_upper_m"]
+    RACK_JOINT_TARGETS = {
+        "PrismaticJoint_dishwasher_2_down": RACK_LOWER_EXT_M,
+        "PrismaticJoint_dishwasher_2_up": RACK_UPPER_EXT_M,
+    }
+    SCENARIO_NAME = name
+
+
+def scenario_cache_dir(name: str | None = None) -> str:
+    """Collision-cache root for a scenario (baseline keeps the legacy ``assets/cache/``)."""
+    name = name or SCENARIO_NAME
+    if name == "lower_out":
+        return CACHE_DIR
+    return os.path.join(ASSETS_DIR, "cache", "scenarios", name)
+
+
+def scenario_media_dir(phase: str, name: str | None = None) -> str:
+    """Media dir for a phase under the active scenario (baseline keeps ``media/<phase>``)."""
+    name = name or SCENARIO_NAME
+    base = os.path.join(PROJECT_ROOT, "media", phase)
+    return base if name == "lower_out" else os.path.join(base, name)
 
 # ---------------------------------------------------------------------------------------------
 # gripper (actuated between exactly two calibrated apertures: open at trial endpoints, grasp

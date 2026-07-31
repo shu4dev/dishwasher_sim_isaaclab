@@ -43,7 +43,10 @@ parser.add_argument("--n_boundary", type=int, default=60)
 parser.add_argument("--n_deep", type=int, default=40)
 parser.add_argument("--n_task", type=int, default=20)
 parser.add_argument("--seed", type=int, default=7)
-parser.add_argument("--out_dir", type=str, default=os.path.join(PROJECT_ROOT, "media", "D"))
+parser.add_argument("--out_dir", type=str, default=None,
+                    help="Media dir (default: media/D or media/D/<scenario>).")
+parser.add_argument("--scenario", type=str, default="lower_out",
+                    help="Rack-state scenario (see config.SCENARIOS).")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -67,6 +70,12 @@ from isaaclab_physx.physics import PhysxCfg
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from dishsim import config  # noqa: E402
+
+# scenario BEFORE scene/robots imports — they bind rack targets + the derived USD at import
+config.apply_scenario(args_cli.scenario)
+if args_cli.out_dir is None:
+    args_cli.out_dir = config.scenario_media_dir("D")
+
 from dishsim import scene as dscene  # noqa: E402
 from dishsim.collision_world import CollisionWorld  # noqa: E402
 from dishsim.media import CameraRig  # noqa: E402
@@ -138,7 +147,7 @@ def main() -> None:
     rng = np.random.default_rng(args_cli.seed)
     # per-link fidelity (merged_cluster=False): parity validates the exact geometry model;
     # planning then uses the strictly-more-conservative merged variant on top of it
-    world = CollisionWorld(self_check=False, merged_cluster=False)
+    world = CollisionWorld(cache_dir=config.scenario_cache_dir(), self_check=False, merged_cluster=False)
 
     t0 = time.perf_counter()
     _ = [world.in_collision(q) for q in rng.uniform(-np.pi, np.pi, size=(200, 6))]

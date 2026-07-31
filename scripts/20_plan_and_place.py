@@ -33,9 +33,13 @@ parser = argparse.ArgumentParser(description="OMPL plan-and-place trials.")
 parser.add_argument("--slots", type=str, default="1,2,3", help="Comma-separated slot ids.")
 parser.add_argument("--seeds", type=str, default="0", help="Comma list or a-b range of RNG seeds.")
 parser.add_argument("--repeats", type=int, default=1, help="Trials per (slot, seed) pair.")
-parser.add_argument("--out", type=str, default=os.path.join(PROJECT_ROOT, "results"))
-parser.add_argument("--media", type=str, default=os.path.join(PROJECT_ROOT, "media", "F"))
+parser.add_argument("--out", type=str, default=None,
+                    help="Trial-JSON dir (default: results/ or results/<scenario>).")
+parser.add_argument("--media", type=str, default=None,
+                    help="Media dir (default: media/F or media/F/<scenario>).")
 parser.add_argument("--skip_existing", action="store_true", help="Skip trials whose JSON exists (resume).")
+parser.add_argument("--scenario", type=str, default="lower_out",
+                    help="Rack-state scenario (see config.SCENARIOS).")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -58,6 +62,15 @@ from isaaclab_physx.physics import PhysxCfg
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from dishsim import config  # noqa: E402
+
+# scenario BEFORE scene/robots imports — they bind rack targets + the derived USD at import
+config.apply_scenario(args_cli.scenario)
+if args_cli.out is None:
+    args_cli.out = (os.path.join(PROJECT_ROOT, "results") if config.SCENARIO_NAME == "lower_out"
+                    else os.path.join(PROJECT_ROOT, "results", config.SCENARIO_NAME))
+if args_cli.media is None:
+    args_cli.media = config.scenario_media_dir("F")
+
 from dishsim import planning  # noqa: E402
 from dishsim import scene as dscene  # noqa: E402
 from dishsim.collision_world import CollisionWorld  # noqa: E402
@@ -83,18 +96,19 @@ def main() -> None:
     os.makedirs(args_cli.out, exist_ok=True)
     os.makedirs(args_cli.media, exist_ok=True)
 
-    with open(os.path.join(config.CACHE_DIR, "slots", "slots.json")) as f:
+    cache_dir = config.scenario_cache_dir()
+    with open(os.path.join(cache_dir, "slots", "slots.json")) as f:
         slots = {s["slot_id"]: SlotFrame.from_json(s) for s in json.load(f)["slots"]}
-    with open(os.path.join(config.CACHE_DIR, "slots", "goal_sets.json")) as f:
+    with open(os.path.join(cache_dir, "slots", "goal_sets.json")) as f:
         goal_sets = {g["slot_id"]: np.array(g["configs"]) for g in json.load(f)["goal_sets"]}
 
-    world = CollisionWorld(self_check=True)
+    world = CollisionWorld(cache_dir=cache_dir, self_check=True)
     T_w3_obj = np.array(world.manifest["object"]["T_wrist3_obj"])
     T_w_base = make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W)
     T_base_w = T_inv(T_w_base)
     # post-release world for retract validation: same cache, carried object detached (it
     # re-enters per trial as the placed obstacle)
-    retract_world = CollisionWorld(self_check=True)
+    retract_world = CollisionWorld(cache_dir=cache_dir, self_check=True)
     mug_pieces = retract_world.carried_object_pieces()
     retract_world.detach_carried_object()
 
@@ -175,6 +189,7 @@ def main() -> None:
                     continue
                 trial_id += 1
                 record = {"trial": tag, "slot": slot_id, "seed": seed, "repeat": rep,
+                          "scenario": config.SCENARIO_NAME,
                           "success": False, "failure_stage": None, "plan_time_s": None,
                           "path_len_rad": None, "exec_steps": 0, "goal_config_index": None,
                           "grasp_force_n": None, "exec_pad_peak_n": None, "retract": None,
@@ -202,6 +217,12 @@ def main() -> None:
 
                 try:
                     if len(goals) == 0:
+                        # still show the scene the trial cannot solve: without this the video
+                        # closes with zero frames (broken MP4) and the evidence shows nothing
+                        for _ in range(120):
+                            dscene.hold_targets(scene)
+                            step_sim(1)
+                            capture()
                         record["failure_stage"] = "no-goal-config"
                         raise StopIteration
 

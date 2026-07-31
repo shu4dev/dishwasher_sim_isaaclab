@@ -35,7 +35,12 @@ from dishsim.geometry import coacd_dir_for, load_manifest  # noqa: E402
 
 parser = argparse.ArgumentParser(description="CoACD decomposition of the collision cache.")
 parser.add_argument("--force", action="store_true", help="Re-decompose even if outputs exist.")
+parser.add_argument("--scenario", type=str, default="lower_out",
+                    help="Rack-state scenario (see config.SCENARIOS).")
 args = parser.parse_args()
+
+config.apply_scenario(args.scenario)
+CACHE = config.scenario_cache_dir()
 
 FAILURES: list[str] = []
 
@@ -58,11 +63,11 @@ def decompose(name: str, mesh_rel: str) -> str:
     import coacd  # noqa: PLC0415
 
     coacd.set_log_level("error")
-    out_dir = coacd_dir_for(name, mesh_rel)
+    out_dir = coacd_dir_for(name, mesh_rel, CACHE)
     if os.path.isdir(out_dir) and not args.force and os.listdir(out_dir):
         print(f"[INFO] {name}: cached at {out_dir} ({len(os.listdir(out_dir))} pieces)")
         return out_dir
-    mesh = trimesh.load(os.path.join(config.CACHE_DIR, mesh_rel), force="mesh")
+    mesh = trimesh.load(os.path.join(CACHE, mesh_rel), force="mesh")
     params = coacd_params_for(name)
     parts = coacd.run_coacd(coacd.Mesh(mesh.vertices, mesh.faces), **params)
     os.makedirs(out_dir, exist_ok=True)
@@ -83,7 +88,7 @@ def fcl_convex(mesh: trimesh.Trimesh) -> fcl.Convex:
 
 def tine_gap_probe(rack_name: str, rack_mesh_rel: str, out_dir: str) -> None:
     """Object-sized box at the basket center must be collision-free vs the decomposed rack."""
-    rack_mesh = trimesh.load(os.path.join(config.CACHE_DIR, rack_mesh_rel), force="mesh")
+    rack_mesh = trimesh.load(os.path.join(CACHE, rack_mesh_rel), force="mesh")
     mn, mx = rack_mesh.bounds
     # basket floor: the rack's wire base sits near the bbox bottom; the object stands on it
     probe_size = (
@@ -122,7 +127,7 @@ def render_overlay(name: str, mesh_rel: str, pieces_dir: str, out_png: str) -> N
     import matplotlib.pyplot as plt
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-    src = trimesh.load(os.path.join(config.CACHE_DIR, mesh_rel), force="mesh")
+    src = trimesh.load(os.path.join(CACHE, mesh_rel), force="mesh")
     pieces = [trimesh.load(os.path.join(pieces_dir, f), force="mesh") for f in sorted(os.listdir(pieces_dir))]
     rng = np.random.default_rng(0)
     pts = src.vertices[rng.choice(len(src.vertices), min(4000, len(src.vertices)), replace=False)]
@@ -152,8 +157,14 @@ def render_overlay(name: str, mesh_rel: str, pieces_dir: str, out_png: str) -> N
 
 
 def main() -> None:
-    manifest = load_manifest()
-    media_dir = os.path.join(PROJECT_ROOT, "media", "D")
+    try:
+        manifest = load_manifest(CACHE)
+    except FileNotFoundError:
+        raise SystemExit(
+            f"[FAIL] no cache at {CACHE} — run scripts/12_extract_geometry.py "
+            f"--scenario {config.SCENARIO_NAME} first"
+        ) from None
+    media_dir = config.scenario_media_dir("D")
     for name, entry in manifest["statics"].items():
         if entry.get("coacd"):
             out = decompose(name, entry["mesh"])

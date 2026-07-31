@@ -230,6 +230,8 @@ DISHWASHER_V0_USD_PATH = (
         door_open_deg=config.DOOR_OPEN_DEG,
         door_band_deg=config.DOOR_BAND_DEG,
         rack_targets=config.RACK_JOINT_TARGETS,
+        # per-scenario derived copies; requires config.apply_scenario() BEFORE this import
+        suffix="" if config.SCENARIO_NAME == "lower_out" else f"_{config.SCENARIO_NAME}",
     )
     if os.path.isfile(_DISHWASHER_SRC_USD)
     else _DISHWASHER_SRC_USD

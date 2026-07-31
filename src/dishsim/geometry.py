@@ -230,10 +230,11 @@ def dump_cache(scene, sim, cache_dir: str = config.CACHE_DIR) -> str:
     }
     manifest["t_wrist3_tcp"] = dscene.t_wrist3_tcp().tolist()
 
-    # -- static machine state (recorded, asserted by CollisionWorld) --------------------------
+    # -- static machine state + scenario (recorded for review; not part of config_hash) -------
     from . import scene as _s  # noqa: PLC0415
 
     manifest["statics_state"] = _s.statics_report(scene)
+    manifest["scenario"] = config.SCENARIO_NAME
 
     path = os.path.join(cache_dir, MANIFEST)
     with open(path, "w") as f:
@@ -263,8 +264,13 @@ def load_manifest(cache_dir: str = config.CACHE_DIR) -> dict:
 
 
 def coacd_dir_for(name: str, mesh_path: str, cache_dir: str = config.CACHE_DIR) -> str:
-    """Deterministic decomposition directory for a body: keyed by mesh bytes + CoACD params."""
+    """Deterministic decomposition directory for a body: keyed by mesh bytes + CoACD params.
+
+    ``cache_dir`` is the mesh-read root only; the output always lives under the baseline
+    ``assets/cache/coacd/``. The digest is content-addressed, so scenario caches whose meshes
+    are byte-identical share one decomposition instead of re-running CoACD per scenario.
+    """
     params = config.COACD.get(name, config.COACD.get("object" if name == "object" else "default", config.COACD["default"]))
     with open(os.path.join(cache_dir, mesh_path), "rb") as f:
         digest = hashlib.sha256(f.read() + json.dumps(params, sort_keys=True).encode()).hexdigest()[:16]
-    return os.path.join(cache_dir, "coacd", f"{name}_{digest}")
+    return os.path.join(config.CACHE_DIR, "coacd", f"{name}_{digest}")

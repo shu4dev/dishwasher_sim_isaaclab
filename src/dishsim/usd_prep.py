@@ -88,6 +88,7 @@ def make_dishwasher_v0_usd(
     door_band_deg: float = 5.0,
     rack_targets: dict[str, float] | None = None,
     force: bool = False,
+    suffix: str = "",
 ) -> str:
     """Create (or reuse) the v0 derived copy: static machine, door locked open, racks pinned.
 
@@ -110,12 +111,15 @@ def make_dishwasher_v0_usd(
         rack_targets: Prismatic drive targets by joint name [m]; joints not listed keep their
             authored target.
         force: Regenerate even if the derived file already exists.
+        suffix: Extra filename token (e.g. ``_both_out``) so per-scenario derived copies don't
+            collide. The filename does NOT encode the actual door/rack values — script 12's
+            post-settle rack-error assertion is the staleness guard.
 
     Returns:
-        Path to the derived ``model_<variant>_v0.usda`` file.
+        Path to the derived ``model_<variant>_v0<suffix>.usda`` file.
     """
     root, _ = os.path.splitext(src_path)
-    dst_path = f"{root}_v0.usda"
+    dst_path = f"{root}_v0{suffix}.usda"
     if os.path.isfile(dst_path) and not force:
         return dst_path
 

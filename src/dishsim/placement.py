@@ -23,7 +23,7 @@ import numpy as np
 import trimesh
 
 from . import config
-from .geometry import load_manifest
+from .geometry import config_hash, load_manifest
 from .transforms import T_inv, make_T
 from .ur5e_kin import JOINT_LIMITS, expand_2pi_wraps, ik_wrist3_all
 
@@ -222,12 +222,17 @@ def goal_configs(
 
 
 def save_slots(slots: list[SlotFrame], goal_sets: list[GoalSet], out_dir: str) -> tuple[str, str]:
-    """Write slots.json + goal_sets.json under ``out_dir`` (usually assets/cache/slots)."""
+    """Write slots.json + goal_sets.json under ``out_dir`` (usually the scenario's cache slots dir).
+
+    Both files are stamped with the active scenario and the collision-world ``config_hash`` so
+    consumers can detect a manifest/slots mismatch (legacy files without stamps still load).
+    """
     os.makedirs(out_dir, exist_ok=True)
+    stamp = {"scenario": config.SCENARIO_NAME, "config_hash": config_hash()}
     slots_path = os.path.join(out_dir, "slots.json")
     with open(slots_path, "w") as f:
-        json.dump({"frame": "robot_base", "slots": [s.to_json() for s in slots]}, f, indent=2)
+        json.dump({"frame": "robot_base", **stamp, "slots": [s.to_json() for s in slots]}, f, indent=2)
     goals_path = os.path.join(out_dir, "goal_sets.json")
     with open(goals_path, "w") as f:
-        json.dump({"goal_sets": [g.to_json() for g in goal_sets]}, f, indent=2)
+        json.dump({**stamp, "goal_sets": [g.to_json() for g in goal_sets]}, f, indent=2)
     return slots_path, goals_path

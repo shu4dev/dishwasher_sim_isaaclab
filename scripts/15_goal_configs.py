@@ -28,8 +28,11 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 parser = argparse.ArgumentParser(description="Slot frames + IK goal sets + contact sheets.")
 parser.add_argument("--seed", type=int, default=11)
-parser.add_argument("--out_dir", type=str, default=os.path.join(PROJECT_ROOT, "media", "E"))
+parser.add_argument("--out_dir", type=str, default=None,
+                    help="Media dir (default: media/E or media/E/<scenario>).")
 parser.add_argument("--sheets_per_slot", type=int, default=6)
+parser.add_argument("--scenario", type=str, default="lower_out",
+                    help="Rack-state scenario (see config.SCENARIOS).")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -51,6 +54,12 @@ from isaaclab_physx.physics import PhysxCfg
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from dishsim import config  # noqa: E402
+
+# scenario BEFORE scene/robots imports — they bind rack targets + the derived USD at import
+config.apply_scenario(args_cli.scenario)
+if args_cli.out_dir is None:
+    args_cli.out_dir = config.scenario_media_dir("E")
+
 from dishsim import placement  # noqa: E402
 from dishsim import scene as dscene  # noqa: E402
 from dishsim.collision_world import CollisionWorld  # noqa: E402
@@ -77,9 +86,9 @@ def render_slot_detection(slots, out_png: str) -> None:
 
     from dishsim.geometry import load_manifest
 
-    manifest = load_manifest()
+    manifest = load_manifest(config.scenario_cache_dir())
     entry = manifest["statics"]["E_shelf_1_04"]
-    mesh = trimesh.load(os.path.join(config.CACHE_DIR, entry["mesh"]), force="mesh")
+    mesh = trimesh.load(os.path.join(config.scenario_cache_dir(), entry["mesh"]), force="mesh")
     T = np.array(entry["T_base_body"])
     verts = (T @ np.hstack([mesh.vertices, np.ones((len(mesh.vertices), 1))]).T).T[:, :3]
 
@@ -98,7 +107,7 @@ def render_slot_detection(slots, out_png: str) -> None:
     ax.set_xlabel("x [m] (robot-base frame)")
     ax.set_ylabel("y [m]")
     ax.legend(loc="upper left", fontsize=8)
-    ax.set_title("Lower-rack slot derivation (top-down)")
+    ax.set_title(f"Lower-rack slot derivation (top-down) — scenario {config.SCENARIO_NAME}")
     os.makedirs(os.path.dirname(out_png), exist_ok=True)
     fig.savefig(out_png, dpi=130, bbox_inches="tight")
     plt.close(fig)
@@ -109,8 +118,10 @@ def main() -> None:
     rng = np.random.default_rng(args_cli.seed)
 
     # ---- Kit-free computation ------------------------------------------------------------
-    world = CollisionWorld(self_check=True)
-    slots = placement.derive_slots_from_rack()
+    world = CollisionWorld(cache_dir=config.scenario_cache_dir(), self_check=True)
+    slots = placement.derive_slots_from_rack(config.scenario_cache_dir())
+    print(f"[INFO] scenario {config.SCENARIO_NAME}: home config in_collision: "
+          f"{bool(world.in_collision(np.array(config.HOME_Q)))}")
     print(f"[INFO] derived {len(slots)} slots")
     for s in slots:
         print(f"[INFO]   slot {s.slot_id}: center base-frame "
@@ -124,11 +135,15 @@ def main() -> None:
         print(f"[INFO] slot {s.slot_id}: {len(gs.configs)} goal configs "
               f"(funnel: {gs.n_pose_samples} poses -> {gs.n_ik_solutions} IK "
               f"-> -{gs.n_limit_reject} limits -> -{gs.n_collision_reject} collision)")
-    slots_path, goals_path = placement.save_slots(slots, goal_sets, os.path.join(config.CACHE_DIR, "slots"))
+    slots_path, goals_path = placement.save_slots(
+        slots, goal_sets, os.path.join(config.scenario_cache_dir(), "slots")
+    )
     print(f"[INFO] wrote {slots_path} and {goals_path}")
 
     nonempty = [g for g in goal_sets if len(g.configs) > 0]
-    check("at least 3 slots with non-empty goal sets", len(nonempty) >= 3,
+    min_feasible = config.SCENARIOS[config.SCENARIO_NAME]["min_feasible_slots"]
+    print(f"[INFO] scenario {config.SCENARIO_NAME}: {len(nonempty)}/{len(slots)} slots feasible")
+    check(f"at least {min_feasible} slots with non-empty goal sets", len(nonempty) >= min_feasible,
           f"{len(nonempty)}/{len(slots)} slots feasible")
 
     render_slot_detection(slots, os.path.join(args_cli.out_dir, "slot_detection.png"))
@@ -223,7 +238,8 @@ def main() -> None:
         out = contact_sheet(images, labels, os.path.join(args_cli.out_dir, f"accepted_slot{gs.slot_id}_sheet.png"), cols=3)
         print(f"[INFO] accepted sheet: {out}")
         sheet_count += 1
-    check("accepted contact sheets rendered", sheet_count >= 3, f"{sheet_count} sheets")
+    check("accepted contact sheets rendered", sheet_count >= min(3, len(nonempty)),
+          f"{sheet_count} sheets ({len(nonempty)} feasible slots)")
 
     if rejected:
         images = [shot(q) for q, _ in rejected]

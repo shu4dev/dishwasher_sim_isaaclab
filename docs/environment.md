@@ -141,7 +141,12 @@ The RL train/play entry points were removed in the v0 pivot (recoverable from th
 **OMPL 2.0 nanobind API notes** (differs from the old Py++ bindings all tutorials show):
 `setStateValidityChecker` accepts a plain Python callable; there is no `ob.StateValidityCheckerFn`
 and no `ob.State(space)` constructor — allocate states with `space.allocState()` and index them.
-`ob.GoalStates` exists (Phase F uses it).
+`ob.GoalStates` exists (Phase F uses it). `ob.PlannerData(si)` + `planner.getPlannerData(pd)` are
+bound and work (verified 2026-07-31, used by `scripts/21_plan_visual.py`): `pd.getEdges(i)` returns
+a plain `list[int]`, `pd.getVertex(i).getTag()` gives RRT-Connect's tree tags (1 = start tree,
+2 = goal tree), vertex states support direct indexing, and `pd.printGraphML()` returns the GraphML
+document as a string (per-vertex reals in its `coords` attribute — the readback fallback
+`planning._coords_from_graphml` parses this).
 
 ### Venv/wrapper interactions (hard-won, 2026-07-29)
 
