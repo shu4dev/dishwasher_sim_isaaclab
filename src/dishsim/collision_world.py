@@ -15,10 +15,13 @@ Geometry model:
 - statics (dishwasher bodies incl. both racks, pedestal, ground): CoACD convex pieces (or a
   single hull for the boxes) in one broadphase manager;
 - arm links: one inflated convex hull each, posed by :func:`dishsim.ur5e_kin.fk_all_links`;
-- gripper links + carried object: rigid cluster on ``wrist_3_link`` (frozen fingers), posed by
-  the cached ``T_wrist3_*`` transforms;
+- gripper links + carried object: rigid cluster on ``wrist_3_link`` (fingers frozen at the
+  calibrated grasp aperture — the extraction-time contact-pinch state, which is also the
+  aperture held during all planned motion), posed by the cached ``T_wrist3_*`` transforms;
 - hull inflation by ``config.COLLISION_MARGIN_M`` biases verdicts conservative (the
-  FCL-vs-Isaac parity knob).
+  FCL-vs-Isaac parity knob). The 5 mm margin also covers the release-time jaw opening: the
+  pads sweep only ~2.6 mm/side outward from the grasp aperture to fully open on the ~80 mm
+  mug, so the open-jaw envelope stays inside the inflated grasp-aperture hulls.
 
 Self-collision: PhysX runs the robot with self-collisions DISABLED, so the simulator neither
 prevents nor reports them; the planner still refuses self-colliding configurations
@@ -220,7 +223,9 @@ class CollisionWorld:
         # carried object vs proximal arm links: the object is a SEPARATE rigid body in PhysX
         # (not an articulation link), so the simulator fully simulates and reports these
         # contacts — this check is always on, regardless of self_check. (Object vs wrist_2/3
-        # and vs gripper links is constant by rigidity — verified free at build.)
+        # and vs gripper links is constant by rigidity and deliberately NOT checked: the pads
+        # PRESS the object by design — the pinch is verified in-band at build by the
+        # scripts/11 calibration gates and the scripts/12 grip_gate assert before dump_cache.)
         for link in ("base_link", "shoulder_link", "upper_arm_link", "forearm_link", "wrist_1_link"):
             if link not in self._arm:
                 continue
@@ -300,6 +305,16 @@ class CollisionWorld:
 
     def remove_object(self, name: str) -> None:
         self._extra.pop(name, None)
+
+    def carried_object_pieces(self) -> list[trimesh.Trimesh]:
+        """Body-frame CoACD pieces of the carried object.
+
+        Grab these *before* :meth:`detach_carried_object` to re-add the object as a placed
+        obstacle via :meth:`add_object` (retract-path validation, MCTS placements).
+        """
+        if not self.object_attached:
+            raise RuntimeError("carried object already detached — copy the pieces first")
+        return list(self._object_pieces)
 
     def detach_carried_object(self) -> None:
         """Drop the carried object from the moving cluster (post-release planning queries)."""

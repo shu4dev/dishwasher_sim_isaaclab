@@ -80,16 +80,23 @@ it editable):
   C). Load-bearing details: `articulation_root_prim_path="/root_joint"` (the asset has a second,
   disabled ArticulationRootAPI on the gripper subtree); gripper armature 0.001 + damping 0.05
   (the near-massless mimic-joint finger cluster resonates and explodes without them). Only
-  `finger_joint` may ever be commanded on the gripper (0 = open, ~0.8 = closed — inverted vs.
-  Franka); in v0 the gripper is **frozen** at a fixed aperture and never actuated; the five
-  mimic-driven joints stay untouched always.
+  `finger_joint` is ever *commanded to a pose* on the gripper (0 = open, ~0.8 = closed —
+  inverted vs. Franka), and only between two calibrated apertures: fully open at trial
+  endpoints, the contact-pinch aperture (`docs/grasp_calibration.md`) during all planned
+  motion — matching the frozen-aperture FCL cluster. The mimic-driven joints are never
+  position-written; the two stiff `.*_inner_finger_joint` drive *targets* are additionally
+  kept mimic-consistent by `scene.hold_targets` (signs measured by
+  `scripts/11_calibrate_grasp.py`) so they don't fight the mimic constraint; the three
+  zero-stiffness knuckle joints stay untouched always.
 - `usd_prep.py` — derived dishwasher USDs. Removes ArtVIP's world-weld `FixedJoint` (body1 set,
   no body0 — pins the machine at its authored pose and blows up any relocated spawn).
   `make_dishwasher_rl_usd` also zeroes the authored door drive (passive door, used by the
   inspection script); Phase C adds `make_dishwasher_v0_usd` (door locked open). Downloaded
   originals are never modified.
-- `config.py` (Phase C) — every tunable: grasp transform (defined ONCE), gripper aperture, slot
-  tolerances, CoACD params, collision margin, plan budgets, camera poses. Tune here, not inline.
+- `config.py` (Phase C) — every tunable: grasp transform (defined ONCE), calibrated grasp
+  aperture + pad-force bands (measured by `scripts/11_calibrate_grasp.py`, not eyeballed),
+  slot tolerances, CoACD params, collision margin, plan budgets, camera poses. Tune here, not
+  inline.
 - `collision_world.py` (Phase D) — Kit-free FCL world loaded from `assets/cache/` +
   `scene_state.json` manifest (frames asserted at load). No `pxr`/`isaaclab` imports here, ever.
 
@@ -110,7 +117,9 @@ dishwasher that's `E_body_5`, not the asset origin), and this Isaac Lab is XYZW-
   `--headless --enable_cameras`; fixed front/top/iso cameras from `config.py`; short 720p clips.
 - One frame convention everywhere, asserted in code: robot base frame, meters, Z-up, XYZW.
 - The dishwasher base stays fixed (`fix_root_link=True`); the v0 door stays locked open; the
-  plate stays welded to the TCP until the release step.
+  carried object stays welded to the TCP until the release step (the visible pinch is real —
+  calibrated pad contact — but the weld carries the load during motion; jaws open on camera
+  before the weld drops).
 - Ask the user before: downloads over 2 GB, runs expected to exceed 30 minutes, opening ports,
   or installs that restructure the container (ROS/MoveIt especially). GUI verification happens
   only via the streaming client — pause and ask the user to connect.

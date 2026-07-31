@@ -7,10 +7,13 @@
 **UR5e + Robotiq 2F-85.** The Isaac Sim 6.0 asset ``Robots/UniversalRobots/ur5e/ur5e.usd`` ships
 the gripper as a USD variant (``Gripper = Robotiq_2f_85``), pre-assembled on ``wrist_3_link`` via
 a fixed joint. The gripper uses native PhysX mimic joints: commanding ``finger_joint`` drives the
-other five finger joints through mimic constraints, so only ``finger_joint`` may ever be
-commanded. In the v0 planning project the gripper is **frozen** (collision geometry only) — the
-actuator groups below still matter because the near-massless mimic-constrained finger links
-resonate and blow up without the armature/damping values.
+other five finger joints through mimic constraints, so ``finger_joint`` is the only joint ever
+*commanded to a pose* (the two stiff ``.*_inner_finger_joint`` drive targets are additionally
+kept mimic-consistent by :func:`dishsim.scene.hold_targets` so they do not fight the constraint).
+In the v0 planning project the gripper actuates only between two calibrated apertures — open at
+trial endpoints, the calibrated contact-pinch aperture during all planned motion. The armature/
+damping values below are load-bearing: the near-massless mimic-constrained finger links resonate
+and blow up without them.
 
 **Dishwasher.** ArtVIP ``dishwasher_2`` with the passive-door derived USD (world-weld removed,
 authored door drive neutralized — see :mod:`dishsim.usd_prep`). ``DISHWASHER_CFG`` keeps the

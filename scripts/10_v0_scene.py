@@ -9,13 +9,18 @@ Two modes:
 ``--measure`` (bootstrap, run once)
     Scene without the carried object. Measures the live ``wrist_3_link -> TCP`` transform and
     prints the constant to freeze into ``config.T_WRIST3_TCP_QUAT``, plus the FK cross-check.
+    Then sweeps ``finger_joint`` and prints the pad map (jaw separation, pad height, and the
+    closing axis in the TCP frame per aperture) — the geometric input to the grasp calibration
+    (``scripts/11_calibrate_grasp.py``). Saved to ``media/C/pad_map.json``.
 
-default (requires the frozen TCP constant)
-    Scene with the object welded to the wrist. Settles, asserts the static locks (door open,
-    racks pinned), verifies the weld against the analytic grasp chain, logs every pose (world +
-    robot-base frames) to ``media/C/scene_poses.json``, captures front/top/iso stills and a
-    10 s wrist-wiggle clip proving the object tracks the TCP rigidly, and runs the
-    reach/workspace check over the extended lower rack.
+default (requires the frozen TCP + grasp-calibration constants)
+    Scene with the object welded to the wrist between the open jaws. Settles open, gates on
+    zero contact, then visibly closes the gripper onto the mug (``grasp_close_open.mp4``),
+    verifies the calibrated pad-force band and the weld against the analytic grasp chain, logs
+    every pose to ``media/C/scene_poses.json``, captures stills + pads-on-mug close-ups, runs
+    the reach/workspace check, records a 10 s wrist-wiggle clip proving rigidity while
+    monitoring the dynamic pad-force peak (the ``GRIP_FORCE_EXEC_MAX_N`` measurement), and
+    finally opens the jaws on camera, verifying a clean release of the contact forces.
 
 Run with:
     scripts/run_kit.sh scripts/10_v0_scene.py --headless --enable_cameras [--measure]
@@ -132,12 +137,12 @@ def main() -> None:
     sim.reset()
     if rig is not None:
         rig.apply_poses(sim.device)
-    dscene.write_default_states(scene)
+    dscene.write_default_states(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
     dt = sim.get_physics_dt()
 
-    # -- settle ------------------------------------------------------------------------------
+    # -- settle (jaws fully open; the visible close happens later, on camera) -----------------
     for i in range(args_cli.settle_steps):
-        dscene.hold_targets(scene)
+        dscene.hold_targets(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
         scene.write_data_to_sim()
         sim.step()
         scene.update(dt)
@@ -156,10 +161,11 @@ def main() -> None:
     vels = robot.data.joint_vel.torch[0]
     check("robot settled, no NaN", bool(torch.isfinite(vels).all()) and float(vels.abs().max()) < 0.5)
 
-    # gripper aperture held
+    # gripper fully open after the settle
     fid, _ = robot.find_joints(config.GRIPPER_JOINT)
     aperture = float(robot.data.joint_pos.torch[0, fid[0]])
-    check("gripper frozen at aperture", abs(aperture - config.GRIPPER_APERTURE_RAD) < 0.05, f"{aperture:.3f} rad")
+    check("gripper open after settle", abs(aperture - config.GRIPPER_APERTURE_OPEN_RAD) < 0.05,
+          f"{aperture:.3f} rad")
 
     # -- FK cross-check ----------------------------------------------------------------------
     w3_pos, w3_quat = body_pose_np(robot, "wrist_3_link")
@@ -180,12 +186,129 @@ def main() -> None:
         print(f"       T_WRIST3_TCP_QUAT = {tuple(round(v, 8) for v in m['t_wrist3_tcp_quat_xyzw'])}")
         pos_dev = np.linalg.norm(np.array(m["t_wrist3_tcp_pos"]) - np.array(config.T_WRIST3_TCP_POS))
         check("TCP translation near documented (0, 0.130, 0)", pos_dev < 5e-3, f"dev {pos_dev*1e3:.2f} mm")
+
+        # -- pad-geometry probe: finger_joint -> jaw separation / pad height map --------------
+        # The ee_frame pad targets ride the left/right_inner_finger BODY frames, so they track
+        # the aperture live — a free, physics-backed jaw readout. Pad-frame separation at open
+        # is 118.4 mm vs the nominal 85 mm jaw opening: the difference (2 x ~16.7 mm) is the
+        # pad body on each side, so jaw_width(theta) ~ pad_sep(theta) - PAD_BODY_2X below.
+        probe = []
+        for theta in (0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.6, 0.78):
+            for _ in range(60):
+                dscene.hold_targets(scene, aperture=theta)
+                scene.write_data_to_sim()
+                sim.step()
+                scene.update(dt)
+            theta_meas = float(robot.data.joint_pos.torch[0, fid[0]])
+            tcp_p = scene["ee_frame"].data.target_pos_w.torch[0, 0].cpu().numpy()
+            tcp_q = scene["ee_frame"].data.target_quat_w.torch[0, 0].cpu().numpy()
+            T_tcp_w = T_inv(make_T(tcp_p, tcp_q))
+            pads_w = scene["ee_frame"].data.target_pos_w.torch[0, 1:3].cpu().numpy()
+            pads_tcp = [(T_tcp_w @ np.append(p, 1.0))[:3] for p in pads_w]
+            sep_vec = pads_tcp[0] - pads_tcp[1]
+            sep = float(np.linalg.norm(sep_vec))
+            mid = 0.5 * (pads_tcp[0] + pads_tcp[1])
+            probe.append({
+                "theta_cmd": theta,
+                "theta_meas": round(theta_meas, 4),
+                "pad_sep_m": round(sep, 5),
+                "pad_mid_tcp": [round(float(v), 5) for v in mid],
+                "close_axis_tcp": [round(float(v), 4) for v in sep_vec / max(sep, 1e-9)],
+                "pad_L_tcp": [round(float(v), 5) for v in pads_tcp[0]],
+                "pad_R_tcp": [round(float(v), 5) for v in pads_tcp[1]],
+            })
+            print(f"[INFO] pad map theta={theta:.3f}: meas={theta_meas:.4f} rad, "
+                  f"sep={sep*1e3:.1f} mm, mid_z={mid[2]*1e3:+.1f} mm, "
+                  f"close_axis={probe[-1]['close_axis_tcp']}")
+
+        # derived: pad-body allowance from the open state (nominal 85 mm jaw at theta=0), the
+        # aperture where the jaw meets the mug diameter, and the candidate rim height
+        pad_body_2x = probe[0]["pad_sep_m"] - 0.085
+        target_sep = 2.0 * config.OBJECT_RIM_RADIUS_M + pad_body_2x
+        theta_pred, rim_z_cand = None, None
+        for a, b in zip(probe[:-1], probe[1:]):
+            if b["pad_sep_m"] <= target_sep <= a["pad_sep_m"]:
+                f = (a["pad_sep_m"] - target_sep) / max(a["pad_sep_m"] - b["pad_sep_m"], 1e-9)
+                theta_pred = a["theta_meas"] + f * (b["theta_meas"] - a["theta_meas"])
+                mid_z = a["pad_mid_tcp"][2] + f * (b["pad_mid_tcp"][2] - a["pad_mid_tcp"][2])
+                rim_z_cand = mid_z - config.PAD_ENGAGEMENT_M
+                break
+        check("jaw closes through the mug diameter", theta_pred is not None,
+              f"target pad sep {target_sep*1e3:.1f} mm")
+        if theta_pred is not None:
+            print(f"[INFO] pad-body allowance 2x = {pad_body_2x*1e3:.1f} mm")
+            print(f"[INFO] jaw meets the {2*config.OBJECT_RIM_RADIUS_M*1e3:.1f} mm mug at "
+                  f"theta ~ {theta_pred:.3f} rad (pad sep {target_sep*1e3:.1f} mm)")
+            print("[INFO] calibration starting point (scripts/11_calibrate_grasp.py):")
+            print(f"       --rim_z {rim_z_cand:.4f}   # pad_mid_z(theta_pred) - PAD_ENGAGEMENT_M")
+        os.makedirs(args_cli.out_dir, exist_ok=True)
+        pad_map_path = os.path.join(args_cli.out_dir, "pad_map.json")
+        with open(pad_map_path, "w") as f:
+            json.dump({"probe": probe, "pad_body_2x_m": round(pad_body_2x, 5),
+                       "theta_pred": None if theta_pred is None else round(theta_pred, 4),
+                       "rim_z_candidate_m": None if rim_z_cand is None else round(rim_z_cand, 4)},
+                      f, indent=2)
+        print(f"[INFO] pad map written to {pad_map_path}")
+
+        # leave the jaws open again (the settled template other scripts expect at boot)
+        for _ in range(60):
+            dscene.hold_targets(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
+            scene.write_data_to_sim()
+            sim.step()
+            scene.update(dt)
         if rig is not None:
             paths = rig.save_stills(args_cli.out_dir, "measure")
             print(f"[INFO] stills: {paths}")
     else:
-        # -- weld verification -------------------------------------------------------------
         obj = scene["carried_object"]
+
+        # -- open-state gate: the welded mug sits untouched between the fully-open jaws ------
+        f_open = dscene.grip_forces(scene)
+        touching = {k: round(v, 3) for k, v in f_open["partners"].items() if v > 0.005}
+        check("no contact on the welded object at full open",
+              max(f_open["partners"].values()) < 0.05
+              and f_open["external_n"] < config.CONTACT_FORCE_THRESH_N,
+              f"partners {touching}, external {f_open['external_n']:.3f} N")
+
+        # -- visible close onto the mug (the on-camera grasp) --------------------------------
+        close_writer = None
+        if rig is not None:
+            aim = obj.data.root_pos_w.torch[0].cpu().numpy()
+            rig.set_view("iso", aim + np.array([-0.28, 0.28, 0.12]), aim, sim.device)
+            close_writer = VideoWriter(
+                os.path.join(args_cli.out_dir, "grasp_close_open.mp4"), fps=config.CAMERA_FPS
+            )
+
+        def ramp_capture(i):
+            if close_writer is not None and i % 2 == 0:
+                rig.update(dt)
+                close_writer.add(rig.grab()["iso"])
+
+        dscene.ramp_gripper(scene, sim, config.GRIPPER_APERTURE_GRASP_RAD,
+                            config.GRIPPER_CLOSE_RAMP_STEPS, per_step=ramp_capture)
+        for _ in range(60):
+            dscene.hold_targets(scene)
+            scene.write_data_to_sim()
+            sim.step()
+            scene.update(dt)
+        aperture = float(robot.data.joint_pos.torch[0, fid[0]])
+        # tolerance is wider than the open check: the settle is contact-limited (the pads stop
+        # on the mug wall, slightly short of the over-commanded target)
+        check("gripper holds grasp aperture under contact",
+              abs(aperture - config.GRIPPER_APERTURE_GRASP_RAD) < 0.08, f"{aperture:.3f} rad")
+        ok, detail = dscene.grip_gate(scene)
+        check("grip force band after close", ok, detail or "in band")
+        f_hold = dscene.grip_forces(scene)
+        print(f"[INFO] steady grip: pads {[round(v, 2) for v in f_hold['pads_n']]} N, "
+              f"external {f_hold['external_n']:.3f} N")
+        if rig is not None:
+            rig.set_view("iso", *config.CAMERAS["iso"], sim.device)
+            for _ in range(3):
+                sim.step()
+                scene.update(dt)
+                rig.update(dt)
+
+        # -- weld verification -------------------------------------------------------------
         obj_pos = obj.data.root_pos_w.torch[0].cpu().numpy()
         obj_quat = obj.data.root_quat_w.torch[0].cpu().numpy()
         pred_pos, pred_quat = dscene.grasp_pose_w()
@@ -200,16 +323,16 @@ def main() -> None:
         fpos = robot.data.joint_pos.torch[0, fids].cpu().numpy()
         print("[INFO] finger joints:", {n: round(float(v), 3) for n, v in zip(fnames, fpos)})
         print("[INFO] robot bodies:", robot.body_names)
-        sensor = scene["object_contact"]
-        contact_n = float(sensor.data.net_forces_w.torch[0].norm())
-        check("no persistent contact on welded object", contact_n < config.CONTACT_FORCE_THRESH_N,
-              f"net force {contact_n:.3f} N")
-        if sensor.data.force_matrix_w is not None:
-            fm = sensor.data.force_matrix_w.torch[0].reshape(-1, 3)
-            mags = fm.norm(dim=-1).cpu().numpy()
-            filters = [p.rsplit("/", 1)[-1] for p in sensor.cfg.filter_prim_paths_expr]
-            print("[INFO] contact partners (N):",
-                  {n: round(float(m), 2) for n, m in zip(filters, mags) if m > 0.01})
+        f_diag = dscene.grip_forces(scene)
+        # the net force on the mug is nonzero BY DESIGN now (pinch asymmetry); what must stay
+        # silent is everything that isn't the two pads
+        check("only the pads touch the carried object",
+              all(v < config.CONTACT_FORCE_THRESH_N for k, v in f_diag["partners"].items()
+                  if k not in config.GRIP_PAD_BODIES)
+              and f_diag["external_n"] < config.CONTACT_FORCE_THRESH_N,
+              f"net {f_diag['net_n']:.2f} N (pad asymmetry), external {f_diag['external_n']:.3f} N")
+        print("[INFO] contact partners (N):",
+              {n: round(v, 2) for n, v in f_diag["partners"].items() if v > 0.01})
         # gripper-body positions in the TCP frame (locates interpenetration numerically)
         tcp_pos_d = scene["ee_frame"].data.target_pos_w.torch[0, 0].cpu().numpy()
         tcp_quat_d = scene["ee_frame"].data.target_quat_w.torch[0, 0].cpu().numpy()
@@ -282,59 +405,87 @@ def main() -> None:
             json.dump({"frame_convention": config.FRAME_CONVENTION, "statics": statics, "poses": poses}, f, indent=2)
         print(f"[INFO] poses written to {poses_path}")
 
-        # -- media: rigidity wiggle clip (stills already saved above) ------------------------
+        # -- media: rigidity wiggle clip + dynamic pad-force measurement ---------------------
+        # (stills already saved above; the wiggle also runs headless so the exec-force
+        # envelope is measured either way)
+        w3_obj_target = dscene.t_wrist3_obj()
+        home = np.array(config.HOME_Q)
+        writers = {}
         if rig is not None:
-            w3_obj_target = dscene.t_wrist3_obj()
-            wiggle_ids, _ = robot.find_joints(["wrist_1_joint", "wrist_2_joint"])
-            base_targets = robot.data.default_joint_pos.torch.clone()
-            fid_all, _ = robot.find_joints(config.GRIPPER_JOINT)
-            base_targets[:, fid_all[0]] = config.GRIPPER_APERTURE_RAD
-            home_w1 = float(base_targets[0, wiggle_ids[0]])
-            home_w2 = float(base_targets[0, wiggle_ids[1]])
-
             writers = {
                 name: VideoWriter(os.path.join(args_cli.out_dir, f"rigidity_{name}.mp4"), fps=config.CAMERA_FPS)
                 for name in ("iso", "front")
             }
-            n_steps = int(args_cli.wiggle_seconds / config.SIM_DT)
-            max_drift_mm, max_rot_drift = 0.0, 0.0
-            for step in range(n_steps):
-                t = step * config.SIM_DT
-                targets = base_targets.clone()
-                targets[:, wiggle_ids[0]] = home_w1 + 0.25 * math.sin(2.0 * math.pi * 0.4 * t)
-                targets[:, wiggle_ids[1]] = home_w2 + 0.25 * (math.cos(2.0 * math.pi * 0.4 * t) - 1.0)
-                robot.set_joint_position_target_index(target=targets)
-                scene.write_data_to_sim()
-                sim.step()
-                scene.update(dt)
-                if step % 2 == 0:
+        n_steps = int(args_cli.wiggle_seconds / config.SIM_DT)
+        max_drift_mm, max_rot_drift, pad_peak_wiggle = 0.0, 0.0, 0.0
+        wiggle_trace = []
+        for step in range(n_steps):
+            t = step * config.SIM_DT
+            q = home.copy()
+            q[3] += 0.25 * math.sin(2.0 * math.pi * 0.4 * t)  # wrist_1_joint
+            q[4] += 0.25 * (math.cos(2.0 * math.pi * 0.4 * t) - 1.0)  # wrist_2_joint
+            dscene.hold_targets(scene, arm_q=q)  # squeeze stays commanded during motion
+            scene.write_data_to_sim()
+            sim.step()
+            scene.update(dt)
+            pads = dscene.grip_forces(scene)["pads_n"]
+            pad_peak_wiggle = max(pad_peak_wiggle, max(pads))
+            if step % 2 == 0:
+                wiggle_trace.append([round(t, 3)] + [round(v, 3) for v in pads])
+                if rig is not None:
                     rig.update(dt)
                     frames = rig.grab()
                     for name, wr in writers.items():
                         wr.add(frames[name])
-                    # weld drift: live wrist->object vs the analytic weld transform
-                    w3_p, w3_q = body_pose_np(robot, "wrist_3_link")
-                    o_p = obj.data.root_pos_w.torch[0].cpu().numpy()
-                    o_q = obj.data.root_quat_w.torch[0].cpu().numpy()
-                    T_live = T_inv(make_T(w3_p, w3_q)) @ make_T(o_p, o_q)
-                    max_drift_mm = max(
-                        max_drift_mm, float(np.linalg.norm(T_live[:3, 3] - w3_obj_target[:3, 3])) * 1e3
-                    )
-                    max_rot_drift = max(max_rot_drift, rot_angle_deg(T_live, w3_obj_target))
-            for wr in writers.values():
-                wr.close()
-                print(f"[INFO] clip: {wr.path} ({wr.frames} frames)")
-            # gates allow the weld's transient elastic compliance under the +-0.25 rad wiggle
-            # (permanent drift is separately bounded by the post-settle weld check above)
-            check("object rigidly attached during wiggle", max_drift_mm < 2.0 and max_rot_drift < 2.0,
-                  f"max drift {max_drift_mm:.2f} mm / {max_rot_drift:.2f} deg")
+                # weld drift: live wrist->object vs the analytic weld transform
+                w3_p, w3_q = body_pose_np(robot, "wrist_3_link")
+                o_p = obj.data.root_pos_w.torch[0].cpu().numpy()
+                o_q = obj.data.root_quat_w.torch[0].cpu().numpy()
+                T_live = T_inv(make_T(w3_p, w3_q)) @ make_T(o_p, o_q)
+                max_drift_mm = max(
+                    max_drift_mm, float(np.linalg.norm(T_live[:3, 3] - w3_obj_target[:3, 3])) * 1e3
+                )
+                max_rot_drift = max(max_rot_drift, rot_angle_deg(T_live, w3_obj_target))
+        for wr in writers.values():
+            wr.close()
+            print(f"[INFO] clip: {wr.path} ({wr.frames} frames)")
+        # gates allow the weld's transient elastic compliance under the +-0.25 rad wiggle
+        # (permanent drift is separately bounded by the post-settle weld check above)
+        check("object rigidly attached during wiggle", max_drift_mm < 2.0 and max_rot_drift < 2.0,
+              f"max drift {max_drift_mm:.2f} mm / {max_rot_drift:.2f} deg")
+        check("dynamic pad force within exec allowance",
+              pad_peak_wiggle <= config.GRIP_FORCE_EXEC_MAX_N,
+              f"peak {pad_peak_wiggle:.2f} N (allowance {config.GRIP_FORCE_EXEC_MAX_N:.1f} N)")
+        print(f"[INFO] wiggle pad-force peak {pad_peak_wiggle:.2f} N — freeze "
+              f"GRIP_FORCE_EXEC_MAX_N with margin above this")
+        with open(os.path.join(args_cli.out_dir, "pad_wiggle_forces.json"), "w") as f:
+            json.dump({"t_padL_padR": wiggle_trace, "peak_n": round(pad_peak_wiggle, 3)}, f)
 
-            statics_after = dscene.statics_report(scene)
-            check("statics unchanged after wiggle",
-                  abs(statics_after["door_deg"] - statics["door_deg"]) < 0.3
-                  and statics_after["rack_lower_err_m"] < 2e-3,
-                  f"door {statics_after['door_deg']:.2f} deg, rack err {statics_after['rack_lower_err_m']*1e3:.2f} mm")
-        else:
+        statics_after = dscene.statics_report(scene)
+        check("statics unchanged after wiggle",
+              abs(statics_after["door_deg"] - statics["door_deg"]) < 0.3
+              and statics_after["rack_lower_err_m"] < 2e-3,
+              f"door {statics_after['door_deg']:.2f} deg, rack err {statics_after['rack_lower_err_m']*1e3:.2f} mm")
+
+        # -- visible open: jaws release the (still-welded) mug, forces drop to zero ----------
+        if rig is not None:
+            aim = obj.data.root_pos_w.torch[0].cpu().numpy()
+            rig.set_view("iso", aim + np.array([-0.28, 0.28, 0.12]), aim, sim.device)
+        dscene.ramp_gripper(scene, sim, config.GRIPPER_APERTURE_OPEN_RAD,
+                            config.GRIPPER_OPEN_RAMP_STEPS, per_step=ramp_capture)
+        for i in range(30):
+            dscene.hold_targets(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
+            scene.write_data_to_sim()
+            sim.step()
+            scene.update(dt)
+            ramp_capture(i)
+        f_end = dscene.grip_forces(scene)
+        check("pads release cleanly on open", max(f_end["partners"].values()) < 0.05,
+              f"max partner force {max(f_end['partners'].values()):.3f} N")
+        if close_writer is not None:
+            close_writer.close()
+            print(f"[INFO] clip: {close_writer.path} ({close_writer.frames} frames)")
+        if rig is None:
             print("[WARN] cameras disabled — no media produced (run with --enable_cameras)")
 
     print(f"[RESULT] {'PASS' if not FAILURES else 'FAIL: ' + ', '.join(FAILURES)}")

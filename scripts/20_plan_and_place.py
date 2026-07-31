@@ -2,14 +2,18 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Phase F: plan -> execute -> release -> evaluate, one JSON + MP4 per trial.
+"""Phase F: close -> plan -> execute -> open+release -> retract -> evaluate, per-trial JSON+MP4.
 
-Per trial: reset the welded scene, plan with RRT-Connect (goals = Phase E goal set subset,
-5 s budget), execute with position drives under constant joint-speed time parameterization
-while monitoring contacts (any non-excluded contact before release fails the trial), release
-the weld at the goal, settle, and evaluate the docs/success_criteria.md conditions against the
-slot frame. Every trial writes ``results/trial_<id>.json``, a full MP4, and a final close-up
-still — failures capture the failing moment by construction (the writer runs from step 0).
+Per trial: reset the welded scene with the jaws OPEN, visibly close the gripper onto the mug
+to the calibrated pinch band (abort as ``grasp-fault`` if out of band), plan with RRT-Connect
+(goals = Phase E goal set subset, 5 s budget), execute with position drives under constant
+joint-speed time parameterization while monitoring contacts (unexpected robot contact, mug
+external residual, and the dynamic pad-force cap), visibly open the jaws at the goal (pad
+forces must vanish), release the weld, retract the tool along -z validated against the
+post-release collision world (placed mug as obstacle), settle, and evaluate the
+docs/success_criteria.md conditions against the slot frame. Every trial writes
+``results/trial_<id>.json``, a full MP4, and a final close-up still — failures capture the
+failing moment by construction (the writer runs from step 0).
 
 Run with (shake-out):
     scripts/run_kit.sh scripts/20_plan_and_place.py --headless --enable_cameras \
@@ -60,7 +64,7 @@ from dishsim.collision_world import CollisionWorld  # noqa: E402
 from dishsim.media import CameraRig, VideoWriter  # noqa: E402
 from dishsim.placement import SlotFrame  # noqa: E402
 from dishsim.transforms import T_inv, T_to_pos_quat, make_T, quat_to_mat  # noqa: E402
-from dishsim.ur5e_kin import fk_wrist3  # noqa: E402
+from dishsim.ur5e_kin import fk_wrist3, ik_wrist3_all  # noqa: E402
 
 
 def parse_ids(spec: str) -> list[int]:
@@ -88,6 +92,11 @@ def main() -> None:
     T_w3_obj = np.array(world.manifest["object"]["T_wrist3_obj"])
     T_w_base = make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W)
     T_base_w = T_inv(T_w_base)
+    # post-release world for retract validation: same cache, carried object detached (it
+    # re-enters per trial as the placed obstacle)
+    retract_world = CollisionWorld(self_check=True)
+    mug_pieces = retract_world.carried_object_pieces()
+    retract_world.detach_carried_object()
 
     # ---- scene ------------------------------------------------------------------------------
     sim = SimulationContext(
@@ -99,7 +108,7 @@ def main() -> None:
     sim.reset()
     if rig is not None:
         rig.apply_poses(sim.device)
-    dscene.write_default_states(scene)
+    dscene.write_default_states(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
     dt = sim.get_physics_dt()
     robot = scene["robot"]
     obj = scene["carried_object"]
@@ -108,12 +117,14 @@ def main() -> None:
     sensors = [scene["robot_contacts_arm"], scene["robot_contacts_gripper"]]
     sensor_names = [list(getattr(s, "body_names", [])) for s in sensors]
 
+    # settle with the jaws OPEN: this deformation-free, mimic-consistent state is the teleport
+    # template for every trial reset (the visible close happens per trial, by target ramp)
     for _ in range(150):
-        dscene.hold_targets(scene)
+        dscene.hold_targets(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
         scene.write_data_to_sim()
         sim.step()
         scene.update(dt)
-    joint_template = robot.data.joint_pos.torch.clone()
+    template_open = robot.data.joint_pos.torch.clone()
 
     def step_sim(n: int = 1) -> None:
         for _ in range(n):
@@ -121,37 +132,17 @@ def main() -> None:
             sim.step()
             scene.update(dt)
 
-    def robot_contact_peak() -> tuple[float, str]:
-        peak, body = 0.0, ""
-        for si, sensor in enumerate(sensors):
-            mags = sensor.data.net_forces_w.torch[0].norm(dim=-1)
-            for bi in range(mags.shape[0]):
-                name = sensor_names[si][bi] if bi < len(sensor_names[si]) else f"s{si}b{bi}"
-                if name in config.PARITY_BODY_EXCLUDE:
-                    continue
-                if float(mags[bi]) > peak:
-                    peak, body = float(mags[bi]), name
-        return peak, body
-
-    def object_contact_peak() -> float:
-        return float(scene["object_contact"].data.net_forces_w.torch[0].norm())
-
-    def set_arm_targets(q: np.ndarray) -> None:
-        full = joint_template.clone()
-        full[:, arm_ids] = torch.tensor(q, dtype=full.dtype, device=device)
-        robot.set_joint_position_target_index(target=full)
-
     def reset_trial() -> float:
-        """Re-weld + teleport everything home; returns the post-reset weld error [mm]."""
+        """Re-weld + teleport everything home (jaws open); returns the weld error [mm]."""
         dscene.set_weld_enabled(scene.stage, weld_path, True)
-        full = joint_template.clone()
+        full = template_open.clone()
         robot.write_joint_position_to_sim_index(position=full)
         robot.write_joint_velocity_to_sim_index(velocity=torch.zeros_like(full))
-        robot.set_joint_position_target_index(target=full)
         pos, quat = dscene.grasp_pose_w()
         pose_t = torch.tensor(np.concatenate([pos, quat])[None], dtype=full.dtype, device=device)
         obj.write_root_pose_to_sim_index(root_pose=pose_t)
         obj.write_root_velocity_to_sim_index(root_velocity=torch.zeros((1, 6), dtype=full.dtype, device=device))
+        dscene.hold_targets(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
         step_sim(30)
         obj_pos = obj.data.root_pos_w.torch[0].cpu().numpy()
         return float(np.linalg.norm(obj_pos - dscene.grasp_pose_w()[0])) * 1e3
@@ -186,6 +177,7 @@ def main() -> None:
                 record = {"trial": tag, "slot": slot_id, "seed": seed, "repeat": rep,
                           "success": False, "failure_stage": None, "plan_time_s": None,
                           "path_len_rad": None, "exec_steps": 0, "goal_config_index": None,
+                          "grasp_force_n": None, "exec_pad_peak_n": None, "retract": None,
                           "media": {}}
                 slot = slots[slot_id]
                 goals = goal_sets.get(slot_id, np.zeros((0, 6)))
@@ -213,6 +205,22 @@ def main() -> None:
                         record["failure_stage"] = "no-goal-config"
                         raise StopIteration
 
+                    # -- visible close onto the mug, then verify the calibrated pinch band ----
+                    dscene.ramp_gripper(scene, sim, config.GRIPPER_APERTURE_GRASP_RAD,
+                                        config.GRIPPER_CLOSE_RAMP_STEPS,
+                                        per_step=lambda i: capture())
+                    for _ in range(60):
+                        dscene.hold_targets(scene)
+                        step_sim(1)
+                        capture()
+                    gf0 = dscene.grip_forces(scene)
+                    record["grasp_force_n"] = round(float(np.mean(gf0["pads_n"])), 2)
+                    grip_ok, grip_detail = dscene.grip_gate(scene)
+                    if not grip_ok:
+                        record["failure_stage"] = "grasp-fault"
+                        record["failure_detail"] = grip_detail
+                        raise StopIteration
+
                     rng = np.random.default_rng(seed * 1000 + rep)
                     sub = goals[rng.choice(len(goals), min(config.GOALS_PER_PLAN, len(goals)), replace=False)]
                     res = planning.plan_to_goals(world, np.array(config.HOME_Q), sub, seed=seed * 7 + rep + 1)
@@ -224,33 +232,142 @@ def main() -> None:
                     record["goal_config_index"] = int(res.goal_index)
 
                     dense = planning.time_parameterize(res.path_q)
-                    exec_fail = None
+                    exec_fail, exec_pad_peak = None, 0.0
                     for wp in dense:
-                        set_arm_targets(wp)
+                        dscene.hold_targets(scene, arm_q=wp)  # squeeze stays commanded
                         step_sim(1)
                         capture()
-                        peak, body = robot_contact_peak()
-                        obj_peak = object_contact_peak()
-                        if peak > config.CONTACT_FORCE_THRESH_N or obj_peak > config.CONTACT_FORCE_THRESH_N:
-                            exec_fail = f"{body or 'carried_object'} ({max(peak, obj_peak):.1f} N)"
+                        peak, body = dscene.unexpected_robot_contact(scene, sensors, sensor_names)
+                        gf = dscene.grip_forces(scene)
+                        exec_pad_peak = max(exec_pad_peak, max(gf["pads_n"]))
+                        if peak > config.CONTACT_FORCE_THRESH_N:
+                            exec_fail = f"{body} ({peak:.1f} N)"
+                        elif gf["external_n"] > config.CONTACT_FORCE_THRESH_N:
+                            exec_fail = f"carried_object external ({gf['external_n']:.1f} N)"
+                        elif max(gf["pads_n"]) > config.GRIP_FORCE_EXEC_MAX_N:
+                            exec_fail = f"pad squeeze spike ({max(gf['pads_n']):.1f} N)"
+                        if exec_fail is not None:
                             break
                         record["exec_steps"] += 1
+                    record["exec_pad_peak_n"] = round(exec_pad_peak, 2)
                     if exec_fail is not None:
                         record["failure_stage"] = "execution-collision"
                         record["failure_detail"] = exec_fail
                         raise StopIteration
 
-                    # hold, verify quiet, release
+                    # hold, verify quiet, then the visible release: open the jaws BEFORE the
+                    # weld lets go (pads must unload cleanly), then drop the weld
+                    goal_q = np.asarray(dense[-1], dtype=float)
                     for _ in range(30):
                         step_sim(1)
                         capture()
+                    dscene.ramp_gripper(scene, sim, config.GRIPPER_APERTURE_OPEN_RAD,
+                                        config.GRIPPER_OPEN_RAMP_STEPS, arm_q=goal_q,
+                                        per_step=lambda i: capture())
+                    for _ in range(15):
+                        step_sim(1)
+                        capture()
+                    gf_open = dscene.grip_forces(scene)
+                    if max(gf_open["partners"].values()) > 0.05:
+                        record["failure_stage"] = "release-fault"
+                        record["failure_detail"] = (
+                            f"pads still load the mug after open ({max(gf_open['partners'].values()):.2f} N)"
+                        )
+                        raise StopIteration
                     dscene.set_weld_enabled(scene.stage, weld_path, False)
-                    for _ in range(config.SETTLE_STEPS + 150):
+                    for _ in range(150):
+                        step_sim(1)
+                        capture()
+
+                    # -- retract the tool along -z, validated in the post-release world -------
+                    T_b_w3 = fk_wrist3(goal_q)
+                    tool_dir = T_b_w3[:3, :3] @ np.array([0.0, 1.0, 0.0])  # tool z == +y_wrist3
+                    T_target = T_b_w3.copy()
+                    T_target[:3, 3] -= config.RETRACT_DIST_M * tool_dir
+                    retract_world.add_object("placed_mug", mug_pieces, object_pose_base())
+                    q_retract, retract_mode = None, ""
+                    # a retract is a short axial slide — a distant IK branch means a wrist-flip
+                    # sweep over the placed mug (observed ejecting it); refuse those outright,
+                    # and sample validation at the planner's own validity resolution. IK returns
+                    # canonical-range angles while goal configs live in wrapped ranges, so first
+                    # shift each solution by 2pi-multiples toward the goal branch.
+                    sols = []
+                    for s in ik_wrist3_all(T_target, q_seed=goal_q):
+                        s = s + np.round((goal_q - s) / (2.0 * np.pi)) * 2.0 * np.pi
+                        if float(np.linalg.norm(s - goal_q)) <= 1.0:
+                            sols.append(s)
+                    sols.sort(key=lambda s: float(np.linalg.norm(s - goal_q)))
+
+                    def retract_seg(sol):
+                        n = max(20, int(np.ceil(float(np.linalg.norm(sol - goal_q))
+                                                / config.PLAN_VALIDITY_RESOLUTION_RAD)))
+                        return np.linspace(goal_q, sol, n)
+
+                    try:
+                        for sol in sols:
+                            seg = retract_seg(sol)
+                            # slide-out criterion: at the goal the open jaws still flank the
+                            # placed mug, and the 5 mm hull inflation swallows the real
+                            # ~2.6 mm/side clearance — so initial "collision" with the mug
+                            # obstacle is expected. Valid = early hits involve ONLY the placed
+                            # mug, the cluster comes free within the first half of the segment,
+                            # and never re-enters (the 0.1 N contact gate during execution
+                            # guards the fine clearance of the actual slide).
+                            verdicts = []
+                            for qi in seg:
+                                hit, pairs = retract_world.in_collision(qi, return_pairs=True)
+                                mug_only = bool(hit) and all(p[1] == "placed_mug" for p in pairs)
+                                verdicts.append((bool(hit), mug_only))
+                            first_free = next((i for i, (h, _) in enumerate(verdicts) if not h), None)
+                            if (first_free is not None and first_free <= int(0.7 * len(seg))
+                                    and all(m for h, m in verdicts[:first_free] if h)
+                                    and not any(h for h, _ in verdicts[first_free:])):
+                                q_retract, retract_mode = sol, "ok"
+                                break
+                    finally:
+                        retract_world.remove_object("placed_mug")
+                    if q_retract is None:
+                        # no branch passed the mug-aware slide-out — but parking with the jaws
+                        # around the settled mug guarantees persistent interference (observed:
+                        # the mug gets levered out during the settle window). A statics-only
+                        # validated axial slide, guarded by the graze gate below, is strictly
+                        # safer for the placement than staying put.
+                        for sol in sols:
+                            if not any(retract_world.in_collision(qi) for qi in retract_seg(sol)):
+                                q_retract, retract_mode = sol, "ok-statics-only"
+                                break
+                    if q_retract is None:
+                        record["retract"] = "skipped-no-valid-path"
+                    else:
+                        # sub-RETRACT_GRAZE_MAX_N brushes are recorded but not fatal — the
+                        # placed mug shifts a few mm on landing and the jaws have ~2.6 mm/side;
+                        # the final evaluation window is the arbiter of placement integrity
+                        retract_fail, graze_peak, graze_body = None, 0.0, ""
+                        for wp in planning.time_parameterize(np.array([goal_q, q_retract])):
+                            dscene.hold_targets(scene, arm_q=wp,
+                                                aperture=config.GRIPPER_APERTURE_OPEN_RAD)
+                            step_sim(1)
+                            capture()
+                            peak, body = dscene.unexpected_robot_contact(scene, sensors, sensor_names)
+                            if peak >= config.RETRACT_GRAZE_MAX_N:
+                                retract_fail = f"{body} ({peak:.1f} N)"
+                                break
+                            if peak > max(graze_peak, config.CONTACT_FORCE_THRESH_N):
+                                graze_peak, graze_body = peak, body
+                        if retract_fail is not None:
+                            record["failure_stage"] = "retract-collision"
+                            record["failure_detail"] = retract_fail
+                            raise StopIteration
+                        record["retract"] = retract_mode + (
+                            "" if graze_peak == 0.0 else f", grazed {graze_body} ({graze_peak:.2f} N)"
+                        )
+
+                    for _ in range(config.SETTLE_STEPS):
                         step_sim(1)
                         capture()
 
                     lateral, tilt, height = placement_errors(slot)
-                    peak, body = robot_contact_peak()
+                    peak, body = dscene.unexpected_robot_contact(scene, sensors, sensor_names)
                     ok = (lateral <= config.SLOT_TOL_LATERAL_M and tilt <= config.SLOT_TOL_TILT_DEG
                           and height <= 0.02 and peak <= config.CONTACT_FORCE_THRESH_N)
                     record["final_pose_err"] = {"lateral_m": round(lateral, 4), "tilt_deg": round(tilt, 2),

@@ -12,10 +12,13 @@ Protocol (docs/environment.md has the rationale):
   PhysX runs the robot with self-collisions disabled, so the simulator cannot see them and
   they must not count against parity.
 - Isaac ground truth: gravity off, joints teleported (kinematic write + holding targets +
-  matching welded-object pose), 3 settle steps, then net contact forces on all robot bodies +
-  the carried object; contact iff any non-excluded body exceeds
-  ``config.CONTACT_FORCE_THRESH_N``. Excluded: ``base_link`` (sits on the pedestal by
-  construction; mirrored on the FCL side by construction of the world).
+  matching welded-object pose), 3 settle steps, then *unexpected* contact forces on all robot
+  bodies + the carried object's external residual; contact iff any exceeds
+  ``config.CONTACT_FORCE_THRESH_N``. Masked as expected: ``base_link`` (sits on the pedestal
+  by construction; mirrored on the FCL side) and the calibrated finger-pad pinch on the mug
+  (constant by rigidity — the pad bodies are checked on their residual after subtracting the
+  mug reaction, and the mug on its non-gripper external residual, so real world contact on
+  either still counts).
 
 Acceptance: agreement >= 95 %, and non-conservative mismatches (FCL free / Isaac contact)
 <= 1 %. Conservative mismatches (FCL collision / Isaac free) are acceptable — that is what the
@@ -168,32 +171,25 @@ def main() -> None:
     arm_ids, _ = robot.find_joints(config.ARM_JOINTS, preserve_order=True)
     device = robot.data.joint_pos.torch.device
 
-    # settle ONCE so the mimic finger cluster reaches its consistent closed state; the settled
-    # joint vector is the teleport template. (Teleporting mimics to their default open values
-    # while finger_joint is closed makes the cluster snap violently every sample — that
-    # artifact produced phantom finger/object contact spikes in early parity runs.)
+    # settle ONCE so the mimic finger cluster reaches its consistent closed-on-the-mug state;
+    # the settled joint vector is the teleport template. (Teleporting mimics to inconsistent
+    # values makes the cluster snap violently every sample — that artifact produced phantom
+    # finger/object contact spikes in early parity runs. The contact-deformed settled state is
+    # the correct template: it is exactly the state held during planned motion.)
     for _ in range(120):
         dscene.hold_targets(scene)
         scene.write_data_to_sim()
         sim.step()
         scene.update(dt)
     joint_template = robot.data.joint_pos.torch.clone()
+    grip_ok, grip_detail = dscene.grip_gate(scene)
+    print(f"[INFO] settled grip gate: {'OK' if grip_ok else 'FAIL — ' + grip_detail}")
 
-    sensors = [scene["robot_contacts_arm"], scene["robot_contacts_gripper"], scene["object_contact"]]
-    excluded: list[tuple[int, int]] = []
-    for si, sensor in enumerate(sensors):
-        names = sensor.body_names if hasattr(sensor, "body_names") else []
-        for bi, bname in enumerate(names):
-            if bname in config.PARITY_BODY_EXCLUDE:
-                excluded.append((si, bi))
-    print(f"[INFO] contact sensors ready; excluded bodies {excluded}")
+    sensors = [scene["robot_contacts_arm"], scene["robot_contacts_gripper"]]
+    sensor_names = [list(getattr(s, "body_names", [])) for s in sensors]
 
     T_w_base = make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W)
     T_w3_obj = np.array(world.manifest["object"]["T_wrist3_obj"])
-
-    sensor_body_names = []
-    for si, sensor in enumerate(sensors):
-        sensor_body_names.append(list(getattr(sensor, "body_names", [])) or [f"sensor{si}"])
 
     def isaac_contact(q: np.ndarray) -> tuple[bool, float, str]:
         full = joint_template.clone()
@@ -213,16 +209,12 @@ def main() -> None:
             scene.update(dt)
             if step == 0:
                 continue  # skip the immediate post-teleport step (constraint-settling noise)
-            for si, sensor in enumerate(sensors):
-                forces = sensor.data.net_forces_w.torch[0]
-                mags = forces.norm(dim=-1)
-                for bi in range(mags.shape[0]):
-                    if (si, bi) in excluded:
-                        continue
-                    if float(mags[bi]) > peak:
-                        peak = float(mags[bi])
-                        names = sensor_body_names[si]
-                        peak_body = names[bi] if bi < len(names) else f"s{si}b{bi}"
+            p, b = dscene.unexpected_robot_contact(scene, sensors, sensor_names)
+            if p > peak:
+                peak, peak_body = p, b
+            ext = dscene.grip_forces(scene)["external_n"]
+            if ext > peak:
+                peak, peak_body = ext, "carried_object"
         return peak > config.CONTACT_FORCE_THRESH_N, peak, peak_body
 
     results = []

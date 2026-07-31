@@ -64,13 +64,29 @@ RACK_JOINT_TARGETS = {
 }
 
 # ---------------------------------------------------------------------------------------------
-# gripper (collision geometry only in v0 — frozen, never actuated)
+# gripper (actuated between exactly two calibrated apertures: open at trial endpoints, grasp
+# during all planned motion — matching the frozen-aperture FCL cluster)
 # ---------------------------------------------------------------------------------------------
 GRIPPER_JOINT = "finger_joint"  # 0 = open (85 mm), ~0.8 = closed (inverted vs Franka)
-# Frozen aperture: fully closed (just short of the 0.82 limit to avoid grinding on the stop).
-# The carried object hangs BELOW the closed fingertips (see GRASP below), so the jaws never
-# interact with it.
-GRIPPER_APERTURE_RAD = 0.78
+GRIPPER_APERTURE_OPEN_RAD = 0.0  # fully open — trial start and release
+# Grasp aperture = theta_touch + delta, measured by `scripts/11_calibrate_grasp.py` (staircase
+# ramp onto the welded mug: theta_touch is the first sustained pad contact, delta a small
+# over-command chosen so the steady pad force lands mid-band; the finger drive's
+# effort_limit_sim=10 caps the squeeze). Measured 2026-07-31 (PASS run, rim_z -0.020):
+# theta_touch 0.055, steady pad force 5.14 N mean at this setting.
+GRIPPER_APERTURE_GRASP_RAD: float | None = 0.058
+# Mimic-consistent drive targets for the two stiff (k=10) `.*_inner_finger_joint` actuators:
+# leaving their targets at 0 while finger_joint closes makes them fight the mimic constraint
+# and contaminates the measured pad force. Signs are measured live by the calibration script
+# (upstream gear-assembly pattern predicts left -1 / right +1; we freeze what the mimic
+# actually settles to). None -> hold_targets falls back to target-follows-measured-position
+# (zero spring torque, damping only). Measured 2026-07-31: mimic ratios -0.995 / +0.995.
+GRIPPER_INNER_FINGER_SIGNS: dict[str, float] | None = {
+    "left_inner_finger_joint": -1.0,
+    "right_inner_finger_joint": 1.0,
+}
+GRIPPER_CLOSE_RAMP_STEPS = 90  # 1.5 s at SIM_DT — the on-camera close at trial start
+GRIPPER_OPEN_RAMP_STEPS = 90  # the on-camera open before the weld releases
 
 # ---------------------------------------------------------------------------------------------
 # TCP frame (wrist_3_link -> TCP)
@@ -99,21 +115,51 @@ OBJECT_BODY_CENTER_XZ = (-0.0110, 0.0)
 OBJECT_RIM_RADIUS_M = 0.0399
 OBJECT_HEIGHT_M = 0.0813
 
-# Carry pose ("grasp" transform): the mug hangs UPRIGHT below the fully-closed fingertips,
-# its axis on the tool axis, rim plane RIM_DROP_M beyond the TCP. Grasp realism is explicitly
-# out of scope for v0 (the object "starts already in the gripper"); this clearance carry
-# eliminates finger-object interference entirely. Empirical clearance history (contact force
-# on the welded mug, measured via ContactSensor):
-#   pads-on-rim, opposite handle .... 155-420 N (jaw sweep vs wall + handle)
-#   pads-on-rim, 90 deg azimuth ..... 250 N (jaw sweep vs wall)
-#   hang, rim 30 mm below TCP ....... 263 N (closed fingertips arc ~50+ mm past the TCP)
-#   hang, rim 85 mm below TCP ....... target 0 N (beyond any possible fingertip reach)
+# Carry pose ("grasp" transform): the mug rides UPRIGHT in a calibrated contact pinch — its
+# rim band between the inner-finger pads, handle on the jaw-free axis, the hidden wrist weld
+# still carrying the load. GRASP_RIM_TCP_Z_M places the rim plane along tool z relative to the
+# TCP (positive = beyond the TCP, away from the wrist) so the pad contact patch presses the
+# outer wall PAD_ENGAGEMENT_M below the rim edge. Measured by `scripts/11_calibrate_grasp.py`
+# from the live pad map — do not eyeball.
+# Historical (clearance-carry era, kept for the record): closing to 0.78 rad (jaw ~ a few mm)
+# onto the ~80 mm mug drove the jaw sweep through the wall — measured 155-420 N pads-on-rim,
+# 263 N with the rim 30 mm below the TCP (closed fingertips arc ~50+ mm past the TCP). The v0
+# answer was to hang the mug 85 mm below the TCP, beyond any fingertip reach (0 N by
+# construction). The pinch regime is different: the jaws stop AT the mug surface
+# (jaw ~ 79.8 mm, theta ~ 0.05-0.15 rad), so the sweep never drives through the wall and the
+# pad force is bounded by the calibrated band below.
 # Derivation:
 #   R: z_tcp = -y_obj (upright carry, opening toward the gripper), x_tcp = +x_obj  == Rx(-90)
-#   t: rim-center axis point (-0.011, 0.0407, 0)_obj maps to (0, 0, RIM_DROP_M)_tcp
-RIM_DROP_M = 0.085
-GRASP_TCP_OBJ_POS = (0.011, 0.0, RIM_DROP_M + 0.0407)
+#   t: rim-center axis point (-0.011, 0.0407, 0)_obj maps to (0, 0, GRASP_RIM_TCP_Z_M)_tcp
+# Measured 2026-07-31 (scripts/11_calibrate_grasp.py PASS: zero contact at open, band held
+# at hold, weld error 1.3 mm under load, forces vanish on open).
+GRASP_RIM_TCP_Z_M: float | None = -0.0200
+PAD_ENGAGEMENT_M = 0.012  # pad contact-patch center below the rim edge (design choice)
+GRASP_TCP_OBJ_POS: tuple[float, float, float] | None = (
+    None if GRASP_RIM_TCP_Z_M is None else (0.011, 0.0, GRASP_RIM_TCP_Z_M + 0.0407)
+)
 GRASP_TCP_OBJ_QUAT = (-0.70710678, 0.0, 0.0, 0.70710678)  # Rx(-90 deg), XYZW
+
+# ---------------------------------------------------------------------------------------------
+# grip contact gates (calibrated by scripts/11_calibrate_grasp.py, used by Phases C/D/F)
+# ---------------------------------------------------------------------------------------------
+# The object_contact sensor's filter list resolves per-partner forces; the two inner-finger
+# pads are the only bodies allowed (required, in fact) to touch the carried mug while gripping.
+GRIP_PAD_BODIES = ("left_inner_finger", "right_inner_finger")
+# Steady per-pad pinch-force band [N] while holding still (frozen 2026-07-31 from the
+# calibration force-vs-theta curve: steady 5.14 N mean, per-pad [2.47, 7.82] N — the mild
+# asymmetry is the handle-side mass/gearing bias; band = steady/3 .. 3x steady).
+GRIP_FORCE_MIN_N = 1.7
+GRIP_FORCE_MAX_N = 15.4
+# Dynamic per-pad allowance [N] during arm motion (frozen 2026-07-31: 10_v0_scene wiggle
+# peak 8.03 N at +-0.25 rad wrist wiggle, x1.5 margin).
+GRIP_FORCE_EXEC_MAX_N = 12.0
+RETRACT_DIST_M = 0.08  # post-release tool-axis retract before the final evaluation window
+# The placed mug settles up to ~6 mm off the release point while the withdrawing jaws have
+# only ~2.6 mm/side clearance — a light brush during retract is physically expected (as in
+# real loading). Below this, contact is recorded as a graze and the trial is judged by the
+# final evaluation window; at or above it, the retract failed outright.
+RETRACT_GRAZE_MAX_N = 2.0
 
 # ---------------------------------------------------------------------------------------------
 # cameras (world frame; FIXED across all phases so shots are comparable)

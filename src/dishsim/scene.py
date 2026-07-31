@@ -11,8 +11,12 @@ Key invariants enforced here:
 
 - One frame convention: robot-base frame == world frame shifted by
   :data:`dishsim.config.ROBOT_BASE_POS_W`, identity base rotation (asserted).
-- The gripper is never actuated beyond holding :data:`dishsim.config.GRIPPER_APERTURE_RAD` on
-  ``finger_joint``; the five mimic joints are never touched.
+- The gripper is actuated only via ``finger_joint``, between exactly two calibrated apertures
+  (:data:`dishsim.config.GRIPPER_APERTURE_OPEN_RAD` at trial endpoints,
+  :data:`dishsim.config.GRIPPER_APERTURE_GRASP_RAD` during all planned motion). The mimic
+  joints are never position-written; the two stiff ``.*_inner_finger_joint`` drive *targets*
+  are set mimic-consistently so they do not fight the mimic constraint (signs measured by
+  ``scripts/11_calibrate_grasp.py``); the three zero-stiffness knuckle joints stay untouched.
 - The carried object is welded to ``wrist_3_link`` by a USD ``FixedJoint`` whose local pose is
   authored *analytically* from the config grasp chain (never captured from live prim poses), so
   the weld is exactly consistent with the FK used by the collision world and the goal sampler:
@@ -61,6 +65,12 @@ def t_wrist3_tcp() -> np.ndarray:
 
 def t_wrist3_obj() -> np.ndarray:
     """Fixed transform wrist_3_link -> carried-object frame (the weld's local pose)."""
+    if config.GRASP_TCP_OBJ_POS is None:
+        raise RuntimeError(
+            "config.GRASP_RIM_TCP_Z_M is not measured yet — run "
+            "`scripts/run_kit.sh scripts/11_calibrate_grasp.py --headless` and freeze the "
+            "printed constants into src/dishsim/config.py first."
+        )
     return t_wrist3_tcp() @ make_T(config.GRASP_TCP_OBJ_POS, config.GRASP_TCP_OBJ_QUAT)
 
 
@@ -95,9 +105,10 @@ def make_scene_cfg(with_object: bool = True, with_robot_contacts: bool = False) 
             by the parity check and execution-time contact monitoring.
     """
     robot_joint_pos = dict(zip(config.ARM_JOINTS, config.HOME_Q))
-    # gripper: drive joint starts open and is *held* at the frozen aperture by its position
-    # target (write_default_states); mimic-driven joints follow physically and are never set.
-    robot_joint_pos[config.GRIPPER_JOINT] = 0.0
+    # gripper: the drive joint starts fully open (the trial-start state — the visible close
+    # onto the object is commanded later via ramp_gripper); mimic-driven joints follow
+    # physically and are never position-written.
+    robot_joint_pos[config.GRIPPER_JOINT] = config.GRIPPER_APERTURE_OPEN_RAD
 
     robot_cfg = UR5E_ROBOTIQ_2F_85_CFG.replace(
         prim_path="{ENV_REGEX_NS}/Robot",
@@ -241,22 +252,186 @@ def set_weld_enabled(stage, weld_path: str, enabled: bool) -> None:
 # ---------------------------------------------------------------------------------------------
 
 
-def hold_targets(scene) -> None:
-    """(Re-)issue the standing position targets: arm at home, gripper frozen, statics pinned.
+#: Newton's-third-law sign relating ``object_contact.force_matrix_w`` rows (force ON the mug
+#: FROM each gripper body) to the reaction seen on the gripper bodies' own contact sensors.
+#: Verified live by ``scripts/11_calibrate_grasp.py`` (with the wrong sign the pad residual
+#: doubles instead of cancelling — impossible to miss).
+GRIP_REACTION_SIGN = -1.0
+
+
+def _resolve_grasp_aperture() -> float:
+    if config.GRIPPER_APERTURE_GRASP_RAD is None:
+        raise RuntimeError(
+            "config.GRIPPER_APERTURE_GRASP_RAD is not measured yet — run "
+            "`scripts/run_kit.sh scripts/11_calibrate_grasp.py --headless` and freeze the "
+            "printed constants into src/dishsim/config.py first."
+        )
+    return config.GRIPPER_APERTURE_GRASP_RAD
+
+
+def hold_targets(scene, aperture: float | None = None, arm_q=None) -> None:
+    """(Re-)issue the standing position targets: arm, gripper aperture, statics pinned.
 
     Call after every ``scene.reset()`` (reset clears command buffers) — and it is cheap enough
     to call every step of a settle loop.
+
+    Args:
+        aperture: ``finger_joint`` target [rad]; ``None`` uses the calibrated grasp aperture
+            (raises until :data:`dishsim.config.GRIPPER_APERTURE_GRASP_RAD` is frozen).
+        arm_q: optional 6-vector overriding the arm joints (default: the home pose). Pass the
+            executed waypoint here during motion — copying *measured* positions as gripper
+            targets would zero the drive torque and silently relax the pinch.
     """
+    if aperture is None:
+        aperture = _resolve_grasp_aperture()
     robot = scene["robot"]
     targets = robot.data.default_joint_pos.torch.clone()
+    if arm_q is not None:
+        arm_ids, _ = robot.find_joints(config.ARM_JOINTS, preserve_order=True)
+        targets[:, arm_ids] = torch.as_tensor(
+            np.asarray(arm_q, dtype=float), dtype=targets.dtype, device=targets.device
+        )
     ids, _ = robot.find_joints(config.GRIPPER_JOINT)
-    targets[:, ids[0]] = config.GRIPPER_APERTURE_RAD
+    targets[:, ids[0]] = aperture
+    # the two stiff (k=10) inner-finger drives must not fight the mimic constraint: command
+    # them mimic-consistently once the signs are measured, else follow the measured position
+    # (zero spring torque, damping only)
+    if_ids, if_names = robot.find_joints(".*_inner_finger_joint", preserve_order=True)
+    if config.GRIPPER_INNER_FINGER_SIGNS is not None:
+        for jid, jname in zip(if_ids, if_names):
+            targets[:, jid] = config.GRIPPER_INNER_FINGER_SIGNS[jname] * aperture
+    else:
+        targets[:, if_ids] = robot.data.joint_pos.torch[:, if_ids]
     robot.set_joint_position_target_index(target=targets)
     dw = scene["dishwasher"]
     dw.set_joint_position_target_index(target=dw.data.default_joint_pos.torch.clone())
 
 
-def write_default_states(scene) -> None:
+def ramp_gripper(scene, sim, end_aperture: float, steps: int, arm_q=None, per_step=None) -> float:
+    """Linearly ramp the ``finger_joint`` target to ``end_aperture`` — the visible close/open.
+
+    Starts from the current *measured* finger position and calls :func:`hold_targets` with the
+    interpolated target every physics step, so the motion is smooth on camera and the squeeze
+    stays commanded throughout.
+
+    Args:
+        end_aperture: final ``finger_joint`` target [rad].
+        steps: physics steps for the ramp (e.g. :data:`dishsim.config.GRIPPER_CLOSE_RAMP_STEPS`).
+        arm_q: optional arm override passed through to :func:`hold_targets`.
+        per_step: optional callback invoked after every step (e.g. video capture).
+
+    Returns:
+        The measured ``finger_joint`` position [rad] after the ramp.
+    """
+    robot = scene["robot"]
+    ids, _ = robot.find_joints(config.GRIPPER_JOINT)
+    dt = sim.get_physics_dt()
+    start = float(robot.data.joint_pos.torch[0, ids[0]])
+    for i in range(steps):
+        frac = (i + 1) / steps
+        hold_targets(scene, aperture=start + frac * (end_aperture - start), arm_q=arm_q)
+        scene.write_data_to_sim()
+        sim.step()
+        scene.update(dt)
+        if per_step is not None:
+            per_step(i)
+    return float(robot.data.joint_pos.torch[0, ids[0]])
+
+
+def object_contact_partners(scene) -> list[str]:
+    """Basenames of the ``object_contact`` filter bodies, in ``force_matrix_w`` row order."""
+    return [p.rsplit("/", 1)[-1] for p in scene["object_contact"].cfg.filter_prim_paths_expr]
+
+
+def grip_forces(scene) -> dict:
+    """Per-partner contact forces on the carried object, plus the external residual.
+
+    Returns:
+        Dict with ``partners`` (body name -> force magnitude [N]), ``net_n`` (net force [N]),
+        ``pads_n`` (pad magnitudes [N], :data:`dishsim.config.GRIP_PAD_BODIES` order), and
+        ``external_n`` (net minus summed partner forces [N] — the mug's non-gripper contact
+        estimate, ~0 unless the mug touches the world).
+    """
+    sensor = scene["object_contact"]
+    names = object_contact_partners(scene)
+    net_vec = sensor.data.net_forces_w.torch[0].reshape(-1, 3).sum(dim=0)
+    fm = sensor.data.force_matrix_w.torch[0].reshape(-1, 3)
+    partners = {n: float(m) for n, m in zip(names, fm.norm(dim=-1))}
+    for pad in config.GRIP_PAD_BODIES:
+        assert pad in partners, f"pad body {pad} missing from the object_contact filter list"
+    return {
+        "partners": partners,
+        "net_n": float(net_vec.norm()),
+        "pads_n": [partners[p] for p in config.GRIP_PAD_BODIES],
+        "external_n": float((net_vec - fm.sum(dim=0)).norm()),
+    }
+
+
+def grip_gate(scene, during_motion: bool = False) -> tuple[bool, str]:
+    """Check the calibrated grip-force band while the object is gripped.
+
+    Static (default): each pad force within ``[GRIP_FORCE_MIN_N, GRIP_FORCE_MAX_N]``. During
+    motion: pads bounded only above by ``GRIP_FORCE_EXEC_MAX_N`` (transients dip below the
+    static band without meaning the grasp failed). Always: every non-pad partner and the
+    external residual stay under ``CONTACT_FORCE_THRESH_N``.
+
+    Returns:
+        (ok, detail) — detail names the first violated condition.
+    """
+    f = grip_forces(scene)
+    lo, hi = (
+        (0.0, config.GRIP_FORCE_EXEC_MAX_N)
+        if during_motion
+        else (config.GRIP_FORCE_MIN_N, config.GRIP_FORCE_MAX_N)
+    )
+    for pad, mag in zip(config.GRIP_PAD_BODIES, f["pads_n"]):
+        if not lo <= mag <= hi:
+            return False, f"{pad} force {mag:.2f} N outside [{lo:.1f}, {hi:.1f}] N"
+    for name, mag in f["partners"].items():
+        if name not in config.GRIP_PAD_BODIES and mag > config.CONTACT_FORCE_THRESH_N:
+            return False, f"non-pad partner {name} touches the object ({mag:.2f} N)"
+    if f["external_n"] > config.CONTACT_FORCE_THRESH_N:
+        return False, f"external (non-gripper) residual {f['external_n']:.2f} N"
+    return True, ""
+
+
+def unexpected_robot_contact(scene, sensors, sensor_names, exclude=()) -> tuple[float, str]:
+    """Peak *unexpected* contact force over the robot-body sensors.
+
+    The two pad bodies are checked on their residual after subtracting the expected mug
+    reaction (read from ``object_contact.force_matrix_w``); every other body reports its raw
+    net force. Bodies in ``exclude`` plus :data:`dishsim.config.PARITY_BODY_EXCLUDE` are
+    skipped.
+
+    Returns:
+        (peak force [N], body name).
+    """
+    pad_rows = {}
+    if "object_contact" in scene.keys():
+        sensor_obj = scene["object_contact"]
+        if sensor_obj.data.force_matrix_w is not None:
+            names = object_contact_partners(scene)
+            fm = sensor_obj.data.force_matrix_w.torch[0].reshape(-1, 3)
+            for pad in config.GRIP_PAD_BODIES:
+                pad_rows[pad] = fm[names.index(pad)]
+    skip = set(config.PARITY_BODY_EXCLUDE) | set(exclude)
+    peak, peak_body = 0.0, ""
+    for si, sensor in enumerate(sensors):
+        forces = sensor.data.net_forces_w.torch[0]
+        for bi in range(forces.shape[0]):
+            name = sensor_names[si][bi] if bi < len(sensor_names[si]) else f"s{si}b{bi}"
+            if name in skip:
+                continue
+            vec = forces[bi]
+            if name in pad_rows:
+                vec = vec - GRIP_REACTION_SIGN * pad_rows[name]
+            mag = float(vec.norm())
+            if mag > peak:
+                peak, peak_body = mag, name
+    return peak, peak_body
+
+
+def write_default_states(scene, aperture: float | None = None) -> None:
     """Standalone-script reset dance: write default root/joint states, reset, re-arm targets."""
     for name in ("robot", "dishwasher"):
         art = scene[name]
@@ -275,7 +450,7 @@ def write_default_states(scene) -> None:
     # scene.reset() clears command buffers — targets must be re-armed AFTER it (a finger target
     # set before reset silently reverts to the open pose; found the hard way in Phase C)
     scene.reset()
-    hold_targets(scene)
+    hold_targets(scene, aperture=aperture)
 
 
 def assert_frames(scene) -> None:

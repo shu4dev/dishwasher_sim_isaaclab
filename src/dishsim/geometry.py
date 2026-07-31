@@ -43,7 +43,7 @@ def config_hash() -> str:
         "door": (config.DOOR_OPEN_DEG, config.DOOR_BAND_DEG, round(config.DOOR_INIT_RAD, 6)),
         "racks": config.RACK_JOINT_TARGETS,
         "home_q": config.HOME_Q,
-        "aperture": config.GRIPPER_APERTURE_RAD,
+        "aperture": config.GRIPPER_APERTURE_GRASP_RAD,
         "tcp": (config.T_WRIST3_TCP_POS, config.T_WRIST3_TCP_QUAT),
         "grasp": (config.GRASP_TCP_OBJ_POS, config.GRASP_TCP_OBJ_QUAT),
         "object": config.OBJECT_NAME,

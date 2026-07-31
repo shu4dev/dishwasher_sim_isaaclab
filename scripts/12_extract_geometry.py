@@ -60,6 +60,10 @@ def main() -> None:
         sim.step()
         scene.update(dt)
     dscene.assert_frames(scene)
+    # never bake a bad grasp into the cache: the settled state must hold the calibrated
+    # pad-force band with everything else silent
+    ok, detail = dscene.grip_gate(scene)
+    assert ok, f"grip gate failed before cache dump: {detail}"
 
     manifest_path = dgeom.dump_cache(scene, sim)
     print(f"[RESULT] PASS ({manifest_path})")

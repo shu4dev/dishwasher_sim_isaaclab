@@ -33,7 +33,8 @@ INK = "#0b0b0b"
 INK2 = "#52514e"
 GRID = "#e5e4e0"
 
-FAILURE_STAGES = ["no-goal-config", "planner-timeout", "execution-collision", "unstable-after-release"]
+FAILURE_STAGES = ["no-goal-config", "grasp-fault", "planner-timeout", "execution-collision",
+                  "release-fault", "retract-collision", "unstable-after-release"]
 
 
 def style_axes(ax):
@@ -237,9 +238,13 @@ def main() -> None:
         "- Found and fixed via the parity gate: attached-object-vs-arm collisions must be",
         "  world-checks (PhysX simulates them), and teleported ground-truth sampling needs",
         "  mimic-consistent finger states — both would have silently corrupted the benchmark.",
+        "- The mug rides in a calibrated contact pinch: the jaws visibly close onto the rim",
+        "  band at trial start (stop-at-contact aperture from a measured force-vs-angle curve,",
+        "  ~5 N per pad) and visibly open before the hidden weld releases, followed by a",
+        "  collision-validated tool-axis retract (see docs/grasp_calibration.md).",
         "- Known simplifications: mug stands on the wire basket floor (the ArtVIP rack has no",
-        "  plate tines); clearance carry instead of a pinch grasp (grasping is out of scope for",
-        "  v0; two pads-on-rim attempts measurably interfere with the Robotiq jaw sweep).",
+        "  plate tines); grasp *acquisition* is out of scope (the mug starts already pinched,",
+        "  with a wrist weld carrying the load for rigidity during planned motion).",
         "",
         "## Best figures/clips (by path)",
         "",
@@ -248,7 +253,9 @@ def main() -> None:
         "- media/F/trial_02_00_0.mp4 — full plan-execute-release clip (first end-to-end success)",
         "- media/E/accepted_slot1_sheet.png — goal-config diversity at one slot",
         "- media/D/overlay_E_shelf_1_04.png — rack decomposition, wire gaps preserved",
-        "- media/C/rigidity_iso.mp4 — welded-object rigidity proof",
+        "- media/C/rigidity_iso.mp4 — pinched-object rigidity proof (pad forces monitored)",
+        "- media/C2/close_open.mp4 — calibrated pinch: close to contact, hold, open, forces vanish",
+        "- media/C2/force_vs_theta.png — the measured pinch force-vs-aperture curve",
     ] + [f"- docs/{rel} — curated final still ({name})" for name, rel in curated[:2]]
     with open(os.path.join(DOCS, "slides_notes.md"), "w") as f:
         f.write("\n".join(notes) + "\n")

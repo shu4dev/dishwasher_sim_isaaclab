@@ -10,9 +10,12 @@ open), then releases it and verifies the placement is stable. Runs on Isaac Lab 
 `Isaac-Open-Dishwasher-UR5e-v0`, ~93 % success). The lab's direction changed to classical motion
 planning as the v0 for a longer-term **MCTS rearrangement planner** — which is why the collision
 world is built as a standalone, Kit-free module (`src/dishsim/collision_world.py`) capable of
-thousands of fast queries, not planner-internal code. Grasping, perception, and path constraints
-(e.g. keep-upright) are explicitly out of scope for v0. The RL pipeline is preserved on the
-`archive/rl-door-opening` branch.
+thousands of fast queries, not planner-internal code. Grasp *acquisition* (approach/pick),
+perception, and path constraints (e.g. keep-upright) are out of scope for v0 — the object
+starts already held in a **calibrated contact pinch** (pads on the mug at a measured force
+band, jaws visibly closing at trial start and opening at release; a hidden wrist weld carries
+the load during planned motion — see `docs/grasp_calibration.md`). The RL pipeline is
+preserved on the `archive/rl-door-opening` branch.
 
 > **Pending decision gate:** this plan assumes Isaac Sim remains the simulator. Lab confirmation
 > (PyBullet/MuJoCo vs Isaac) is outstanding; if the lab picks another simulator, work stops after
@@ -80,7 +83,8 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m 
 | Phase | Entry point | Output |
 |---|---|---|
 | B — dependency spike | `tests/`, `scripts/05_kit_smoke.py` | deps verified, media capture proven |
-| C — static scene | `scripts/10_v0_scene.py` | scene stills/clip, pose log, welded plate |
+| C — static scene | `scripts/10_v0_scene.py` | scene stills/clips, pose log, pad map (`--measure`), visible close/open |
+| C2 — grasp calibration | `scripts/11_calibrate_grasp.py` | measured pinch constants, `docs/grasp_calibration.md`, force curve |
 | D — collision world | `scripts/12…14_*.py` | FCL world + Isaac parity report |
 | E — placement goals | `scripts/15_goal_configs.py` | slot frames + IK goal sets, `docs/success_criteria.md` |
 | F — plan & place | `scripts/20_plan_and_place.py` | per-trial JSON + MP4 in `results/`, `media/F/` |
