@@ -57,41 +57,70 @@ DOOR_BAND_DEG = 5.0  # v0 USD clamps door limits to [open - band, open]
 DOOR_INIT_RAD = math.radians(89.0)
 DOOR_REST_DEG = 89.05  # measured rest angle at the stop
 RACK_LOWER_EXT_M = -0.20  # PrismaticJoint_dishwasher_2_down: 0 = stowed, -0.2 = fully out
-RACK_UPPER_EXT_M = 0.0  # upper rack stays stowed
+RACK_UPPER_EXT_M = -0.20  # baseline both_out: both racks fully extended
 RACK_JOINT_TARGETS = {
     "PrismaticJoint_dishwasher_2_down": RACK_LOWER_EXT_M,
     "PrismaticJoint_dishwasher_2_up": RACK_UPPER_EXT_M,
 }
 
-# Rack-state scenarios. "lower_out" is the v0 baseline (its values MUST stay equal to the
-# literals above so the existing assets/cache/ keeps validating). min_feasible_slots feeds
-# Phase E's feasibility gate: 0 means "zero feasible slots is an acceptable, reportable
-# outcome" (deep-cavity scenarios), not a broken run.
+# Rack-state scenarios — exactly the two real robot-facing INITIAL states (user-mandated).
+# The dishwasher itself is unmodified (no rack raise): instead the robot does what a human
+# does — it first RECONFIGURES the racks (rack_action: drive-synchronized pull/push on the
+# named prismatic joint while the gripper visibly engages the rack's front handle), which
+# brings BOTH scenarios to the same placement state (lower rack out, upper rack in — the
+# geometry the placement pipeline is validated on), then picks the mug off the countertop
+# and places it. "both_out" is the baseline (legacy assets/cache/, media/<phase>).
 SCENARIOS = {
-    "lower_out": {"rack_lower_m": -0.20, "rack_upper_m": 0.0, "min_feasible_slots": 3},
-    "both_out": {"rack_lower_m": -0.20, "rack_upper_m": -0.20, "min_feasible_slots": 0},
-    "both_in": {"rack_lower_m": 0.0, "rack_upper_m": 0.0, "min_feasible_slots": 0},
-    # hardest still-solvable upper extension (Kit-free screen on the baseline cache, seed 11:
-    # 0.060 m -> slots 1-3 keep ~1600 configs; 0.075 -> ~500; 0.090 -> zero everywhere)
-    "upper_partial": {"rack_lower_m": -0.20, "rack_upper_m": -0.075, "min_feasible_slots": 1},
+    "both_out": {  # both racks fully extended -> push the UPPER rack in, place into the lower
+        "rack_lower_m": -0.20,
+        "rack_upper_m": -0.20,
+        "min_feasible_slots": 3,
+        "rack_action": {
+            "joint": "PrismaticJoint_dishwasher_2_up",
+            "body": "E_shelf_03",
+            "to": 0.0,
+            "mode": "push",
+        },
+    },
+    "both_in": {  # both racks fully retracted -> pull the LOWER rack out, place into it
+        "rack_lower_m": 0.0,
+        "rack_upper_m": 0.0,
+        "min_feasible_slots": 3,
+        "rack_action": {
+            "joint": "PrismaticJoint_dishwasher_2_down",
+            "body": "E_shelf_1_04",
+            "to": -0.20,
+            "mode": "pull",
+        },
+    },
 }
-SCENARIO_NAME = "lower_out"  # active scenario; switch via apply_scenario() BEFORE scene imports
+SCENARIO_NAME = "both_out"  # active scenario; switch via apply_scenario() BEFORE scene imports
+
+# The shared post-rack-action machine state every trial places in (lower out, upper in).
+# Not a user-facing scenario — an internal state name usable with apply_scenario() and the
+# cache/goal scripts (12-15) so pick/place planning has its own validated collision world.
+PLACEMENT_STATE = "placement"
+INTERNAL_STATES = {
+    PLACEMENT_STATE: {"rack_lower_m": -0.20, "rack_upper_m": 0.0, "min_feasible_slots": 3},
+}
 
 
 def apply_scenario(name: str) -> None:
-    """Activate a rack-state scenario by rewriting the rack targets in place.
+    """Activate a rack-state scenario (or internal machine state) by rewriting the rack
+    targets in place.
 
     Must run before importing :mod:`dishsim.robots`/:mod:`dishsim.scene` (they bind rack
     values and the derived-USD path at import time). ``geometry.config_hash`` reads these
-    attributes at call time, so per-scenario caches invalidate correctly.
+    attributes at call time, so per-state caches invalidate correctly.
 
     Args:
-        name: Key into :data:`SCENARIOS`.
+        name: Key into :data:`SCENARIOS` or :data:`INTERNAL_STATES` (e.g. ``"placement"``).
     """
     global RACK_LOWER_EXT_M, RACK_UPPER_EXT_M, RACK_JOINT_TARGETS, SCENARIO_NAME
-    if name not in SCENARIOS:
-        raise ValueError(f"unknown scenario {name!r} (choices: {sorted(SCENARIOS)})")
-    sc = SCENARIOS[name]
+    states = {**SCENARIOS, **INTERNAL_STATES}
+    if name not in states:
+        raise ValueError(f"unknown scenario {name!r} (choices: {sorted(states)})")
+    sc = states[name]
     RACK_LOWER_EXT_M = sc["rack_lower_m"]
     RACK_UPPER_EXT_M = sc["rack_upper_m"]
     RACK_JOINT_TARGETS = {
@@ -101,10 +130,16 @@ def apply_scenario(name: str) -> None:
     SCENARIO_NAME = name
 
 
+def state_params(name: str | None = None) -> dict:
+    """Parameters of a scenario or internal machine state (e.g. Phase-E gates)."""
+    name = name or SCENARIO_NAME
+    return {**SCENARIOS, **INTERNAL_STATES}[name]
+
+
 def scenario_cache_dir(name: str | None = None) -> str:
     """Collision-cache root for a scenario (baseline keeps the legacy ``assets/cache/``)."""
     name = name or SCENARIO_NAME
-    if name == "lower_out":
+    if name == "both_out":
         return CACHE_DIR
     return os.path.join(ASSETS_DIR, "cache", "scenarios", name)
 
@@ -113,7 +148,7 @@ def scenario_media_dir(phase: str, name: str | None = None) -> str:
     """Media dir for a phase under the active scenario (baseline keeps ``media/<phase>``)."""
     name = name or SCENARIO_NAME
     base = os.path.join(PROJECT_ROOT, "media", phase)
-    return base if name == "lower_out" else os.path.join(base, name)
+    return base if name == "both_out" else os.path.join(base, name)
 
 # ---------------------------------------------------------------------------------------------
 # gripper (actuated between exactly two calibrated apertures: open at trial endpoints, grasp
@@ -231,12 +266,12 @@ CAMERAS = {
 CACHE_DIR = os.path.join(ASSETS_DIR, "cache")
 COLLISION_MARGIN_M = 0.005  # hull inflation: the conservative-bias knob for FCL-vs-Isaac parity
 # CoACD parameters per body (fallback key "default"); threshold is the concavity tolerance —
-# lower = finer decomposition. Rack quality is a *feasibility* parameter: too coarse falsely
-# closes the tine gaps and every placement reads "in collision".
+# lower = finer decomposition. The RACKS no longer go through CoACD: their meshes are generated
+# by rack_gen from RACK_GEN below, and scripts/13 writes the generator's exact convex parts as
+# the FCL pieces (zero decomposition slop on 3 mm wires). CoACD remains for the concave bodies
+# whose geometry we don't control.
 COACD = {
     "default": {"threshold": 0.05, "max_convex_hull": 32},
-    "E_shelf_1_04": {"threshold": 0.02, "max_convex_hull": 128},  # lower rack: keep tine gaps open
-    "E_shelf_03": {"threshold": 0.03, "max_convex_hull": 96},
     "object": {"threshold": 0.03, "max_convex_hull": 32},  # keep the mug cavity open
 }
 CONTACT_FORCE_THRESH_N = 0.1  # Isaac ground-truth contact threshold for the parity check
@@ -245,6 +280,133 @@ CONTACT_FORCE_THRESH_N = 0.1  # Isaac ground-truth contact threshold for the par
 # ground truth and the FCL world checks, keeping the two sides mirror images.
 PARITY_BODY_EXCLUDE = ["base_link"]
 WORLD_CHECK_EXCLUDE = ["base_link"]
+
+# ---------------------------------------------------------------------------------------------
+# rack geometry generator (rack_gen) — single source of truth for BOTH replaced rack meshes.
+# Design space = world-metric rack body frame: x = width, y = depth (y=0 the front edge, the
+# end that extends toward the robot), z up from 0 at the lowest wire surface; meters.
+# usd_prep authors these meshes into the derived v0 USD (replacing the ArtVIP flat baskets);
+# scripts/13 writes the generator's convex parts as the FCL pieces. Vertical layout is derived:
+# channel runners bottom at z=0, main runners raised by channel.drop, crossbars tangent on top
+# (floor_top = crossbar top = the slot datum the Phase-E percentile must land on — everything
+# floor-level therefore stays inside placement.py's 15 mm bottom-slab band).
+# ---------------------------------------------------------------------------------------------
+RACK_GEN_VERSION = 2  # v2: reference-appliance realism (Whirlpool WDTA50SAKZ / Bosch 800 /
+#                       Frigidaire FDPC4314AS) — 3-gauge wires, 30 mm Whirlpool tine rows with
+#                       candy-cane ends, fillets/ties/beads, fold-down insert row, wheels,
+#                       front loading dip + handle, cup shelves, RackMatic blocks
+RACK_GEN = {
+    "E_shelf_1_04": {  # lower rack: rear plate bank + open zone (robot side) + bowl/slope side
+        "usd_scale_x": 0.9191,  # authored x-scale on the body Xform (asserted at authoring)
+        "footprint": (0.3663, 0.2868),  # world-space extents; == original basket footprint
+        # 3-gauge hierarchy (real racks: frame >> runners > tines; real tine dia/pitch ~ 0.07)
+        "wire_dia_heavy": 0.005,  # perimeter rails + the 2 outermost runners
+        "wire_dia_load": 0.0036,  # depth-axis load runners
+        "wire_dia_light": 0.0022,  # crossbars, tines, ribs, balusters, ties
+        "wire_sides": 12,  # 12-gon: vertices exactly on -x/-y/-z -> exact assembled bounds
+        # perimeter & rear guard: rear rim +29 % over the SIDE rails; the front rail dips for
+        # loading clearance (Whirlpool/Bosch signature) with a center grab handle above it
+        "rim_side_h": 0.045,
+        "rim_front_h": 0.034,  # dipped front-rail height over front_dip_x
+        # the loading dip spans the whole open zone (real racks run the low front rail across
+        # the loading width) — it is also the mug's entry corridor under the raised upper rack
+        "front_dip_x": (0.125, 0.340),
+        "handle": {"x": (0.160, 0.210), "grip_z": 0.055},
+        "rim_rear_h": 0.058,
+        "rear_zone_y0": 0.190,  # where the raised rear-third side rails begin
+        "corner_r": 0.016,
+        "corner_segments": 4,
+        "baluster_pitch": 0.035,
+        "guard_mid_rail": True,  # retention mid rail halfway up the raised rear section
+        # floor & zoned grid: open runner surface gaps 40 mm (real racks never exceed ~40);
+        # one light dense runner per span midpoint under the bank -> 19 mm dense gaps
+        "runner_xs": (0.029, 0.0725, 0.1160, 0.1595, 0.2065, 0.2501, 0.2937, 0.3373),
+        "channel": {"x": (0.169, 0.197), "runner_xs": (0.176, 0.190), "drop": 0.004},
+        "crossbar_ys": (0.025, 0.070, 0.115, 0.160),
+        "slope_zones": ((0.004, 0.048),),  # drinkware ramp along the x=0 side wall
+        "slope_deg": 6.0,
+        "slope_sign": -1.0,  # floor descends toward the wall (mug leans into the wall)
+        # rear plate bank: 12 tines/row at 30 mm pitch (11 slots — the Whirlpool W10728160
+        # row pattern), rows 52 mm apart (true two-point plate support), +7 deg lean into the
+        # guard; row ends are candy-cane hooks; straight tines get capped bead tips
+        "plate_zone_y": (0.205, 0.285),
+        "plate_rows_y": (0.220, 0.272),  # 0.212 would block the y=0.1434 slot columns (-6 mm)
+        "plate_tine_pitch": 0.030,
+        "plate_tine_xspan": (0.022, 0.352),
+        "plate_tine_h": 0.070,
+        "plate_tine_lean_deg": 7.0,
+        "candy_cane": {"r": 0.012, "sweep_deg": 120.0, "segments": 4},
+        "tine_fillet": {"r": 0.006, "segments": 3},  # U-bend fillet at every tine base
+        "tine_tie_frac": 0.6,  # mid-height tie wire per row at 0.6 * tine height
+        "tine_bead": {"dia_factor": 1.6, "len": 0.004},  # push-on tip caps (Frigidaire kit)
+        # fold-down insert row (Bosch "flip tine, dark gray" / Whirlpool gray tine row): the
+        # REAR row is a visually distinct second mesh — thicker spine, hinge bosses, stop clip
+        "insert": {
+            "row": 1,
+            "spine_dia": 0.0055,
+            "boss_dia": 0.009,
+            "boss_len": 0.010,
+            "clip_size": (0.012, 0.008, 0.008),
+        },
+        "bank_bar_ys": (0.197, 0.242, 0.280),
+        # corrugated cradle ribs: V-profile under both tine rows, wavelength = tine pitch
+        "rib_amplitude": 0.0025,
+        # bowl tines: 42 mm high, 45 mm pitch, on the slope side
+        "bowl_tine_xs": (0.055, 0.100),
+        "bowl_tine_ys": (0.025, 0.070, 0.115, 0.160),
+        "bowl_tine_h": 0.042,
+        # roller wheels: 4, outer face exactly on the footprint plane, bottoms exactly z=0
+        "wheels": {"dia": 0.022, "width": 0.008, "y_inset": 0.030},
+        # open zone (flat floor, mug slots; drives the Phase-D probes + the Phase-E guarantee:
+        # slot-grid columns x={0.1832, 0.2432} x y={0.0834, 0.1434} stay mug-clear by design)
+        "open_zones": ((0.115, 0.360, 0.010, 0.190),),
+        "mass_kg": 0.9,  # authored explicitly (deterministic vs auto-mass); horizontal joint
+        "sdf_resolution": 768,  # 0.48 mm voxel -> ~4.6 across a 2.2 mm wire
+    },
+    "E_shelf_03": {  # upper rack: glass/mug variant — shelves, divider, no plate bank
+        "usd_scale_x": 0.94,
+        "footprint": (0.3747, 0.2868),
+        "wire_dia_heavy": 0.005,
+        "wire_dia_load": 0.0036,
+        "wire_dia_light": 0.0022,
+        "wire_sides": 12,
+        "rim_side_h": 0.040,  # level front (no loading dip on the upper rack)
+        "rim_front_h": 0.040,
+        # front pull/push handle (real upper racks have one; the rack_action engages it)
+        "handle": {"x": (0.160, 0.210), "grip_z": 0.060},
+        "rim_rear_h": 0.050,  # +25 %
+        "rear_zone_y0": 0.190,
+        "corner_r": 0.016,
+        "corner_segments": 4,
+        "baluster_pitch": 0.035,
+        "guard_mid_rail": True,
+        "runner_xs": (0.030, 0.0736, 0.1172, 0.1608, 0.2044, 0.2480, 0.2916, 0.3352),  # 40 mm
+        "crossbar_ys": (0.025, 0.070, 0.115, 0.160, 0.205, 0.250),  # 42 mm gaps
+        "slope_zones": ((0.004, 0.048), (0.3267, 0.3707)),  # ramps along BOTH side walls
+        "slope_deg": 6.0,
+        "slope_sign": 1.0,  # ascends toward the wall (keeps wire bottoms above z=0)
+        "divider_tine_x": 0.187,
+        "divider_tine_ys": (0.025, 0.070, 0.115, 0.160, 0.205, 0.250),
+        "divider_tine_h": 0.040,
+        # fold-down cup shelves with stemware scallops, confined over the slope zones so the
+        # mug strips stay clear (Bosch two cup shelves / Whirlpool push-up shelf)
+        "cup_shelf": {
+            "depth": 0.055,
+            "y_span": (0.045, 0.135),
+            "mount_z": 0.030,
+            "tilt_deg": 13.0,
+            "rungs": 5,
+            "scallops": 3,
+            "scallop_r": 0.008,
+        },
+        # Bosch RackMatic lever end caps on the outer side-rail faces (size = x, y, z extents)
+        "rackmatic_blocks": {"size": (0.014, 0.026, 0.012), "ys": (0.060, 0.220), "z": 0.030},
+        "wheels": {"dia": 0.022, "width": 0.008, "y_inset": 0.030},
+        "open_zones": ((0.068, 0.182, 0.020, 0.180), (0.193, 0.307, 0.020, 0.180)),
+        "mass_kg": 0.7,
+        "sdf_resolution": 768,
+    },
+}
 
 # ---------------------------------------------------------------------------------------------
 # Phase E — placement goals
@@ -263,10 +425,42 @@ RELEASE_HOVER_M = 0.012  # goal poses hover the object above the wire floor (> c
 #                          small enough that the release drop is a non-event)
 
 # ---------------------------------------------------------------------------------------------
+# rack manipulation + countertop pick (the both_in / both_out trial choreography)
+# ---------------------------------------------------------------------------------------------
+# Countertop: the ArtVIP tub is open-topped in collision; freestanding dishwashers have a
+# worktop. usd_prep authors this slab onto E_body_5 in the derived USDs — it is also the mug's
+# initial resting surface. Shell top measured at world z 0.47, footprint x [0.65, 1.045],
+# y [-0.24, 0.242].
+COUNTERTOP_SIZE = (0.395, 0.482, 0.020)  # world-aligned box extents [m]
+COUNTERTOP_CENTER_W = (0.8475, 0.001, 0.48)  # world center; top surface at z 0.49
+# Mug initial pose: standing upright on the countertop at the robot-nearest corner (the wrist
+# IK target lands at ~0.81 of the 0.85 m reach — verified with the analytic IK offline). Yaw
+# orients the handle so the fixed calibrated grasp transform stays IK-reachable.
+MUG_COUNTERTOP_POS_W = (0.665, -0.185, 0.5307)  # root (= bbox center); mug base at z 0.49
+MUG_COUNTERTOP_YAW_DEG = 0.0
+PICK_HOVER_M = 0.10  # planned pre-grasp TCP hover above the grasp pose; the descent is a
+#                      scripted straight line gated by the calibrated pinch band, not FCL
+#                      (the goal pose is inside the inflated-hull margin of the mug by design)
+PICK_DESCEND_STEPS = 120
+PICK_LIFT_M = 0.12  # straight lift after weld-on, before planning to the slot
+# Rack slide: drive-synchronized manipulation — the gripper visibly engages the rack's front
+# handle while the rack joint's drive target ramps to rack_action["to"] and the TCP tracks the
+# moving handle (same visible-contact + guaranteed-actuation methodology as the mug weld).
+RACK_SLIDE_STEPS = 240  # 4 s at SIM_DT for the 0.2 m travel
+RACK_HANDLE_APERTURE_RAD = 0.70  # near-closed pinch around the 3.6 mm handle rod (pull)
+RACK_PUSH_APERTURE_RAD = 0.78  # closed-fist contact for push
+RACK_SLIDE_TOL_M = 0.005  # the rack must settle within this of the action target
+RACK_TRACK_TOL_M = 0.020  # max TCP-vs-handle tracking error during the slide
+RACK_APPROACH_HOVER_M = 0.08  # planned pre-engage TCP offset above/behind the handle
+
+# ---------------------------------------------------------------------------------------------
 # Phase F — planning + execution
 # ---------------------------------------------------------------------------------------------
-PLAN_TIME_BUDGET_S = 5.0
-PLAN_RRT_RANGE_RAD = 0.8  # RRT-Connect extension step; auto-range is too timid in the clutter
+# Placement always happens in the reconfigured machine state (lower rack out, upper in — the
+# rack_action runs first), so the planning problem matches the validated open-approach layout;
+# the rack-approach and pick plans carry nothing and are easy. 20 s is generous headroom.
+PLAN_TIME_BUDGET_S = 20.0
+PLAN_RRT_RANGE_RAD = 0.5  # smaller extension steps handle the cluttered machine front reliably
 GOALS_PER_PLAN = 64  # random goal-set subset handed to OMPL per trial
 # planning bounds: full joint limits minus a small margin (config-tunable; tighten if RRT
 # wanders into pointless windups)

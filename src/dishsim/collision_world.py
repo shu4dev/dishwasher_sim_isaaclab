@@ -87,9 +87,11 @@ class CollisionWorld:
 
         # ---- statics ------------------------------------------------------------------------
         self._static_objs: dict[str, list[fcl.CollisionObject]] = {}
+        self._static_T: dict[str, np.ndarray] = {}
         self._static_lookup: dict[int, str] = {}
         for name, entry in self.manifest["statics"].items():
             T = np.array(entry["T_base_body"])
+            self._static_T[name] = T
             pieces = self._load_pieces(name, entry)
             objs = []
             for piece in pieces:
@@ -172,9 +174,20 @@ class CollisionWorld:
                 raise RuntimeError(
                     f"missing CoACD pieces for '{name}' — run scripts/13_decompose_meshes.py first"
                 )
-            return [
-                trimesh.load(os.path.join(out_dir, f), force="mesh") for f in sorted(os.listdir(out_dir))
-            ]
+            files = sorted(os.listdir(out_dir))
+            if name in config.RACK_GEN:
+                # rack piece counts are deterministic (rack_gen parts) — reject a piece dir
+                # truncated by an interrupted scripts/13 export, where a missing piece would be
+                # a physically present wire that FCL never sees
+                from . import rack_gen  # local import: only needed on the rack path
+
+                expected = len(rack_gen.build_rack(config.RACK_GEN[name]))
+                if len(files) != expected:
+                    raise RuntimeError(
+                        f"rack piece dir for '{name}' has {len(files)} pieces, expected {expected} "
+                        "(interrupted export?) — re-run scripts/13_decompose_meshes.py --force"
+                    )
+            return [trimesh.load(os.path.join(out_dir, f), force="mesh") for f in files]
         return [trimesh.load(os.path.join(self.cache_dir, mesh_rel), force="mesh")]
 
     def _pose_movables(self, q: np.ndarray) -> dict[str, np.ndarray]:
@@ -305,6 +318,40 @@ class CollisionWorld:
 
     def remove_object(self, name: str) -> None:
         self._extra.pop(name, None)
+
+    def set_static_enabled(self, name: str, enabled: bool) -> None:
+        """Temporarily drop a static body from (or restore it to) the broadphase.
+
+        Used for the rack being manipulated: the gripper INTENTIONALLY contacts its handle
+        through the slide, so FCL validity there must ignore that body — arm-link safety
+        against it is enforced by the live unexpected-contact gate during execution instead.
+        """
+        disabled = getattr(self, "_static_disabled", set())
+        self._static_disabled = disabled
+        if enabled and name in disabled:
+            for obj in self._static_objs[name]:
+                self._static_mgr.registerObject(obj)
+            disabled.discard(name)
+        elif not enabled and name not in disabled:
+            for obj in self._static_objs[name]:
+                self._static_mgr.unregisterObject(obj)
+            disabled.add(name)
+        self._static_mgr.update()
+
+    def set_static_offset(self, name: str, offset_y_body: float) -> None:
+        """Re-pose a static body's pieces by a translation along its BODY-frame y axis.
+
+        Body y is the rack prismatic axis (the joints' localRot is identity), so this slides a
+        rack to an intermediate extension relative to its CACHED pose — used to validate arm
+        configurations against the moving rack during the drive-synchronized slide. The cached
+        extensions are recorded in ``manifest["statics_state"]``. Pass 0.0 to restore.
+        """
+        T = self._static_T[name] @ np.array(
+            [[1.0, 0, 0, 0], [0, 1.0, 0, float(offset_y_body)], [0, 0, 1.0, 0], [0, 0, 0, 1.0]]
+        )
+        for obj in self._static_objs[name]:
+            obj.setTransform(_tf(T))
+        self._static_mgr.update()
 
     def carried_object_pieces(self) -> list[trimesh.Trimesh]:
         """Body-frame CoACD pieces of the carried object.

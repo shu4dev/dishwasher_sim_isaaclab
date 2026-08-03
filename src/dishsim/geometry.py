@@ -48,6 +48,12 @@ def config_hash() -> str:
         "grasp": (config.GRASP_TCP_OBJ_POS, config.GRASP_TCP_OBJ_QUAT),
         "object": config.OBJECT_NAME,
         "pedestal": (config.PEDESTAL_SIZE, config.PEDESTAL_POS_W),
+        # the racks are procedural (rack_gen) — any shape-parameter change must invalidate the
+        # cache, since the manifest hash never covers mesh bytes; the countertop is authored
+        # machine geometry, so it invalidates too
+        "rack_gen": config.RACK_GEN,
+        "rack_gen_version": config.RACK_GEN_VERSION,
+        "countertop": (config.COUNTERTOP_SIZE, config.COUNTERTOP_CENTER_W),
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -150,6 +156,14 @@ def dump_cache(scene, sim, cache_dir: str = config.CACHE_DIR) -> str:
         assert prim is not None, f"dishwasher body prim {body} not found"
         mesh = extract_prim_mesh(prim, stage)
         assert mesh is not None, f"no meshes under {body}"
+        if body in config.RACK_GEN:
+            # earliest Kit-stage guard against a scale/pre-compensation bug: the extracted
+            # (USD-round-tripped) rack must match the generator's design-space geometry
+            from . import rack_gen  # noqa: PLC0415
+
+            ref = rack_gen.merged_mesh(rack_gen.build_rack(config.RACK_GEN[body]))
+            dev = np.abs(np.asarray(mesh.bounds) - np.asarray(ref.bounds)).max()
+            assert dev < 2e-3, f"{body}: extracted bounds deviate {dev * 1e3:.2f} mm from rack_gen"
         T_base_body = T_base_w @ body_pose_w(dw, body)
         manifest["statics"][body] = {
             "mesh": save_mesh(body, mesh),
@@ -264,13 +278,17 @@ def load_manifest(cache_dir: str = config.CACHE_DIR) -> dict:
 
 
 def coacd_dir_for(name: str, mesh_path: str, cache_dir: str = config.CACHE_DIR) -> str:
-    """Deterministic decomposition directory for a body: keyed by mesh bytes + CoACD params.
+    """Deterministic decomposition directory for a body: keyed by mesh bytes + params.
 
     ``cache_dir`` is the mesh-read root only; the output always lives under the baseline
     ``assets/cache/coacd/``. The digest is content-addressed, so scenario caches whose meshes
-    are byte-identical share one decomposition instead of re-running CoACD per scenario.
+    are byte-identical share one decomposition instead of re-running per scenario. Rack bodies
+    key on their generator config (their pieces are rack_gen's exact convex parts, not CoACD).
     """
-    params = config.COACD.get(name, config.COACD.get("object" if name == "object" else "default", config.COACD["default"]))
+    if name in config.RACK_GEN:
+        params = {"rack_gen": config.RACK_GEN[name], "version": config.RACK_GEN_VERSION}
+    else:
+        params = config.COACD.get(name, config.COACD["default"])
     with open(os.path.join(cache_dir, mesh_path), "rb") as f:
         digest = hashlib.sha256(f.read() + json.dumps(params, sort_keys=True).encode()).hexdigest()[:16]
     return os.path.join(config.CACHE_DIR, "coacd", f"{name}_{digest}")

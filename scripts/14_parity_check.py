@@ -45,7 +45,7 @@ parser.add_argument("--n_task", type=int, default=20)
 parser.add_argument("--seed", type=int, default=7)
 parser.add_argument("--out_dir", type=str, default=None,
                     help="Media dir (default: media/D or media/D/<scenario>).")
-parser.add_argument("--scenario", type=str, default="lower_out",
+parser.add_argument("--scenario", type=str, default="both_out",
                     help="Rack-state scenario (see config.SCENARIOS).")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()

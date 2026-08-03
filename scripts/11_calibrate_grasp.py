@@ -52,6 +52,11 @@ parser.add_argument("--target_force", type=float, default=5.0,
 parser.add_argument("--hold_steps", type=int, default=300)
 parser.add_argument("--pad_force_abort", type=float, default=30.0,
                     help="Abort the staircase if any pad exceeds this [N].")
+parser.add_argument("--verify", action="store_true",
+                    help="Verify-only mode: hold at the FROZEN config aperture and gate the "
+                         "measured constants against config.py (touch aperture, force band, "
+                         "mimic signs) instead of proposing new constants. Writes verify_* "
+                         "outputs and leaves docs/grasp_calibration.md untouched.")
 parser.add_argument("--out_dir", type=str, default=os.path.join(PROJECT_ROOT, "media", "C2"))
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -236,20 +241,27 @@ def main() -> None:
               f"ratio {ratio:+.3f} at theta={ref['theta_meas']:.3f}")
     print(f"[INFO] measured inner-finger signs: {signs}")
 
-    # ---- 4. pick the grasp aperture from the curve -------------------------------------------
+    # ---- 4. grasp aperture: pick from the curve, or verify the frozen one --------------------
     post = [c for c in curve if c["theta_cmd"] >= theta_touch]
     theta_grasp, steady = None, None
-    for a, b in zip(post[:-1], post[1:]):
-        fa, fb = np.mean(a["pad_forces_n"]), np.mean(b["pad_forces_n"])
-        if fa <= args_cli.target_force <= fb:
-            frac = (args_cli.target_force - fa) / max(fb - fa, 1e-9)
-            theta_grasp = round(a["theta_cmd"] + frac * (b["theta_cmd"] - a["theta_cmd"]), 3)
-            break
-    if theta_grasp is None:
-        # curve topped out below target (effort-limited) — take the strongest plateau
-        theta_grasp = post[-1]["theta_cmd"]
-        print(f"[WARN] force curve peaked at {np.mean(post[-1]['pad_forces_n']):.2f} N "
-              f"< target {args_cli.target_force} N — using theta={theta_grasp:.3f}")
+    if args_cli.verify:
+        theta_grasp = float(config.GRIPPER_APERTURE_GRASP_RAD)
+        # the frozen aperture is calibrated as touch + a small over-command; if touch drifted,
+        # the frozen value would either not engage or over-squeeze
+        check("frozen aperture just past measured touch", 0.0 < theta_grasp - theta_touch <= 0.020,
+              f"theta_touch {theta_touch:.3f} vs frozen aperture {theta_grasp:.3f}")
+    else:
+        for a, b in zip(post[:-1], post[1:]):
+            fa, fb = np.mean(a["pad_forces_n"]), np.mean(b["pad_forces_n"])
+            if fa <= args_cli.target_force <= fb:
+                frac = (args_cli.target_force - fa) / max(fb - fa, 1e-9)
+                theta_grasp = round(a["theta_cmd"] + frac * (b["theta_cmd"] - a["theta_cmd"]), 3)
+                break
+        if theta_grasp is None:
+            # curve topped out below target (effort-limited) — take the strongest plateau
+            theta_grasp = post[-1]["theta_cmd"]
+            print(f"[WARN] force curve peaked at {np.mean(post[-1]['pad_forces_n']):.2f} N "
+                  f"< target {args_cli.target_force} N — using theta={theta_grasp:.3f}")
 
     # ---- 5. hold verification at theta_grasp -------------------------------------------------
     settle(theta_grasp, args_cli.dwell)
@@ -278,6 +290,14 @@ def main() -> None:
     st = finger_state()
     check("aperture settles near command", abs(st["theta"] - theta_grasp) < 0.08,
           f"meas {st['theta']:.4f} vs cmd {theta_grasp:.3f}")
+    if args_cli.verify:
+        # gate the measured behavior against the FROZEN constants (config untouched on PASS)
+        check("steady pad force within the frozen band",
+              config.GRIP_FORCE_MIN_N <= steady <= config.GRIP_FORCE_MAX_N,
+              f"{steady:.2f} N vs [{config.GRIP_FORCE_MIN_N}, {config.GRIP_FORCE_MAX_N}] N")
+        frozen_signs = config.GRIPPER_INNER_FINGER_SIGNS or {}
+        check("mimic signs match frozen config", signs == frozen_signs,
+              f"measured {signs} vs frozen {frozen_signs}")
     for name, val in st["inner"].items():
         pred = signs[name] * st["theta"]
         print(f"[INFO] inner-finger {name}: measured {val:+.4f}, mimic-consistent {pred:+.4f}")
@@ -327,7 +347,9 @@ def main() -> None:
 
     # ---- 7. outputs --------------------------------------------------------------------------
     rim_z = config.GRASP_RIM_TCP_Z_M
+    prefix = "verify_" if args_cli.verify else ""
     calib = {
+        "mode": "verify" if args_cli.verify else "calibrate",
         "rim_z_m": rim_z,
         "theta_touch": theta_touch,
         "theta_grasp": theta_grasp,
@@ -337,7 +359,7 @@ def main() -> None:
         "target_force_n": args_cli.target_force,
         "curve": curve,
     }
-    with open(os.path.join(args_cli.out_dir, "calibration.json"), "w") as f:
+    with open(os.path.join(args_cli.out_dir, f"{prefix}calibration.json"), "w") as f:
         json.dump(calib, f, indent=2)
 
     try:  # force-vs-theta figure (matplotlib is available in-Kit via the omni prebundle)
@@ -360,11 +382,19 @@ def main() -> None:
         ax.set_title(f"pinch force vs aperture (rim_z {rim_z:+.4f} m)")
         ax.legend()
         fig.tight_layout()
-        fig.savefig(os.path.join(args_cli.out_dir, "force_vs_theta.png"), dpi=120)
-        print(f"[INFO] figure: {os.path.join(args_cli.out_dir, 'force_vs_theta.png')}")
+        fig.savefig(os.path.join(args_cli.out_dir, f"{prefix}force_vs_theta.png"), dpi=120)
+        print(f"[INFO] figure: {os.path.join(args_cli.out_dir, f'{prefix}force_vs_theta.png')}")
     except ImportError:
         print("[WARN] matplotlib unavailable in-Kit — render force_vs_theta from "
               "calibration.json with the venv later")
+
+    if args_cli.verify:
+        print("[INFO] verify mode: frozen constants gated above — config.py and "
+              "docs/grasp_calibration.md untouched")
+        print(f"[RESULT] {'PASS' if not FAILURES else 'FAIL: ' + ', '.join(FAILURES)}")
+        if FAILURES:
+            raise SystemExit(1)
+        return
 
     doc = os.path.join(PROJECT_ROOT, "docs", "grasp_calibration.md")
     with open(doc, "w") as f:

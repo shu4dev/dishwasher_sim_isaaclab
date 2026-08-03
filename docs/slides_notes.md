@@ -1,13 +1,19 @@
 # v0 slides notes (paste-ready)
 
 - v0 delivered end-to-end: object-in-gripper -> OMPL RRT-Connect -> collision-free
-  execution in Isaac Sim -> release -> stable placement in the dishwasher's lower rack.
-- **2/2 trials succeed (100 %)** across 1 slots x 1 RNG seeds; failures are dominated by goal-infeasible deep-interior slots (reach limit), not planner or execution errors.
-- Plan times: mean 0.33, median 0.33, p95 0.47, max 0.38 s against a 5 s budget — RRT-Connect over a custom FCL collision world at ~0.2 ms per collision query.
-- The collision world is a standalone, simulator-free module (needed for the future
-  MCTS rearrangement planner): CoACD-decomposed rack (128 pieces keeps the wire gaps
-  open), validated at 98 % agreement vs Isaac contact ground truth with zero
-  non-conservative mismatches.
+  execution in Isaac Sim -> release -> stable placement in the dishwasher's lower rack,
+  validated in BOTH robot-facing rack states (both racks out / both racks in).
+- **24/24 trials succeed (100 %)** across 12 scenario-slots x 2 RNG seeds; failures are dominated by goal-infeasible deep-interior slots (reach limit), not planner or execution errors.
+- Plan times: mean 2.67, median 1.47, p95 7.31, max 7.61 s against a 5 s budget — RRT-Connect over a custom FCL collision world (both_out: 100.0 % @ 0.83 ms/query; both_in: 100.0 % @ 0.73 ms/query).
+- Both racks are PROCEDURAL realistic wire racks (rack_gen v2, styled after Whirlpool
+  WDTA50SAKZ / Bosch 800 / Frigidaire FDPC4314AS): 3-gauge wire hierarchy, 30 mm
+  Whirlpool-pattern tine rows with candy-cane ends, dark fold-down insert row, roller
+  wheels, dipped front rail + grab handle, cup shelves + RackMatic blocks up top. The
+  FCL pieces are the generator's exact convex parts — zero decomposition slop.
+- The derived scene raises the upper rack 120 mm: the ArtVIP asset gives real-scale
+  dishware only 154 mm of inter-rack clearance where real machines give 250-300 mm —
+  the raise restores a real loading geometry (274 mm) and is what makes the retracted
+  (both_in) state loadable at all.
 - Analytic UR5e IK (8 branches, hand-rolled; ur-analytic-ik has no py3.12 wheel)
   matches Pinocchio to 1e-9 and live Isaac FK to 0.2 mm — goal sets are thousands of
   configs per feasible slot, with per-slot rejection funnels as reach-feasibility maps.
@@ -18,9 +24,9 @@
   band at trial start (stop-at-contact aperture from a measured force-vs-angle curve,
   ~5 N per pad) and visibly open before the hidden weld releases, followed by a
   collision-validated tool-axis retract (see docs/grasp_calibration.md).
-- Known simplifications: mug stands on the wire basket floor (the ArtVIP rack has no
-  plate tines); grasp *acquisition* is out of scope (the mug starts already pinched,
-  with a wrist weld carrying the load for rigidity during planned motion).
+- Known simplifications: the mug stands in the lower rack's open zone (plate loading
+  between the tines is future work); grasp *acquisition* is out of scope (the mug
+  starts already pinched, with a wrist weld carrying the load during planned motion).
 
 ## Best figures/clips (by path)
 
@@ -33,4 +39,4 @@
 - media/C2/close_open.mp4 — calibrated pinch: close to contact, hold, open, forces vanish
 - media/C2/force_vs_theta.png — the measured pinch force-vs-aperture curve
 - docs/figures/best_trial_02_00_0.png — curated final still (trial_02_00_0)
-- docs/figures/best_trial_02_00_1.png — curated final still (trial_02_00_1)
+- docs/figures/best_trial_02_01_0.png — curated final still (trial_02_01_0)

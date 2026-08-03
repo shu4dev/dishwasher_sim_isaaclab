@@ -31,7 +31,7 @@ parser.add_argument("--seed", type=int, default=11)
 parser.add_argument("--out_dir", type=str, default=None,
                     help="Media dir (default: media/E or media/E/<scenario>).")
 parser.add_argument("--sheets_per_slot", type=int, default=6)
-parser.add_argument("--scenario", type=str, default="lower_out",
+parser.add_argument("--scenario", type=str, default="both_out",
                     help="Rack-state scenario (see config.SCENARIOS).")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -141,7 +141,7 @@ def main() -> None:
     print(f"[INFO] wrote {slots_path} and {goals_path}")
 
     nonempty = [g for g in goal_sets if len(g.configs) > 0]
-    min_feasible = config.SCENARIOS[config.SCENARIO_NAME]["min_feasible_slots"]
+    min_feasible = config.state_params()["min_feasible_slots"]
     print(f"[INFO] scenario {config.SCENARIO_NAME}: {len(nonempty)}/{len(slots)} slots feasible")
     check(f"at least {min_feasible} slots with non-empty goal sets", len(nonempty) >= min_feasible,
           f"{len(nonempty)}/{len(slots)} slots feasible")

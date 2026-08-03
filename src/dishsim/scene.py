@@ -269,6 +269,23 @@ def _resolve_grasp_aperture() -> float:
     return config.GRIPPER_APERTURE_GRASP_RAD
 
 
+#: persistent rack drive-target override consumed by hold_targets (the drive-synchronized rack
+#: slide ramps these each step; the scenario defaults apply when None)
+_RACK_TARGET_OVERRIDE: dict[str, float] | None = None
+
+
+def set_rack_target_override(targets: dict[str, float] | None) -> None:
+    """Override the dishwasher rack drive targets that :func:`hold_targets` pins every step.
+
+    The rack-manipulation choreography ramps the moved joint's target through this while the
+    gripper visibly engages the rack handle; pass ``None`` to restore the scenario defaults
+    (do so only when the scenario's post-action state matches — after a completed rack_action
+    the override must stay at the action target for the rest of the trial).
+    """
+    global _RACK_TARGET_OVERRIDE
+    _RACK_TARGET_OVERRIDE = dict(targets) if targets else None
+
+
 def hold_targets(scene, aperture: float | None = None, arm_q=None) -> None:
     """(Re-)issue the standing position targets: arm, gripper aperture, statics pinned.
 
@@ -304,7 +321,12 @@ def hold_targets(scene, aperture: float | None = None, arm_q=None) -> None:
         targets[:, if_ids] = robot.data.joint_pos.torch[:, if_ids]
     robot.set_joint_position_target_index(target=targets)
     dw = scene["dishwasher"]
-    dw.set_joint_position_target_index(target=dw.data.default_joint_pos.torch.clone())
+    dw_targets = dw.data.default_joint_pos.torch.clone()
+    if _RACK_TARGET_OVERRIDE:
+        for jname, val in _RACK_TARGET_OVERRIDE.items():
+            jids, _ = dw.find_joints(jname)
+            dw_targets[:, jids[0]] = float(val)
+    dw.set_joint_position_target_index(target=dw_targets)
 
 
 def ramp_gripper(scene, sim, end_aperture: float, steps: int, arm_q=None, per_step=None) -> float:

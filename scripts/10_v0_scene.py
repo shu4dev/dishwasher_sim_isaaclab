@@ -156,7 +156,7 @@ def main() -> None:
     print(f"[INFO] statics after settle: { {k: round(v, 5) for k, v in statics.items()} }")
     check("door locked open", 88.3 <= statics["door_deg"] <= 90.05, f"{statics['door_deg']:.2f} deg")
     check("lower rack extended", statics["rack_lower_err_m"] < 2e-3, f"err {statics['rack_lower_err_m']*1e3:.2f} mm")
-    check("upper rack stowed", statics["rack_upper_err_m"] < 2e-3, f"err {statics['rack_upper_err_m']*1e3:.2f} mm")
+    check("upper rack at scenario target", statics["rack_upper_err_m"] < 2e-3, f"err {statics['rack_upper_err_m']*1e3:.2f} mm")
 
     vels = robot.data.joint_vel.torch[0]
     check("robot settled, no NaN", bool(torch.isfinite(vels).all()) and float(vels.abs().max()) < 0.5)

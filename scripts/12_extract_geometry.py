@@ -23,7 +23,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 parser = argparse.ArgumentParser(description="Dump collision-world cache from the v0 scene.")
 parser.add_argument("--settle_steps", type=int, default=200)
-parser.add_argument("--scenario", type=str, default="lower_out",
+parser.add_argument("--scenario", type=str, default="both_out",
                     help="Rack-state scenario (see config.SCENARIOS).")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()

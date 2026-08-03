@@ -60,14 +60,37 @@ parser.add_argument("--repeat", type=int, default=0, help="Trial repeat index.")
 parser.add_argument("--budget_s", type=float, default=config.PLAN_TIME_BUDGET_S)
 parser.add_argument("--out_dir", type=str, default=None,
                     help="Media dir (default: media/F or media/F/<scenario>).")
-parser.add_argument("--scenario", type=str, default="lower_out",
+parser.add_argument("--scenario", type=str, default="both_out",
                     help="Rack-state scenario (see config.SCENARIOS).")
 args = parser.parse_args()
 
 config.apply_scenario(args.scenario)
-CACHE = config.scenario_cache_dir()
 if args.out_dir is None:
     args.out_dir = config.scenario_media_dir("F")
+RESULTS_DIR = (os.path.join(PROJECT_ROOT, "results") if args.scenario == "both_out"
+               else os.path.join(PROJECT_ROOT, "results", args.scenario))
+# planning happens in the shared post-rack-action placement state (see scripts/20): the cache,
+# its hash, and the goal sets all belong to that state, whatever the trial's initial scenario
+config.apply_scenario(config.PLACEMENT_STATE)
+CACHE = config.scenario_cache_dir()
+
+
+def trial_start_q() -> np.ndarray:
+    """The place-plan start config: the trial's recorded post-pick carry config (q_carry),
+    falling back to home for legacy records."""
+    path = os.path.join(RESULTS_DIR, f"trial_{args.slot:02d}_{args.seed:02d}_{args.repeat}.json")
+    try:
+        with open(path) as f:
+            rec = json.load(f)
+        if rec.get("q_carry"):
+            return np.array(rec["q_carry"], dtype=float)
+        print(f"[WARN] {path} has no q_carry — using HOME_Q")
+    except OSError:
+        print(f"[WARN] no trial record at {path} — using HOME_Q")
+    return np.array(config.HOME_Q)
+
+
+START_Q = trial_start_q()
 
 # house palette (30_make_report.py / dataviz reference); series hues are consistent across
 # panels: blue = start tree, orange = goal tree, aqua = solution path, muted gray = context.
@@ -170,7 +193,7 @@ def panel_cspace(ax, dbg: planning.PlanDebug, res: planning.PlanResult, sub: np.
         ax.plot(res.path_q[:, 0], res.path_q[:, 1], color=C_PATH, lw=2.5, marker="o",
                 markersize=4, label="simplified path", zorder=6)
         ax.scatter(*res.path_q[-1, :2], s=60, c=C_PATH, zorder=7)
-    ax.scatter(*np.array(config.HOME_Q)[:2], s=140, marker="*", c=INK, zorder=7, label="start (home)")
+    ax.scatter(*START_Q[:2], s=140, marker="*", c=INK, zorder=7, label="start (carry)")
 
     v1 = int((dbg.tree_tag == 1).sum()) if dbg.tree_tag is not None else 0
     v2 = int((dbg.tree_tag == 2).sum()) if dbg.tree_tag is not None else 0
@@ -323,7 +346,7 @@ def panel_tree3d(out_png: str, manifest: dict, dbg: planning.PlanDebug, res: pla
     from dishsim.geometry import coacd_dir_for
 
     rack = statics_cloud(manifest, "E_shelf_1_04", 4000)
-    start_tp = tcp_xyz(np.array(config.HOME_Q))[0]
+    start_tp = tcp_xyz(START_Q)[0]
     goal_tp = tcp_xyz(sub)
     pts = [rack, goal_tp, start_tp[None, :]]
     tp_path = None
@@ -432,7 +455,7 @@ def main() -> None:
     rng = np.random.default_rng(args.seed * 1000 + args.repeat)
     sub = goals[rng.choice(len(goals), min(config.GOALS_PER_PLAN, len(goals)), replace=False)]
     dbg = planning.PlanDebug()
-    res = planning.plan_to_goals(world, np.array(config.HOME_Q), sub, budget_s=args.budget_s,
+    res = planning.plan_to_goals(world, START_Q, sub, budget_s=args.budget_s,
                                  seed=args.seed * 7 + args.repeat + 1, debug=dbg)
     dense = planning.time_parameterize(res.path_q) if res.path_q is not None else None
     exec_time_s = len(dense) * config.SIM_DT if dense is not None else None
