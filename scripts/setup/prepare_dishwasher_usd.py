@@ -7,10 +7,10 @@
 The derived copy (``model_<variant>_rl.usda``, written next to the original) removes the
 world-weld fixed joint and neutralizes the authored door drive — see
 ``src/dishsim/usd_prep.py`` for details. Running this is optional if you run
-``scripts/00_inspect_scene.py`` first (it generates the file on demand).
+``scripts/setup/inspect_scene.py`` first (it generates the file on demand).
 
 Run with:
-    /workspace/isaaclab/isaaclab.sh -p scripts/02_prepare_dishwasher_usd.py [--variant dishwasher_2] [--force]
+    /workspace/isaaclab/isaaclab.sh -p scripts/setup/prepare_dishwasher_usd.py [--variant dishwasher_2] [--force]
 """
 
 import argparse
@@ -18,7 +18,7 @@ import glob
 import os
 import sys
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 parser = argparse.ArgumentParser(description="Prepare the RL-ready dishwasher USD.")

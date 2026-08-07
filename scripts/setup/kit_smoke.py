@@ -2,18 +2,18 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Phase B gate: planning stack inside the Kit process + headless media capture.
+"""Dependency gate: planning stack inside the Kit process + headless media capture.
 
 Verifies, in one Isaac Sim session:
 
 1. ``ompl``, ``fcl``, ``coacd``, ``trimesh``, ``imageio`` import *inside* the Kit process
-   (Phase F plans in-process, so a Kit/wheel symbol clash would sink the design — fail fast here).
+   (run_trials plans in-process, so a Kit/wheel symbol clash would sink the design — fail fast here).
 2. A small RRT-Connect plan solves in-process.
 3. A camera sensor renders headlessly and the frames are non-black: writes
-   ``media/B/smoke.png`` and a 2 s, 720p, 30 fps ``media/B/smoke.mp4`` of a cube dropping.
+   ``media/smoke/smoke.png`` and a 2 s, 720p, 30 fps ``media/smoke/smoke.mp4`` of a cube dropping.
 
 Run with:
-    /workspace/isaaclab/isaaclab.sh -p scripts/05_kit_smoke.py --headless --enable_cameras
+    /workspace/isaaclab/isaaclab.sh -p scripts/setup/kit_smoke.py --headless --enable_cameras
 """
 
 """Launch Isaac Sim Simulator first."""
@@ -23,10 +23,10 @@ import os
 
 from isaaclab.app import AppLauncher
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 
 parser = argparse.ArgumentParser(description="Kit-process planning-stack + media smoke test.")
-parser.add_argument("--out_dir", type=str, default=os.path.join(PROJECT_ROOT, "media", "B"))
+parser.add_argument("--out_dir", type=str, default=os.path.join(PROJECT_ROOT, "media", "smoke"))
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 

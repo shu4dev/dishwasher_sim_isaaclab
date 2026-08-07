@@ -2,17 +2,17 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Phase F (venv side, no Kit): render the RRT-Connect planning visual for one trial query.
+"""Venv side (no Kit): render the RRT-Connect planning visual for one trial query.
 
 Re-runs the exact planning query of trial ``trial_<slot>_<seed>_<rep>`` (same goal-subset RNG
-and OMPL seed as ``scripts/20_plan_and_place.py``) with ``PlanDebug`` instrumentation, then
+and OMPL seed as ``scripts/experiment/run_trials.py``) with ``PlanDebug`` instrumentation, then
 renders two figures:
 
-- ``media/F/rrt_connect_viz_<slot>_<seed>_<rep>.png`` — paper-style single 3-D view:
+- ``media/trials/rrt_connect_viz_<slot>_<seed>_<rep>.png`` — paper-style single 3-D view:
   translucent obstacle hulls, both RRT-Connect trees as FK-mapped branches (blue = start
   tree, orange = goal tree), the solution path, labeled start/goal points. Slot 9 / seed 2
   gives the densest successful tree; slot 2 / seed 0 connects almost immediately.
-- ``media/F/plan_visual_<slot>_<seed>_<rep>.png`` — 4-panel diagnostic:
+- ``media/trials/plan_visual_<slot>_<seed>_<rep>.png`` — 4-panel diagnostic:
 
 - C-space (shoulder_pan x shoulder_lift): both RRT-Connect trees, invalid samples, raw +
   simplified solution, goal states, plan stats;
@@ -23,11 +23,11 @@ renders two figures:
 The figure is rendered even on a planner timeout (the run then FAILs, but the tree shows why).
 
 Run with:
-    /workspace/isaaclab/env_isaaclab/bin/python scripts/21_plan_visual.py --slot 2 --seed 0
+    /workspace/isaaclab/env_isaaclab/bin/python scripts/evaluation/plan_visual.py --slot 2 --seed 0
 
 Rack-state scenarios (cache built by 12/13/15 with the same --scenario) render to
-``media/F/<scenario>/``:
-    /workspace/isaaclab/env_isaaclab/bin/python scripts/21_plan_visual.py --scenario both_out
+``media/trials/<scenario>/``:
+    /workspace/isaaclab/env_isaaclab/bin/python scripts/evaluation/plan_visual.py --scenario both_out
 """
 
 import argparse
@@ -42,34 +42,44 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.collections import LineCollection
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 import trimesh  # noqa: E402
 
-from dishsim import config, geometry, planning  # noqa: E402
+from dishsim import config, geometry  # noqa: E402
+from dishsim import planners as dplanners  # noqa: E402
+from dishsim import trajectory as dtraj  # noqa: E402
 from dishsim.collision_world import CollisionWorld  # noqa: E402
 from dishsim.placement import SlotFrame  # noqa: E402
+from dishsim.plan_debug_io import load_plan_debug  # noqa: E402
 from dishsim.transforms import make_T  # noqa: E402
 from dishsim.ur5e_kin import fk_wrist3  # noqa: E402
 
-parser = argparse.ArgumentParser(description="Render the RRT-Connect planning visual (Phase F).")
+parser = argparse.ArgumentParser(description="Render the planning visual for one trial query.")
+parser.add_argument("--planner", type=str, default=None,
+                    help="Planner for --replan (default: config.PLANNER; see dishsim.planners).")
+parser.add_argument("--plan_debug", type=str, default=None,
+                    help="Saved plan artifact (.npz). Default: the matching trial in the latest run.")
+parser.add_argument("--run", type=str, default=None, help="Run id holding the plan artifact.")
+parser.add_argument("--replan", action="store_true",
+                    help="Plan a fresh query here instead of reading a recorded one.")
 parser.add_argument("--slot", type=int, default=2, help="Slot id (default matches trial_02_00_0).")
 parser.add_argument("--seed", type=int, default=0, help="Trial RNG seed.")
 parser.add_argument("--repeat", type=int, default=0, help="Trial repeat index.")
 parser.add_argument("--budget_s", type=float, default=config.PLAN_TIME_BUDGET_S)
 parser.add_argument("--out_dir", type=str, default=None,
-                    help="Media dir (default: media/F or media/F/<scenario>).")
+                    help="Media dir (default: media/trials or media/trials/<scenario>).")
 parser.add_argument("--scenario", type=str, default="both_out",
                     help="Rack-state scenario (see config.SCENARIOS).")
 args = parser.parse_args()
 
 config.apply_scenario(args.scenario)
 if args.out_dir is None:
-    args.out_dir = config.scenario_media_dir("F")
+    args.out_dir = config.scenario_media_dir("trials")
 RESULTS_DIR = (os.path.join(PROJECT_ROOT, "results") if args.scenario == "both_out"
                else os.path.join(PROJECT_ROOT, "results", args.scenario))
-# planning happens in the shared post-rack-action placement state (see scripts/20): the cache,
+# planning happens in the shared post-rack-action placement state (see scripts/experiment/run_trials.py): the cache,
 # its hash, and the goal sets all belong to that state, whatever the trial's initial scenario
 config.apply_scenario(config.PLACEMENT_STATE)
 CACHE = config.scenario_cache_dir()
@@ -153,7 +163,7 @@ def statics_cloud(manifest: dict, name: str, n_max: int) -> np.ndarray:
     return (t @ np.hstack([verts, np.ones((len(verts), 1))]).T).T[:, :3]
 
 
-def panel_cspace(ax, dbg: planning.PlanDebug, res: planning.PlanResult, sub: np.ndarray,
+def panel_cspace(ax, dbg: dplanners.PlanDebug, res: dplanners.PlanResult, sub: np.ndarray,
                  exec_time_s: float | None) -> None:
     """Panel A: the search in a (q0, q1) projection of the 6-D C-space."""
     style_axes(ax)
@@ -220,8 +230,8 @@ def panel_cspace(ax, dbg: planning.PlanDebug, res: planning.PlanResult, sub: np.
               facecolor=SURFACE, edgecolor=GRID)
 
 
-def panel_topdown(ax, manifest: dict, slots: dict, dbg: planning.PlanDebug,
-                  res: planning.PlanResult, sub: np.ndarray) -> None:
+def panel_topdown(ax, manifest: dict, slots: dict, dbg: dplanners.PlanDebug,
+                  res: dplanners.PlanResult, sub: np.ndarray) -> None:
     """Panel B: search coverage and TCP path over the rack, top-down in the base frame."""
     style_axes(ax)
     ax.xaxis.grid(True, color=GRID, linewidth=0.8)
@@ -267,7 +277,7 @@ def panel_topdown(ax, manifest: dict, slots: dict, dbg: planning.PlanDebug,
               facecolor=SURFACE, edgecolor=GRID)
 
 
-def panel_3d(ax, manifest: dict, res: planning.PlanResult, dbg: planning.PlanDebug,
+def panel_3d(ax, manifest: dict, res: dplanners.PlanResult, dbg: dplanners.PlanDebug,
              sub: np.ndarray, dense: np.ndarray | None) -> None:
     """Panel C: statics vertex clouds + TCP polyline in 3-D."""
     rack = statics_cloud(manifest, "E_shelf_1_04", 8000)
@@ -302,7 +312,7 @@ def panel_3d(ax, manifest: dict, res: planning.PlanResult, dbg: planning.PlanDeb
                  color=INK, fontsize=11, y=0.98)
 
 
-def panel_profiles(ax, res: planning.PlanResult, dense: np.ndarray | None) -> None:
+def panel_profiles(ax, res: dplanners.PlanResult, dense: np.ndarray | None) -> None:
     """Panel D: executed joint targets after constant-speed time parameterization."""
     style_axes(ax)
     if dense is None:
@@ -313,7 +323,7 @@ def panel_profiles(ax, res: planning.PlanResult, dense: np.ndarray | None) -> No
     step = config.EXEC_JOINT_SPEED_RAD_S * config.SIM_DT
     tw = [0.0]
     for a, b in zip(res.path_q[:-1], res.path_q[1:]):  # waypoint arrival times (same rule as
-        n = max(1, int(np.ceil(np.max(np.abs(b - a)) / step)))  # planning.time_parameterize)
+        n = max(1, int(np.ceil(np.max(np.abs(b - a)) / step)))  # dtraj.time_parameterize)
         tw.append(tw[-1] + n * config.SIM_DT)
     for x in tw:
         ax.axvline(x, color=GRID, lw=0.8, zorder=0)
@@ -334,7 +344,7 @@ def panel_profiles(ax, res: planning.PlanResult, dense: np.ndarray | None) -> No
                  "gridlines = waypoints)", color=INK, fontsize=11)
 
 
-def panel_tree3d(out_png: str, manifest: dict, dbg: planning.PlanDebug, res: planning.PlanResult,
+def panel_tree3d(out_png: str, manifest: dict, dbg: dplanners.PlanDebug, res: dplanners.PlanResult,
                  sub: np.ndarray, dense: np.ndarray | None) -> None:
     """Paper-style single 3-D view: translucent obstacles, both trees at the TCP, path, labels.
 
@@ -425,6 +435,19 @@ def panel_tree3d(out_png: str, manifest: dict, dbg: planning.PlanDebug, res: pla
     plt.close(fig)
 
 
+def default_plan_debug_path() -> str | None:
+    """The recorded query for this trial in the requested run (default: the latest run)."""
+    from dishsim import metrics as dmetrics  # noqa: PLC0415
+
+    results = os.path.join(PROJECT_ROOT, "results")
+    run_dir = (os.path.join(results, "experiments", args.run) if args.run
+               else dmetrics.latest_run(results))
+    if not run_dir:
+        return None
+    tag = f"trial_{args.slot:02d}_{args.seed:02d}_{args.repeat}"
+    return os.path.join(run_dir, "plans", f"{tag}.npz")
+
+
 def main() -> None:
     os.makedirs(args.out_dir, exist_ok=True)
 
@@ -449,15 +472,44 @@ def main() -> None:
     if not len(goals):
         finish()
 
-    world = CollisionWorld(cache_dir=CACHE, self_check=True)
-
-    # the exact query of trial_<slot>_<seed>_<rep> (20_plan_and_place.py planning step)
-    rng = np.random.default_rng(args.seed * 1000 + args.repeat)
-    sub = goals[rng.choice(len(goals), min(config.GOALS_PER_PLAN, len(goals)), replace=False)]
-    dbg = planning.PlanDebug()
-    res = planning.plan_to_goals(world, START_Q, sub, budget_s=args.budget_s,
-                                 seed=args.seed * 7 + args.repeat + 1, debug=dbg)
-    dense = planning.time_parameterize(res.path_q) if res.path_q is not None else None
+    # Prefer the query the experiment recorded (scripts/experiment/run_trials.py --save_plan_debug).
+    # Re-planning here would mean duplicating the runner's seed arithmetic, goal-subset RNG and
+    # collision-world settings — which drifted apart once already (the visual used a different
+    # merged_cluster than the runner), so the artifact is the source of truth.
+    dbg = dplanners.PlanDebug()
+    artifact = args.plan_debug or default_plan_debug_path()
+    if artifact and os.path.exists(artifact):
+        arrays, meta = load_plan_debug(artifact)
+        for field in ("checked_q", "checked_valid", "tree_q", "tree_tag", "tree_edges", "raw_path_q"):
+            setattr(dbg, field, arrays.get(field))
+        dbg.n_checks = int(meta.get("n_checks", 0))
+        dbg.planner_data_ok = bool(meta.get("planner_data_ok", False))
+        dbg.planner_data_error = meta.get("planner_data_error", "")
+        sub = arrays["goal_qs"]
+        start_q = arrays["start_q"]
+        path_q = arrays["path_q"] if len(arrays["path_q"]) else None
+        res = dplanners.PlanResult(path_q, meta["plan_time_s"], meta["path_len_rad"],
+                                   meta["status"], meta["goal_index"])
+        world = CollisionWorld(cache_dir=CACHE, self_check=True,
+                               merged_cluster=bool(meta.get("merged_cluster", True)))
+        print(f"[INFO] read the recorded query from {os.path.relpath(artifact, PROJECT_ROOT)} "
+              f"(planner {meta.get('planner', {}).get('name')})")
+    elif args.replan:
+        world = CollisionWorld(cache_dir=CACHE, self_check=True)
+        rng = np.random.default_rng(args.seed * 1000 + args.repeat)
+        sub = goals[rng.choice(len(goals), min(config.GOALS_PER_PLAN, len(goals)), replace=False)]
+        start_q = START_Q
+        planner_name = args.planner or config.PLANNER
+        planner_params = {**config.PLANNER_PARAMS.get(planner_name, {}), "budget_s": args.budget_s}
+        planner = dplanners.make_planner(planner_name, **planner_params)
+        res = planner.plan(world, start_q, sub, seed=args.seed * 7 + args.repeat + 1, debug=dbg)
+        print(f"[INFO] --replan: fresh {planner_name} query (not the trial's recorded one)")
+    else:
+        check("plan-debug artifact present", False,
+              f"no saved query at {artifact} — rerun the experiment with --save_plan_debug, "
+              "or pass --replan to plan a fresh query here")
+        finish()
+    dense = dtraj.time_parameterize(res.path_q) if res.path_q is not None else None
     exec_time_s = len(dense) * config.SIM_DT if dense is not None else None
 
     n_edges = len(dbg.tree_edges) if dbg.tree_edges is not None else 0
@@ -473,7 +525,7 @@ def main() -> None:
     panel_3d(fig.add_subplot(gs[1, 0], projection="3d"), world.manifest, res, dbg, sub, dense)
     panel_profiles(fig.add_subplot(gs[1, 1]), res, dense)
     fig.suptitle(f"RRT-Connect, 6-D joint space — slot {args.slot}, seed {args.seed}, "
-                 f"repeat {args.repeat}, scenario {config.SCENARIO_NAME} (Phase F planner)",
+                 f"repeat {args.repeat}, scenario {config.SCENARIO_NAME} (run_trials planner)",
                  color=INK, fontsize=14)
     out_png = os.path.join(args.out_dir, f"plan_visual_{args.slot:02d}_{args.seed:02d}_{args.repeat}.png")
     fig.savefig(out_png, dpi=120, bbox_inches="tight", facecolor=SURFACE)

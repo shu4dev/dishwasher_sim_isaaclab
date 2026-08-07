@@ -14,11 +14,11 @@ YCB-derived assets — never make it public):
   ``assets/artvip`` (the originals re-download from HF), and ``results/``.
 - ``dishsim_media_<date>_<sha>.tar.gz`` — ``media/`` (run evidence; not regenerable).
 
-Restore with ``scripts/36_restore_assets.py``. Upload requires a one-time
+Restore with ``scripts/tools/restore_assets.py``. Upload requires a one-time
 ``huggingface-cli login`` with a write token.
 
 Venv-side, no Kit:
-    env_isaaclab/bin/python scripts/35_archive_assets.py [--upload] [--repo <user>/<name>]
+    env_isaaclab/bin/python scripts/tools/archive_assets.py [--upload] [--repo <user>/<name>]
 """
 
 import argparse
@@ -31,7 +31,7 @@ import sys
 import tarfile
 from datetime import datetime, timezone
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 ARCHIVE_DIR = os.path.join(PROJECT_ROOT, "outputs", "archive")
@@ -138,7 +138,7 @@ def upload(paths: list[str], tag: str) -> None:
                     path_in_repo="latest.json", repo_id=repo, repo_type="dataset")
     print(f"[INFO] uploaded to https://huggingface.co/datasets/{repo} (private)")
     print(f"[INFO] restore on a fresh instance:\n"
-          f"    env_isaaclab/bin/python scripts/36_restore_assets.py --repo {repo} --with_media")
+          f"    env_isaaclab/bin/python scripts/tools/restore_assets.py --repo {repo} --with_media")
 
 
 def main() -> None:

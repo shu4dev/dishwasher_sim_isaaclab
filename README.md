@@ -14,28 +14,47 @@ Robotiq 2F-85 on a pedestal, and a 15-class kitchen-object library (plates, sauc
 mugs, cups, tumblers, wine glasses, cutlery, serving utensils, pitcher, food container)
 scaled to fit the compact machine, each with measured grasp and placement specifications.
 
+The work is organised in three phases, mirrored by the layout of `scripts/`:
+
+| Phase | Folder | Does | Writes |
+|---|---|---|---|
+| **1 — Setup** | `scripts/setup/` | Prepare assets and build the simulation world: derive USDs, calibrate grasps, extract the collision world, derive goal sets, generate loaded scenes | `assets/`, `docs/` reports |
+| **2 — Experiment** | `scripts/experiment/` | Run a robotic algorithm in that world and record what happened | `results/experiments/<run_id>/` |
+| **3 — Evaluation** | `scripts/evaluation/` | Compute metrics and render videos **from those artifacts** — never re-planning or re-simulating | `results/evaluation/`, `media/` |
+
+**The planner is pluggable.** `run_trials.py --planner <name>` selects the algorithm; the
+runner never names one. Shipped: `rrt_connect` (default), `rrt_star`, `bit_star`, `prm`.
+Adding another is two steps and touches no experiment code — implement `Planner.plan()` in
+`src/dishsim/planners/` and register it there. Planners declare their own capabilities: `prm`
+sets `supports_multi_goal = False`, because the roadmap planners in this OMPL build never
+terminate on a multi-state goal, so the base class hands it the nearest goal instead.
+
+**Phase 3 is decoupled by construction.** An experiment records the measured scene state every
+physics step (~170 KB per trial, versus an 11 MB video); evaluation replays that recording
+kinematically to render video. So experiments run fast and headless, any trial can be
+re-rendered later from a different angle or resolution, and metrics never touch a simulator.
+The replay is verified rather than assumed: `verify_replay.py` reproduces every recorded link
+pose to **1e-7 m**, and a rendered clip scores **38 dB PSNR** against a live capture of the
+same trial.
+
 What ships around the scene:
 
 - **`src/dishsim/`** — the environment package: scene/robot configs, per-object registry
   (`config.py`, every tunable in one place), procedural rack + prop generators, USD
   derivation, analytic UR5e IK (8 branches, Pinocchio-validated), and a **Kit-free FCL
-  collision world** mirroring the PhysX scene at 100% measured parity — built for
-  thousands of fast queries by external planners.
-- **Classical planning runner** — OMPL RRT-Connect in 6-D joint space: rack
-  reconfiguration, countertop pick with a calibrated contact pinch, collision-monitored
-  execution, release, and per-mode placement evaluation (standing cells, plate tine slots,
-  bowl lean, cutlery-basket drops).
-- **Fully-loaded scene generator** — a deterministic, FCL-validated 34-item fill that
-  physically settles a complete load (31 items stable, racks close) — initial states for
+  collision world** mirroring the PhysX scene at 100 % measured parity — built for thousands
+  of fast queries by external planners.
+- **A fully-loaded scene generator** — a deterministic, FCL-validated 34-item fill that
+  physically settles a complete load (31 items stable, racks close): initial states for
   rearrangement planning, IL demonstrations, or RL resets.
 
-Everything runs headless on a single GPU (Isaac Sim **6.0.1** + Isaac Lab **3.0.0**);
-media capture needs `--enable_cameras`. One frame convention throughout: robot-base frame,
-meters, Z-up, XYZW quaternions. Reference docs: [docs/environment.md](docs/environment.md)
-(setup landmines), [docs/joint_report.md](docs/joint_report.md) (measured articulation
-numbers), [docs/success_criteria.md](docs/success_criteria.md) (task definitions),
-[docs/grasp_calibration.md](docs/grasp_calibration.md) and
-[docs/asset_survey.md](docs/asset_survey.md) (measurement provenance).
+Everything runs headless on a single GPU (Isaac Sim **6.0.1** + Isaac Lab **3.0.0**); only
+video rendering needs `--enable_cameras`. One frame convention throughout: robot-base frame,
+meters, Z-up, XYZW quaternions. Reference docs: [environment](docs/environment.md) (setup
+landmines), [joint report](docs/joint_report.md) (measured articulation numbers),
+[success criteria](docs/success_criteria.md) (task definitions),
+[grasp calibration](docs/grasp_calibration.md) and [asset survey](docs/asset_survey.md)
+(measurement provenance).
 
 ## Installation
 
@@ -55,14 +74,14 @@ launcher landmines.
 scripts/run_kit.sh -c "from huggingface_hub import snapshot_download; \
   snapshot_download(repo_id='X-Humanoid/ArtVIP', repo_type='dataset', \
   allow_patterns=['Articulated_objects/major_appliances/dishwasher/**'], local_dir='assets/artvip')"
-scripts/run_kit.sh scripts/00_inspect_scene.py --headless --test_door
+scripts/run_kit.sh scripts/setup/inspect_scene.py --headless --test_door
 
 # 3. object library (mug from the Isaac asset bucket; the rest from YCB scans + procedural)
-scripts/run_kit.sh scripts/01_make_prop_physics_usd.py --object 025_mug
-scripts/run_kit.sh scripts/03_build_object_assets.py
+scripts/run_kit.sh scripts/setup/make_prop_physics_usd.py --object 025_mug
+scripts/run_kit.sh scripts/setup/build_object_assets.py
 
 # 4. verify: Kit smoke test + planning-stack tests
-scripts/run_kit.sh scripts/05_kit_smoke.py --headless --enable_cameras
+scripts/run_kit.sh scripts/setup/kit_smoke.py --headless --enable_cameras
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m pytest tests/
 ```
 
@@ -72,7 +91,7 @@ step 1, then:
 
 ```bash
 huggingface-cli login   # once
-/workspace/isaaclab/env_isaaclab/bin/python scripts/36_restore_assets.py --with_media
+/workspace/isaaclab/env_isaaclab/bin/python scripts/tools/restore_assets.py --with_media
 ```
 
 > `./isaaclab.sh -p` exits 0 even when the wrapped script crashes — judge success from log
@@ -80,59 +99,112 @@ huggingface-cli login   # once
 
 ## Usage
 
-Run everything from the repo root. Kit scripts take `--headless` (+ `--enable_cameras` for
-media); venv scripts run with `/workspace/isaaclab/env_isaaclab/bin/python`.
+Run everything from the repo root. Kit scripts go through `scripts/run_kit.sh`; venv scripts
+run with `/workspace/isaaclab/env_isaaclab/bin/python`, written `$PY` below.
 
-**Build and validate the collision world** (per machine state: `both_out`, `both_in`,
-`placement`, `placement_open`; per carried object via `--object`):
+### Phase 1 — Setup: build the world
+
+Build and validate the collision world for a machine state (`both_out`, `both_in`,
+`placement`, `placement_open`) and a carried object (`--object`):
 
 ```bash
-scripts/run_kit.sh scripts/12_extract_geometry.py --headless --scenario placement   # extract
-env_isaaclab/bin/python scripts/13_decompose_meshes.py --scenario placement         # FCL pieces
-scripts/run_kit.sh scripts/14_parity_check.py --headless --scenario placement       # FCL vs PhysX
+scripts/run_kit.sh scripts/setup/extract_geometry.py --headless --scenario placement  # extract
+$PY scripts/setup/decompose_meshes.py --scenario placement                            # FCL pieces
+scripts/run_kit.sh scripts/setup/parity_check.py --headless --scenario placement      # FCL vs PhysX
 ```
 
-**Generate placement goal sets** (slots + IK goal configurations for the active object's
-placement mode):
+Derive the placement slots and IK goal sets that experiments plan to:
 
 ```bash
-scripts/run_kit.sh scripts/15_goal_configs.py --headless --enable_cameras --object mug
+scripts/run_kit.sh scripts/setup/goal_configs.py --headless --enable_cameras --object mug
 ```
 
-**Run classical planning trials** (pick → RRT-Connect plan → place → evaluate; per-trial
-JSON under `results/`, MP4 + stills under `media/`):
+Generate a fully-loaded machine (34-item deterministic fill, per-item stability gates,
+rack-closability check, timelapse + stills):
 
 ```bash
-# full choreography incl. robot rack reconfiguration, from an initial machine state
-scripts/run_kit.sh scripts/20_plan_and_place.py --headless --enable_cameras \
-    --scenario both_out --slots 2,7 --seeds 0-1
-# per-object demo in a pre-positioned state
-scripts/run_kit.sh scripts/20_plan_and_place.py --headless --enable_cameras \
-    --object tumbler --scenario placement --slots 2,7 --seeds 0
-```
-
-Success criteria per placement mode are defined in
-[docs/success_criteria.md](docs/success_criteria.md); planner internals can be visualized
-with `scripts/21_plan_visual.py` (venv, no Kit).
-
-**Generate a fully-loaded scene** (34-item deterministic fill, per-item stability gates,
-rack-closability check, timelapse/orbit/still media):
-
-```bash
-scripts/run_kit.sh scripts/25_capacity_fill.py --headless --enable_cameras
+scripts/run_kit.sh scripts/setup/capacity_fill.py --headless --enable_cameras
 ```
 
 **Add or recalibrate an object**: add its spec to `config.OBJECTS`, build the asset
-(`scripts/03_build_object_assets.py`), measure the pinch
-(`scripts/10_v0_scene.py --measure`, then `scripts/11_calibrate_grasp.py --object <name>`),
-and freeze the measured constants (`scripts/freeze_calibration.py --object <name>`). Never
-eyeball-edit measured values — every number traces to a calibration or inspection run.
+(`setup/build_object_assets.py`), measure the pinch (`setup/check_scene.py --measure`, then
+`setup/calibrate_grasp.py --object <name>`), and freeze the measured constants
+(`setup/freeze_calibration.py --object <name>`). Never eyeball-edit measured values — every
+number traces to a calibration or inspection run.
 
-**Archive / restore the generated artifacts** (private HF dataset):
+### Phase 2 — Experiment: run an algorithm
 
 ```bash
-env_isaaclab/bin/python scripts/35_archive_assets.py --upload
-env_isaaclab/bin/python scripts/36_restore_assets.py --with_media
+# default planner; no cameras needed — the trajectory is recorded either way
+scripts/run_kit.sh scripts/experiment/run_trials.py --headless \
+    --scenario both_out --object mug --slots 2,7 --seeds 0-1
+
+# choose and tune the algorithm; --save_plan_debug also records the search tree
+scripts/run_kit.sh scripts/experiment/run_trials.py --headless --planner rrt_star \
+    --planner_param range_rad=0.3 --planner_param budget_s=15 --slots 7 --seeds 0 \
+    --save_plan_debug
+
+# --live_video additionally captures inline (only needed for the replay A/B check)
+```
+
+Each run writes one self-contained directory:
+
+```
+results/experiments/<run_id>/
+  manifest.json              run provenance: planner + params, object, scenario, config hash
+  trials/<trial>.json        outcome, timings, placement error, failure stage
+  trajectories/<trial>.npz   measured state per physics step — the Phase 3 input
+  plans/<trial>.npz          the planning query + search tree (with --save_plan_debug)
+results/experiments/LATEST   the newest run id
+```
+
+`--run_id` names a run (default `<object>_<scenario>_<planner>_<UTC>`). Success criteria per
+placement mode are in [docs/success_criteria.md](docs/success_criteria.md).
+
+To compare algorithms, run the same slots and seeds under each planner and let Phase 3 build
+the table:
+
+```bash
+for p in rrt_connect rrt_star bit_star; do
+  scripts/run_kit.sh scripts/experiment/run_trials.py --headless --planner $p \
+      --slots 7 --seeds 0 --run_id "cmp_$p"
+done
+```
+
+### Phase 3 — Evaluation: read the artifacts
+
+None of these re-plan or re-run physics; the first and last need no Kit at all.
+
+```bash
+# metrics + figures for the latest run; --all adds the planner-comparison table
+$PY scripts/evaluation/compute_metrics.py --all
+
+# prove a recording replays exactly (kinematics only, no cameras, seconds)
+scripts/run_kit.sh scripts/evaluation/verify_replay.py --headless \
+    --trial results/experiments/<run_id>/trajectories/trial_07_00_0.npz
+
+# render video from recordings — one clip per camera, plus a final still
+scripts/run_kit.sh scripts/evaluation/render_videos.py --headless --enable_cameras \
+    --run_dir results/experiments/<run_id>/trajectories
+
+# the planner's search tree, drawn from the recorded query
+$PY scripts/evaluation/plan_visual.py --slot 7 --seed 0
+
+# A/B a replayed clip against a live capture (the decoupling acceptance test)
+$PY scripts/evaluation/compare_videos.py --live <live.mp4> --replay <replay.mp4>
+```
+
+Metrics land in `results/evaluation/<run_id>/`, videos in `media/trials/<run_id>/`.
+
+Note the phase boundary: a trial's success verdict depends on live contact forces, so it is
+decided in Phase 2 and only *aggregated* in Phase 3. Placement geometry is recomputable from
+a recorded pose, and evaluation cross-checks it against the trial record.
+
+### Archive / restore the generated artifacts
+
+```bash
+$PY scripts/tools/archive_assets.py --upload
+$PY scripts/tools/restore_assets.py --with_media
 ```
 
 ## Credits
@@ -147,7 +219,7 @@ env_isaaclab/bin/python scripts/36_restore_assets.py --with_media
   truth, and the pre-assembled UR5e + Robotiq 2F-85 (NVIDIA Omniverse asset EULA; fetched
   at spawn, derived copies stay local).
 - **OMPL** — Șucan, Moll, Kavraki, *"The Open Motion Planning Library"* (IEEE RAM 2012):
-  RRT-Connect planning.
+  the RRT-Connect, RRT*, BIT* and PRM implementations behind `dishsim.planners`.
 - **FCL / python-fcl** — Pan, Chitta, Manocha, *"FCL: A general purpose library for
   collision and proximity queries"* (ICRA 2012): the Kit-free collision world.
 - **CoACD** — Wei et al., *"Approximate Convex Decomposition for 3D Meshes with

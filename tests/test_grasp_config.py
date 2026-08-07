@@ -6,7 +6,7 @@
 
 Pure numpy + config/transforms imports (no Kit, no scene module). The calibrated-constant
 tests skip cleanly while the constants are still ``None`` (pre-calibration bootstrap state);
-they activate once ``scripts/11_calibrate_grasp.py`` results are frozen into config. Run with
+they activate once ``scripts/setup/calibrate_grasp.py`` results are frozen into config. Run with
 the project venv:
 
     PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m pytest \
@@ -23,7 +23,7 @@ CALIBRATED = (
     config.GRIPPER_APERTURE_GRASP_RAD is not None and config.GRASP_RIM_TCP_Z_M is not None
 )
 needs_calibration = pytest.mark.skipif(
-    not CALIBRATED, reason="grasp constants not calibrated yet (run scripts/11_calibrate_grasp.py)"
+    not CALIBRATED, reason="grasp constants not calibrated yet (run scripts/setup/calibrate_grasp.py)"
 )
 
 

@@ -2,19 +2,19 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Phase E: derive rack slots, generate IK goal sets, render the evidence.
+"""Derive rack slots, generate IK goal sets, render the evidence.
 
 Computation (slots + goal sets) is Kit-free (``dishsim.placement`` + the FCL world) and runs
 first; the Kit session then poses the robot at accepted and rejected configurations for
 labeled contact sheets. Outputs:
 
 - ``assets/cache/slots/slots.json``, ``goal_sets.json`` (with per-slot rejection funnels)
-- ``media/E/slot_detection.png`` (top-down rack wires + slot cells)
-- ``media/E/accepted_slot<k>_sheet.png`` (robot at accepted goal configs)
-- ``media/E/rejected_sheet.png`` (labeled rejected configs: limit / collision + pair)
+- ``media/goals/slot_detection.png`` (top-down rack wires + slot cells)
+- ``media/goals/accepted_slot<k>_sheet.png`` (robot at accepted goal configs)
+- ``media/goals/rejected_sheet.png`` (labeled rejected configs: limit / collision + pair)
 
 Run with:
-    scripts/run_kit.sh scripts/15_goal_configs.py --headless --enable_cameras
+    scripts/run_kit.sh scripts/setup/goal_configs.py --headless --enable_cameras
 """
 
 """Launch Isaac Sim Simulator first."""
@@ -24,16 +24,16 @@ import os
 
 from isaaclab.app import AppLauncher
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 
 parser = argparse.ArgumentParser(description="Slot frames + IK goal sets + contact sheets.")
 parser.add_argument("--seed", type=int, default=11)
 parser.add_argument("--out_dir", type=str, default=None,
-                    help="Media dir (default: media/E or media/E/<scenario>).")
+                    help="Media dir (default: media/goals or media/goals/<scenario>).")
 parser.add_argument("--sheets_per_slot", type=int, default=6)
 parser.add_argument("--object", type=str, default="mug", help="Carried object class (see config.OBJECTS).")
 parser.add_argument("--scenario", type=str, default=None,
-                    help="Rack-state scenario (default: the placement state scripts/20 reads).")
+                    help="Rack-state scenario (default: the placement state scripts/experiment/run_trials.py reads).")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -60,7 +60,7 @@ from dishsim import config  # noqa: E402
 config.set_active_object(args_cli.object)
 config.apply_scenario(args_cli.scenario or config.PLACEMENT_STATE)
 if args_cli.out_dir is None:
-    args_cli.out_dir = config.scenario_media_dir("E")
+    args_cli.out_dir = config.scenario_media_dir("goals")
 
 from dishsim import placement  # noqa: E402
 from dishsim import scene as dscene  # noqa: E402

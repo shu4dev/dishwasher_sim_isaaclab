@@ -16,7 +16,7 @@ Key invariants enforced here:
   :data:`dishsim.config.GRIPPER_APERTURE_GRASP_RAD` during all planned motion). The mimic
   joints are never position-written; the two stiff ``.*_inner_finger_joint`` drive *targets*
   are set mimic-consistently so they do not fight the mimic constraint (signs measured by
-  ``scripts/11_calibrate_grasp.py``); the three zero-stiffness knuckle joints stay untouched.
+  ``scripts/setup/calibrate_grasp.py``); the three zero-stiffness knuckle joints stay untouched.
 - The carried object is welded to ``wrist_3_link`` by a USD ``FixedJoint`` whose local pose is
   authored *analytically* from the config grasp chain (never captured from live prim poses), so
   the weld is exactly consistent with the FK used by the collision world and the goal sampler:
@@ -57,7 +57,7 @@ def t_wrist3_tcp() -> np.ndarray:
     if config.T_WRIST3_TCP_QUAT is None:
         raise RuntimeError(
             "config.T_WRIST3_TCP_QUAT is not measured yet — run "
-            "`scripts/run_kit.sh scripts/10_v0_scene.py --headless --measure` and freeze the "
+            "`scripts/run_kit.sh scripts/setup/check_scene.py --headless --measure` and freeze the "
             "printed constant into src/dishsim/config.py first."
         )
     return make_T(config.T_WRIST3_TCP_POS, config.T_WRIST3_TCP_QUAT)
@@ -68,7 +68,7 @@ def t_wrist3_obj() -> np.ndarray:
     if config.GRASP_TCP_OBJ_POS is None:
         raise RuntimeError(
             "config.GRASP_RIM_TCP_Z_M is not measured yet — run "
-            "`scripts/run_kit.sh scripts/11_calibrate_grasp.py --headless` and freeze the "
+            "`scripts/run_kit.sh scripts/setup/calibrate_grasp.py --headless` and freeze the "
             "printed constants into src/dishsim/config.py first."
         )
     return t_wrist3_tcp() @ make_T(config.GRASP_TCP_OBJ_POS, config.GRASP_TCP_OBJ_QUAT)
@@ -304,7 +304,7 @@ def set_weld_enabled(stage, weld_path: str, enabled: bool) -> None:
 
 #: Newton's-third-law sign relating ``object_contact.force_matrix_w`` rows (force ON the mug
 #: FROM each gripper body) to the reaction seen on the gripper bodies' own contact sensors.
-#: Verified live by ``scripts/11_calibrate_grasp.py`` (with the wrong sign the pad residual
+#: Verified live by ``scripts/setup/calibrate_grasp.py`` (with the wrong sign the pad residual
 #: doubles instead of cancelling — impossible to miss).
 GRIP_REACTION_SIGN = -1.0
 
@@ -313,7 +313,7 @@ def _resolve_grasp_aperture() -> float:
     if config.GRIPPER_APERTURE_GRASP_RAD is None:
         raise RuntimeError(
             "config.GRIPPER_APERTURE_GRASP_RAD is not measured yet — run "
-            "`scripts/run_kit.sh scripts/11_calibrate_grasp.py --headless` and freeze the "
+            "`scripts/run_kit.sh scripts/setup/calibrate_grasp.py --headless` and freeze the "
             "printed constants into src/dishsim/config.py first."
         )
     return config.GRIPPER_APERTURE_GRASP_RAD
@@ -379,7 +379,9 @@ def hold_targets(scene, aperture: float | None = None, arm_q=None) -> None:
     dw.set_joint_position_target_index(target=dw_targets)
 
 
-def ramp_gripper(scene, sim, end_aperture: float, steps: int, arm_q=None, per_step=None) -> float:
+def ramp_gripper(
+    scene, sim, end_aperture: float, steps: int, arm_q=None, per_step=None, step_fn=None
+) -> float:
     """Linearly ramp the ``finger_joint`` target to ``end_aperture`` — the visible close/open.
 
     Starts from the current *measured* finger position and calls :func:`hold_targets` with the
@@ -391,6 +393,10 @@ def ramp_gripper(scene, sim, end_aperture: float, steps: int, arm_q=None, per_st
         steps: physics steps for the ramp (e.g. :data:`dishsim.config.GRIPPER_CLOSE_RAMP_STEPS`).
         arm_q: optional arm override passed through to :func:`hold_targets`.
         per_step: optional callback invoked after every step (e.g. video capture).
+        step_fn: optional single-step function replacing the built-in
+            write/step/update sequence. Callers that record trajectories pass their own
+            stepper here so every physics step in a trial goes through one place and none can
+            be missed.
 
     Returns:
         The measured ``finger_joint`` position [rad] after the ramp.
@@ -402,9 +408,12 @@ def ramp_gripper(scene, sim, end_aperture: float, steps: int, arm_q=None, per_st
     for i in range(steps):
         frac = (i + 1) / steps
         hold_targets(scene, aperture=start + frac * (end_aperture - start), arm_q=arm_q)
-        scene.write_data_to_sim()
-        sim.step()
-        scene.update(dt)
+        if step_fn is None:
+            scene.write_data_to_sim()
+            sim.step()
+            scene.update(dt)
+        else:
+            step_fn(1)
         if per_step is not None:
             per_step(i)
     return float(robot.data.joint_pos.torch[0, ids[0]])
@@ -525,7 +534,7 @@ def write_default_states(scene, aperture: float | None = None) -> None:
             obj.write_root_pose_to_sim_index(root_pose=root_pose)
             obj.write_root_velocity_to_sim_index(root_velocity=obj.data.default_root_vel.torch.clone())
     # scene.reset() clears command buffers — targets must be re-armed AFTER it (a finger target
-    # set before reset silently reverts to the open pose; found the hard way in Phase C)
+    # set before reset silently reverts to the open pose; found the hard way during scene bring-up)
     scene.reset()
     hold_targets(scene, aperture=aperture)
 

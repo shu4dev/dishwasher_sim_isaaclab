@@ -13,7 +13,7 @@ handle, and fold-down cup shelves + RackMatic lever blocks on the upper rack.
 
 Kit-free by design (numpy + trimesh only, no ``pxr``): the same builder feeds three consumers —
 :mod:`dishsim.usd_prep` authors the merged per-group meshes into the derived v0 USD (PhysX/SDF
-side), ``scripts/13_decompose_meshes.py`` writes the exact convex parts as FCL pieces (no CoACD
+side), ``scripts/setup/decompose_meshes.py`` writes the exact convex parts as FCL pieces (no CoACD
 for the racks), and the Kit-free tests/preview validate the shape before any Kit run.
 
 Design space is the world-metric rack BODY frame: X = width, Y = depth with y=0 the front edge
@@ -831,7 +831,7 @@ def mug_probes(params: dict) -> list[tuple[tuple[float, float, float], tuple[flo
     diameter), matching placement.py's footprint formula. Each horizontal face carries the
     5 mm carried-hull inflation the planner applies (statics are uninflated), and the box
     bottom sits below ``floor_top + RELEASE_HOVER_M`` by that same margin — exactly bounding
-    what Phase E releases — replacing the old bbox-center/flat-floor probe that tines break.
+    what goal_configs releases — replacing the old bbox-center/flat-floor probe that tines break.
     """
     margin = config.COLLISION_MARGIN_M
     long_e = 2.0 * (config.OBJECT_BBOX_HALF[0] + margin)

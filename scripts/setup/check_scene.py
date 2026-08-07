@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Phase C: build, verify, and visually document the static v0 scene.
+"""Build, verify, and visually document the static scene.
 
 Two modes:
 
@@ -11,19 +11,19 @@ Two modes:
     prints the constant to freeze into ``config.T_WRIST3_TCP_QUAT``, plus the FK cross-check.
     Then sweeps ``finger_joint`` and prints the pad map (jaw separation, pad height, and the
     closing axis in the TCP frame per aperture) — the geometric input to the grasp calibration
-    (``scripts/11_calibrate_grasp.py``). Saved to ``media/C/pad_map.json``.
+    (``scripts/setup/calibrate_grasp.py``). Saved to ``media/scene_checks/pad_map.json``.
 
 default (requires the frozen TCP + grasp-calibration constants)
     Scene with the object welded to the wrist between the open jaws. Settles open, gates on
     zero contact, then visibly closes the gripper onto the mug (``grasp_close_open.mp4``),
     verifies the calibrated pad-force band and the weld against the analytic grasp chain, logs
-    every pose to ``media/C/scene_poses.json``, captures stills + pads-on-mug close-ups, runs
+    every pose to ``media/scene_checks/scene_poses.json``, captures stills + pads-on-mug close-ups, runs
     the reach/workspace check, records a 10 s wrist-wiggle clip proving rigidity while
     monitoring the dynamic pad-force peak (the ``GRIP_FORCE_EXEC_MAX_N`` measurement), and
     finally opens the jaws on camera, verifying a clean release of the contact forces.
 
 Run with:
-    scripts/run_kit.sh scripts/10_v0_scene.py --headless --enable_cameras [--measure]
+    scripts/run_kit.sh scripts/setup/check_scene.py --headless --enable_cameras [--measure]
 """
 
 """Launch Isaac Sim Simulator first."""
@@ -33,11 +33,11 @@ import os
 
 from isaaclab.app import AppLauncher
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 
 parser = argparse.ArgumentParser(description="Static v0 scene: verify + document.")
 parser.add_argument("--measure", action="store_true", help="Bootstrap: measure the TCP constant, no object.")
-parser.add_argument("--out_dir", type=str, default=os.path.join(PROJECT_ROOT, "media", "C"))
+parser.add_argument("--out_dir", type=str, default=os.path.join(PROJECT_ROOT, "media", "scene_checks"))
 parser.add_argument("--settle_steps", type=int, default=200)
 parser.add_argument("--wiggle_seconds", type=float, default=10.0)
 AppLauncher.add_app_launcher_args(parser)
@@ -239,7 +239,7 @@ def main() -> None:
             print(f"[INFO] pad-body allowance 2x = {pad_body_2x*1e3:.1f} mm")
             print(f"[INFO] jaw meets the {2*config.OBJECT_RIM_RADIUS_M*1e3:.1f} mm mug at "
                   f"theta ~ {theta_pred:.3f} rad (pad sep {target_sep*1e3:.1f} mm)")
-            print("[INFO] calibration starting point (scripts/11_calibrate_grasp.py):")
+            print("[INFO] calibration starting point (scripts/setup/calibrate_grasp.py):")
             print(f"       --rim_z {rim_z_cand:.4f}   # pad_mid_z(theta_pred) - PAD_ENGAGEMENT_M")
         os.makedirs(args_cli.out_dir, exist_ok=True)
         pad_map_path = os.path.join(args_cli.out_dir, "pad_map.json")

@@ -7,7 +7,7 @@
 Covers: reference-appliance dimensional compliance (measured from the built parts, not just the
 params — 3-gauge wires, 30 mm Whirlpool tine rows, candy canes, beads, fillets, wheels, shelves),
 per-part convexity/watertightness, exact assembled bounds, the floor-datum contract that
-placement.derive_slots_from_rack depends on, the FCL feasibility probes exactly as Phase D runs
+placement.derive_slots_from_rack depends on, the FCL feasibility probes exactly as decompose_meshes runs
 them, the Phase-E slot guarantee (>= 3 mug-feasible slot columns), the insert-group split, the
 upper-rack raise wrist-clearance arithmetic, and determinism plus the USD x-scale
 pre-compensation round-trip.
@@ -245,7 +245,7 @@ def test_floor_datum(racks):
 
 
 # ---------------------------------------------------------------------------------------------
-# 5. FCL probes (exactly as scripts/13 runs them)
+# 5. FCL probes (exactly as scripts/setup/decompose_meshes.py runs them)
 # ---------------------------------------------------------------------------------------------
 
 

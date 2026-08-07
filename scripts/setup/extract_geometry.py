@@ -2,14 +2,14 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Phase D (Kit side): dump the settled v0 scene's geometry into the collision-world cache.
+"""Kit side: dump the settled scene's geometry into the collision-world cache.
 
-Builds the exact Phase C scene (welded object, locked statics), settles it, then writes
+Builds the exact check_scene scene (welded object, locked statics), settles it, then writes
 per-rigid-body meshes + ``scene_state.json`` to ``assets/cache/``. Runs with
 ``use_fabric=False`` so live USD prim transforms are trustworthy (the Fabric staleness trap).
 
 Run with:
-    scripts/run_kit.sh scripts/12_extract_geometry.py --headless
+    scripts/run_kit.sh scripts/setup/extract_geometry.py --headless
 """
 
 """Launch Isaac Sim Simulator first."""
@@ -19,7 +19,7 @@ import os
 
 from isaaclab.app import AppLauncher
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 
 parser = argparse.ArgumentParser(description="Dump collision-world cache from the v0 scene.")
 parser.add_argument("--settle_steps", type=int, default=200)

@@ -18,7 +18,7 @@ and blow up without them.
 **Dishwasher.** ArtVIP ``dishwasher_2`` with the passive-door derived USD (world-weld removed,
 authored door drive neutralized — see :mod:`dishsim.usd_prep`). ``DISHWASHER_CFG`` keeps the
 RL-era passive-door setup that the inspection script's stability/door tests are written against.
-Phase C adds a ``DISHWASHER_V0_CFG`` (door locked open at 90 deg, lower rack extended).
+``DISHWASHER_V0_CFG`` is the static variant (door locked open at 90 deg, lower rack extended).
 
 Joint names (verified against the composed stage, see ``docs/joint_report.md``):
 arm ``shoulder_pan_joint, shoulder_lift_joint, elbow_joint, wrist_1_joint, wrist_2_joint,

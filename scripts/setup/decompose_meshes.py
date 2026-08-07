@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Phase D (venv side, no Kit): convex pieces for every cached body + rack feasibility probes.
+"""Venv side (no Kit): convex pieces for every cached body + rack feasibility probes.
 
 Reads ``assets/cache/scene_state.json`` and fills ``assets/cache/coacd/<name>_<hash>/`` with
 convex ``piece_*.obj`` files for every body flagged ``coacd``. Two paths:
@@ -21,7 +21,7 @@ sampled gaps between plate tines must be free, and the same box centered ON a ti
 (negative control: catches missing or misplaced pieces).
 
 Run with:
-    /workspace/isaaclab/env_isaaclab/bin/python scripts/13_decompose_meshes.py [--force]
+    /workspace/isaaclab/env_isaaclab/bin/python scripts/setup/decompose_meshes.py [--force]
 """
 
 import argparse
@@ -30,7 +30,7 @@ import sys
 
 import numpy as np
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 import fcl  # noqa: E402
@@ -86,7 +86,7 @@ def decompose(name: str, mesh_rel: str) -> str | None:
             f"rack_gen alignment ({name})",
             ok,
             f"extracted vs generated: bounds dev {dev * 1e3:.2f} mm, area err {area_err * 100:.2f}% "
-            "(stale cache or scale pre-compensation bug -> re-run scripts/12)",
+            "(stale cache or scale pre-compensation bug -> re-run scripts/setup/extract_geometry.py)",
         )
         if not ok:  # never leave a populated-but-unverified piece dir behind
             if os.path.isdir(out_dir):
@@ -120,7 +120,7 @@ def decompose(name: str, mesh_rel: str) -> str | None:
         check(
             f"prop_gen alignment ({spec.name})",
             ok,
-            f"extracted vs generated: bounds dev {dev * 1e3:.2f} mm (stale cache -> re-run scripts/12)",
+            f"extracted vs generated: bounds dev {dev * 1e3:.2f} mm (stale cache -> re-run scripts/setup/extract_geometry.py)",
         )
         if not ok:
             if os.path.isdir(out_dir):
@@ -265,10 +265,10 @@ def main() -> None:
         manifest = load_manifest(CACHE)
     except FileNotFoundError:
         raise SystemExit(
-            f"[FAIL] no cache at {CACHE} — run scripts/12_extract_geometry.py "
+            f"[FAIL] no cache at {CACHE} — run scripts/setup/extract_geometry.py "
             f"--scenario {config.SCENARIO_NAME} first"
         ) from None
-    media_dir = config.scenario_media_dir("D")
+    media_dir = config.scenario_media_dir("collision_world")
     for name, entry in manifest["statics"].items():
         if entry.get("coacd"):
             out = decompose(name, entry["mesh"])

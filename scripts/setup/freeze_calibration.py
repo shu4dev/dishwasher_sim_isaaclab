@@ -2,14 +2,14 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Freeze a scripts/11 calibration result into the object registry (config.OBJECTS).
+"""Freeze a scripts/setup/calibrate_grasp.py calibration result into the object registry (config.OBJECTS).
 
-Reads ``media/C2/<object>/calibration.json`` and patches the object's ``GraspSpec`` in
+Reads the calibration JSON written by ``calibrate_grasp.py`` and patches the object's ``GraspSpec`` in
 ``src/dishsim/config.py`` with the measured aperture + force band (the same derivation the
 mug's frozen constants used: band = steady/3 .. 3x steady, exec cap = max(12, 2x steady)).
 Numeric provenance: every written number traces to the calibration run, never eyeballed.
 
-Venv-side: ``env_isaaclab/bin/python scripts/freeze_calibration.py --object bowl``
+Venv-side: ``env_isaaclab/bin/python scripts/setup/freeze_calibration.py --object bowl``
 """
 
 import argparse
@@ -18,16 +18,21 @@ import os
 import re
 import sys
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
-parser = argparse.ArgumentParser(description="Freeze scripts/11 calibration into config.OBJECTS.")
+parser = argparse.ArgumentParser(description="Freeze scripts/setup/calibrate_grasp.py calibration into config.OBJECTS.")
 parser.add_argument("--object", type=str, required=True)
 args = parser.parse_args()
 
 
 def main() -> None:
-    cal_path = os.path.join(PROJECT_ROOT, "media", "C2", args.object, "calibration.json")
+    # mirrors calibrate_grasp's output rule: the mug writes to media/calibration/,
+    # every other object to media/calibration/<object>/
+    cal_dir = os.path.join(PROJECT_ROOT, "media", "calibration")
+    if args.object != "mug":
+        cal_dir = os.path.join(cal_dir, args.object)
+    cal_path = os.path.join(cal_dir, "calibration.json")
     with open(cal_path) as f:
         cal = json.load(f)
     theta = float(cal["theta_grasp"])

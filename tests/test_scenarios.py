@@ -88,9 +88,9 @@ def test_scenario_cache_dir_mapping():
 
 def test_scenario_media_dir_mapping():
     try:
-        assert config.scenario_media_dir("F").endswith(os.path.join("media", "F"))
+        assert config.scenario_media_dir("trials").endswith(os.path.join("media", "trials"))
         config.apply_scenario("both_in")
-        assert config.scenario_media_dir("F").endswith(os.path.join("media", "F", "both_in"))
+        assert config.scenario_media_dir("trials").endswith(os.path.join("media", "trials", "both_in"))
     finally:
         config.apply_scenario(BASELINE)
 

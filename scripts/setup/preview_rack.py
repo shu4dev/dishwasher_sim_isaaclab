@@ -4,11 +4,11 @@
 
 """Kit-free preview of the procedural rack geometry (rack_gen) — evidence before any Kit run.
 
-Renders zone-colored 3-view PNGs for both racks into ``media/D/`` and prints a spec-compliance
+Renders zone-colored 3-view PNGs for both racks into ``media/collision_world/`` and prints a spec-compliance
 table (part counts, bounds, tine/gap/rim numbers measured from the built parts, not the params).
 
 Run with:
-    /workspace/isaaclab/env_isaaclab/bin/python scripts/preview_rack.py
+    /workspace/isaaclab/env_isaaclab/bin/python scripts/setup/preview_rack.py
 """
 
 import os
@@ -16,14 +16,14 @@ import sys
 
 import numpy as np
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from dishsim import config, rack_gen  # noqa: E402
 
 
 def main() -> None:
-    media_dir = os.path.join(PROJECT_ROOT, "media", "D")
+    media_dir = os.path.join(PROJECT_ROOT, "media", "collision_world")
     for body, params in config.RACK_GEN.items():
         parts = rack_gen.build_rack(params)
         merged = rack_gen.merged_mesh(parts)

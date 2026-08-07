@@ -1,4 +1,4 @@
-# ArtVIP dishwasher variant survey (Phase 1)
+# ArtVIP dishwasher variant survey
 
 Source: HuggingFace dataset `X-Humanoid/ArtVIP`, `Articulated_objects/major_appliances/dishwasher/`
 (Apache-2.0), downloaded to `assets/artvip/` (79 MB, all 7 variants). Surveyed with a pxr/UsdPhysics
@@ -18,7 +18,7 @@ Decisions:
   `RevoluteJoint_dishwasher_2_middle` (axis X, limits 0–90°), rack joints
   `PrismaticJoint_dishwasher_2_up` / `_down`, bodies `E_body_5` (base), `E_door_4` (door),
   `E_shelf_03` / `E_shelf_1_04` (racks). The USD-authored door drive (k=20 toward 90°) is an
-  *active* drive and is overridden to stiffness 0 in the RL config (Phase 3) — no USD edits.
+  *active* drive and is overridden to stiffness 0 in the passive-door config — no USD edits.
 - Every mesh in every variant uses **SDF mesh collision**. Kept as authored for v0 (good concave
   fidelity for racks); per-env cost is measured at low env counts before scaling (fallback: local
   re-authored copy in `assets/artvip_derived/` with convex decomposition).
@@ -28,7 +28,7 @@ Decisions:
 ## YCB mug derivation
 
 `Props/YCB/Axis_Aligned_Physics/` in the 6.0 asset library only contains 4 objects (cracker box,
-sugar box, soup can, mustard bottle) — no mug/bowl. `scripts/01_make_mug_physics_usd.py` derives
+sugar box, soup can, mustard bottle) — no mug/bowl. `scripts/setup/make_prop_physics_usd.py` derives
 `assets/props/025_mug_physics.usd` from the plain `Axis_Aligned/025_mug.usd`: `RigidBodyAPI` +
 `MassAPI` (0.118 kg) on the root prim, convex-decomposition collision on the mesh, textures
 co-located. Verified: schemas present on reopen.

@@ -62,7 +62,7 @@ survived; `assets/`, `logs/`, and pip installs had to be recreated).
 2. **`sim` must be a `PresetCfg`** — for the gym/manager-env workflow. The v0 standalone
    scripts sidestep the whole mechanism by constructing
    `SimulationContext(sim_utils.SimulationCfg(..., physics=PhysxCfg()))` directly (the pattern
-   in `scripts/00_inspect_scene.py`); only gym-registered tasks need the
+   in `scripts/setup/inspect_scene.py`); only gym-registered tasks need the
    `PresetCfg`/`resolve_presets` dance.
 3. **Package name vs. repo name.** The Python package is `dishsim` (under `src/`, previously
    `dishwasher_tasks`), never `dishwasher_sim_isaaclab`: Kit's extension scan turns a directory
@@ -90,9 +90,9 @@ Notable findings in the 6.0 asset library:
   005_tomato_soup_can, 006_mustard_bottle. The mug (025) and bowl (024) exist only in the plain
   `Axis_Aligned/` folder **without** physics APIs (and Isaac Lab's spawner cannot add a missing
   `RigidBodyAPI`). This project derives a local physics-enabled mug USD instead
-  (`scripts/01_make_mug_physics_usd.py`).
+  (`scripts/setup/make_prop_physics_usd.py`).
 
-## Smoke test (Phase 0)
+## Smoke test (initial bring-up)
 
 ```bash
 cd /workspace/isaaclab
@@ -114,7 +114,7 @@ Two findings from the smoke-test process:
 2. `./isaaclab.sh -p` **exits 0 even when the wrapped script crashes** — success must be verified
    from the log output (iteration lines / absence of tracebacks), never from the exit code.
 
-## v0 planning stack (Phase B)
+## Planning stack
 
 The RL train/play entry points were removed in the v0 pivot (recoverable from the
 `archive/rl-door-opening` branch). The v0 stack adds a venv plus CPU planning dependencies:
@@ -141,8 +141,8 @@ The RL train/play entry points were removed in the v0 pivot (recoverable from th
 **OMPL 2.0 nanobind API notes** (differs from the old Py++ bindings all tutorials show):
 `setStateValidityChecker` accepts a plain Python callable; there is no `ob.StateValidityCheckerFn`
 and no `ob.State(space)` constructor — allocate states with `space.allocState()` and index them.
-`ob.GoalStates` exists (Phase F uses it). `ob.PlannerData(si)` + `planner.getPlannerData(pd)` are
-bound and work (verified 2026-07-31, used by `scripts/21_plan_visual.py`): `pd.getEdges(i)` returns
+`ob.GoalStates` exists (dishsim.planners uses it). `ob.PlannerData(si)` + `planner.getPlannerData(pd)` are
+bound and work (verified 2026-07-31, used by `scripts/evaluation/plan_visual.py`): `pd.getEdges(i)` returns
 a plain `list[int]`, `pd.getVertex(i).getTag()` gives RRT-Connect's tree tags (1 = start tree,
 2 = goal tree), vertex states support direct indexing, and `pd.printGraphML()` returns the GraphML
 document as a string (per-vertex reals in its `coords` attribute — the readback fallback

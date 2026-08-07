@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Restore archived assets/media on a fresh instance (counterpart of scripts/35).
+"""Restore archived assets/media on a fresh instance (counterpart of scripts/tools/archive_assets.py).
 
 Downloads the tarballs from the private HF dataset (or takes local paths), safe-extracts
 them into the project root, re-downloads the ArtVIP originals (the derived dishwasher
@@ -12,8 +12,8 @@ them into the project root, re-downloads the ArtVIP originals (the derived dishw
 Prerequisites on a fresh box: the planning venv (README setup step 1) and, for private-repo
 download, ``huggingface-cli login``.
 
-    env_isaaclab/bin/python scripts/36_restore_assets.py [--repo <id>] [--with_media]
-    env_isaaclab/bin/python scripts/36_restore_assets.py --local outputs/archive/dishsim_assets_<tag>.tar.gz
+    env_isaaclab/bin/python scripts/tools/restore_assets.py [--repo <id>] [--with_media]
+    env_isaaclab/bin/python scripts/tools/restore_assets.py --local outputs/archive/dishsim_assets_<tag>.tar.gz
 """
 
 import argparse
@@ -22,7 +22,7 @@ import os
 import sys
 import tarfile
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 parser = argparse.ArgumentParser(description="Restore archived assets/media from HF (or local tarballs).")
@@ -123,7 +123,7 @@ def validate_caches(manifest: dict) -> bool:
         tag = "OK" if recomputed == stamp["config_hash"] else "STALE"
         if tag == "STALE":
             print(f"[WARN] {rel}: config.py drifted since the archive "
-                  f"({recomputed} != {stamp['config_hash']}) — re-run scripts/12 for this state")
+                  f"({recomputed} != {stamp['config_hash']}) — re-run scripts/setup/extract_geometry.py for this state")
         else:
             print(f"[OK] {rel} ({stamp['object_name']}, {stamp['scenario']})")
     config.set_active_object("mug")

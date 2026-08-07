@@ -12,7 +12,7 @@ an articulated ArtVIP dishwasher (door locked open at 90°, procedural realistic
 plans against a standalone Kit-free FCL collision world
 (`src/dishsim/collision_world.py`, built for thousands of external-planner queries); the
 carried object rides a calibrated contact pinch with a hidden wrist weld bearing the load;
-placement stability is verified per mode. `scripts/25_capacity_fill.py` physically settles
+placement stability is verified per mode. `scripts/setup/capacity_fill.py` physically settles
 a full 34-item load — initial states for rearrangement/IL/RL. The old RL door-opening
 pipeline lives on the `archive/rl-door-opening` branch.
 
@@ -38,17 +38,22 @@ Pure planning work uses the venv python directly. Run from this project root:
 
 ```bash
 # scene inspection: regenerates docs/joint_report.md, stability + passive-door tests
-scripts/run_kit.sh scripts/00_inspect_scene.py --headless --test_door
+scripts/run_kit.sh scripts/setup/inspect_scene.py --headless --test_door
 
 # derive the physics-enabled YCB plate (mug fallback: --object 025_mug)
-scripts/run_kit.sh scripts/01_make_prop_physics_usd.py --object 029_plate
+scripts/run_kit.sh scripts/setup/make_prop_physics_usd.py --object 029_plate
 
 # planning-stack tests (venv, no Kit; plugin autoload off — hydra's plugin breaks outside Kit)
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m pytest tests/
 
-# entry points (see README Usage): 05 kit smoke, 10 scene checks/pad map, 11 grasp
-# calibration, 12–14 collision world, 15 goal configs, 20 plan-and-place, 25 capacity
-# fill, 35/36 asset archive/restore
+# entry points: scripts/ is split by phase (see README Usage)
+#   setup/      kit_smoke, inspect_scene, prepare_dishwasher_usd, make_prop_physics_usd,
+#               build_object_assets, check_scene, calibrate_grasp, freeze_calibration,
+#               extract_geometry, decompose_meshes, parity_check, goal_configs,
+#               preview_rack, capacity_fill
+#   experiment/ run_trials            (--planner selects the algorithm)
+#   evaluation/ compute_metrics, render_videos, verify_replay, compare_videos, plan_visual
+#   tools/      archive_assets, restore_assets
 ```
 
 **`./isaaclab.sh -p` exits 0 even when the wrapped script crashes.** Always verify success from
@@ -91,22 +96,36 @@ it editable):
   motion — matching the frozen-aperture FCL cluster. The mimic-driven joints are never
   position-written; the two stiff `.*_inner_finger_joint` drive *targets* are additionally
   kept mimic-consistent by `scene.hold_targets` (signs measured by
-  `scripts/11_calibrate_grasp.py`) so they don't fight the mimic constraint; the three
+  `scripts/setup/calibrate_grasp.py`) so they don't fight the mimic constraint; the three
   zero-stiffness knuckle joints stay untouched always.
 - `usd_prep.py` — derived dishwasher USDs. Removes ArtVIP's world-weld `FixedJoint` (body1 set,
   no body0 — pins the machine at its authored pose and blows up any relocated spawn).
   `make_dishwasher_rl_usd` also zeroes the authored door drive (passive door, used by the
-  inspection script); Phase C adds `make_dishwasher_v0_usd` (door locked open). Downloaded
+  inspection script); `make_dishwasher_v0_usd` is the static variant (door locked open). Downloaded
   originals are never modified.
-- `config.py` (Phase C) — every tunable: grasp transform (defined ONCE), calibrated grasp
-  aperture + pad-force bands (measured by `scripts/11_calibrate_grasp.py`, not eyeballed),
+- `config.py` — every tunable: grasp transform (defined ONCE), calibrated grasp
+  aperture + pad-force bands (measured by `scripts/setup/calibrate_grasp.py`, not eyeballed),
   slot tolerances, CoACD params, collision margin, plan budgets, camera poses. Tune here, not
   inline.
-- `collision_world.py` (Phase D) — Kit-free FCL world loaded from `assets/cache/` +
+- `collision_world.py` — Kit-free FCL world loaded from `assets/cache/` +
   `scene_state.json` manifest (frames asserted at load). No `pxr`/`isaaclab` imports here, ever.
+- `planners/` — the pluggable planner layer. `Planner.plan(world, start, goals, seed, debug)`
+  is the whole interface; `OMPLPlanner` holds the shared query machinery and subclasses
+  override only `_make_planner(si)`. World and seed are per-CALL because one trial plans
+  against three different collision worlds. Registered: rrt_connect (default), rrt_star,
+  bit_star, prm. `prm` sets `supports_multi_goal = False` — measured: the roadmap planners in
+  this OMPL build never terminate on a multi-state `ob.GoalStates`.
+- `trajectory.py` / `replay.py` — the Phase 2 → Phase 3 handoff. Experiments record measured
+  state every physics step; evaluation replays it kinematically. Three traps are encoded in
+  `replay.py`'s docstring and must not be "simplified" away: (1) `sim.forward()` updates
+  physics but NOT the renderer, so playback must `sim.step()`; (2) without
+  `scene.write_default_states` the dishwasher renders ~25 cm off its spawn pose; (3) drive
+  targets must be set to the recorded pose or the PD controllers drag links ~21 mm per frame.
+- `metrics.py` — Kit-free aggregation over trial JSONs. Contact-derived verdicts (success)
+  stay in Phase 2; evaluation aggregates, never re-derives them.
 
 Numeric provenance: every prim path, joint name, frame offset, and placement number is a
-*measured* value recorded in `docs/joint_report.md` (generated by `scripts/00_inspect_scene.py`)
+*measured* value recorded in `docs/joint_report.md` (generated by `scripts/setup/inspect_scene.py`)
 and `docs/asset_survey.md`. If you change the dishwasher variant, robot home pose, or scene
 layout, re-run the inspection script and take the new numbers from the report — don't eyeball
 them. Two traps encoded there: spawn poses place the articulation **root link** frame (for the

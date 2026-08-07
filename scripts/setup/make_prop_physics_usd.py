@@ -16,14 +16,14 @@ Convex decomposition (rather than convex hull) matters here: a convex hull would
 plate's dish or the mug's cavity, so the object could not nest between rack tines.
 
 Run with:
-    /workspace/isaaclab/isaaclab.sh -p scripts/01_make_prop_physics_usd.py --object 029_plate
-    /workspace/isaaclab/isaaclab.sh -p scripts/01_make_prop_physics_usd.py --object 025_mug
+    /workspace/isaaclab/isaaclab.sh -p scripts/setup/make_prop_physics_usd.py --object 029_plate
+    /workspace/isaaclab/isaaclab.sh -p scripts/setup/make_prop_physics_usd.py --object 025_mug
 """
 
 import argparse
 import os
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 
 # Measured YCB object masses [kg].
 DEFAULT_MASS = {

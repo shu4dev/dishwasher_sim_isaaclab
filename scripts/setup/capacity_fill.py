@@ -20,7 +20,7 @@ beauty pass: fixed stills + a 360-degree orbit clip.
 Outputs: ``results/fill/capacity.json``, ``media/fill/fill_timelapse.mp4``, per-view stills,
 ``orbit.mp4``.
 
-Run: ``scripts/run_kit.sh scripts/25_capacity_fill.py --headless --enable_cameras``
+Run: ``scripts/run_kit.sh scripts/setup/capacity_fill.py --headless --enable_cameras``
 """
 
 """Launch Isaac Sim Simulator first."""
@@ -30,7 +30,7 @@ import os
 
 from isaaclab.app import AppLauncher
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 
 parser = argparse.ArgumentParser(description="Physics capacity fill + closability check.")
 parser.add_argument("--settle_steps_item", type=int, default=75)

@@ -11,7 +11,7 @@ Sources (see ``config.OBJECTS``):
   origin at the bbox center), measured, and authored as a textured USD with physics APIs.
 - ``procedural``: :mod:`dishsim.prop_gen` builders — authored as per-part USD meshes, each
   with an exact convex-hull collider (no CoACD slop on thin shells).
-- ``isaac_ycb`` (the mug): built by ``scripts/01_make_prop_physics_usd.py``; skipped here.
+- ``isaac_ycb`` (the mug): built by ``scripts/setup/make_prop_physics_usd.py``; skipped here.
 
 Numeric provenance: measured dims are printed per object and compared against the registry
 (±2 mm gate). On mismatch the block to freeze into ``config.OBJECTS`` is printed and the
@@ -23,7 +23,7 @@ Outputs:
 - ``assets/props/parts/<name>/piece_%03d.obj`` (procedural analytic collision parts)
 - ``media/assets/<name>_views.png`` + ``media/assets/library_sheet.png``
 
-Runs without Kit boot (pxr + trimesh only): ``scripts/run_kit.sh scripts/03_build_object_assets.py``
+Runs without Kit boot (pxr + trimesh only): ``scripts/run_kit.sh scripts/setup/build_object_assets.py``
 """
 
 import argparse
@@ -34,7 +34,7 @@ import urllib.request
 
 import numpy as np
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from dishsim import config  # noqa: E402
@@ -284,7 +284,7 @@ def build_one(name: str) -> str | None:
         author_usd_parts(spec, parts, color, out_usd)
         export_meshes(spec, mesh, parts=parts)
     else:
-        print(f"[SKIP] {name}: source {spec.source} is built by scripts/01")
+        print(f"[SKIP] {name}: source {spec.source} is built by scripts/setup/make_prop_physics_usd.py")
         return None
     png = os.path.join(MEDIA_DIR, f"{name}_views.png")
     render_views(spec, mesh, png)

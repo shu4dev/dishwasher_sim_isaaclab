@@ -218,7 +218,7 @@ def _author_rack_meshes(stage) -> None:
             # same SDF mesh collision the ArtVIP racks used, finer voxels for the 2.2 mm wires.
             # The Physx* schemas are authored by NAME (AddAppliedSchema + raw attributes, the
             # same pattern the ArtVIP asset uses) because the PhysxSchema codegen module only
-            # exists inside Kit, while this also runs bare (scripts/02).
+            # exists inside Kit, while this also runs bare (scripts/setup/prepare_dishwasher_usd.py).
             UsdPhysics.CollisionAPI.Apply(prim)
             UsdPhysics.MeshCollisionAPI.Apply(prim).CreateApproximationAttr("sdf")
             prim.AddAppliedSchema("PhysxCollisionAPI")

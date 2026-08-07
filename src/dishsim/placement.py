@@ -6,13 +6,13 @@
 
 Reality check baked in: the ArtVIP ``dishwasher_2`` lower rack (``E_shelf_1_04``) is a shallow
 **wire basket** (~5 cm deep grid of wires), not a plate rack with tall tines — measured in
-Phase D's decomposition overlays. The carried mug therefore *stands on the wire floor*; a
+the decomposition overlays. The carried mug therefore *stands on the wire floor*; a
 "slot" is a standing position on a grid derived from the basket geometry (footprint-sized
 cells inset from the rim). The derivation is geometric and recorded per slot (``source``
 field); tolerances come from :mod:`dishsim.config`.
 
 Everything here runs in the plain venv (numpy + trimesh + the FCL world); the only Isaac use
-is the Kit pass in ``scripts/15_goal_configs.py`` that renders contact sheets.
+is the Kit pass in ``scripts/setup/goal_configs.py`` that renders contact sheets.
 """
 
 import json

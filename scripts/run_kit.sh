@@ -11,7 +11,7 @@
 # exports that environment, then hands off to the wrapper unchanged.
 #
 # Usage (from the project root):
-#   scripts/run_kit.sh scripts/05_kit_smoke.py --headless --enable_cameras
+#   scripts/run_kit.sh scripts/setup/kit_smoke.py --headless --enable_cameras
 set -e
 ISAAC_ROOT=/workspace/isaaclab/_isaac_sim
 export CARB_APP_PATH="$ISAAC_ROOT/kit"

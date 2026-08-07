@@ -7,7 +7,7 @@
 Computes a target pose for every item of a realistic full dishwasher load from the registry
 (:data:`dishsim.config.OBJECTS`) + the rack generator numbers (:data:`dishsim.config.RACK_GEN`),
 in each rack's design/body frame, then maps into the robot-base frame via the cached
-``T_base_body`` transforms. ``scripts/25_capacity_fill.py`` spawns the items at these poses
+``T_base_body`` transforms. ``scripts/setup/capacity_fill.py`` spawns the items at these poses
 (+ a small drop hover) and lets physics settle; this module also pre-validates the layout with
 FCL (pairwise item overlap + item-vs-rack clearance) and checks the closability z-budget so a
 layout bug fails fast in the venv, not after a Kit boot.
@@ -20,7 +20,7 @@ Layout (compact 6-place-setting machine):
   3 knives, leaning +-8 deg.
 - **Upper rack**: 2 mugs + cups + tumblers upside-down in the two open zones (greedy lattice
   packing, FCL-pruned); 2 wine glasses upside-down where the packer finds room (the stemware
-  scallop lie-in is a physics stretch goal scripts/25 attempts first); spatula + serving spoon
+  scallop lie-in is a physics stretch goal scripts/setup/capacity_fill.py attempts first); spatula + serving spoon
   lying flat along the slope strips under the cup shelves.
 
 Every number here is either a registry dim, a RACK_GEN parameter, or derived from them.
@@ -42,7 +42,7 @@ UPPER = "E_shelf_03"
 #: clearance between packed drinkware body circles [m] — upside-down items standing nearly
 #: rim-to-rim is how real racks are loaded; the FCL validation checks the true meshes
 ITEM_MARGIN_M = 0.002
-#: spawn hover above the computed rest pose [m] (scripts/25 drops from here)
+#: spawn hover above the computed rest pose [m] (scripts/setup/capacity_fill.py drops from here)
 SPAWN_HOVER_M = 0.020
 
 
@@ -275,7 +275,7 @@ def _upper_items() -> list[tuple[str, int, np.ndarray, str]]:
     # -- wine glasses: stemware lie-in over the right slope strip / cup shelf ------------------
     # Bowl rim down on the ascending slope, foot up toward the wall-side shelf with its
     # stemware scallops; spawned tilted and physics-settled (stability gate judges it, with a
-    # documented lay-down fallback in scripts/25).
+    # documented lay-down fallback in scripts/setup/capacity_fill.py).
     for k, y in enumerate((0.060, 0.130)):
         T = np.eye(4)
         T[:3, :3] = _rot("y", -145.0)  # axis (bottom->rim) points down-interior; foot up-wall
@@ -343,7 +343,7 @@ def _item_mesh(name: str) -> trimesh.Trimesh:
     path = os.path.join(config.ASSETS_DIR, "props", "meshes", f"{name}.obj")
     if name == "mug" and not os.path.exists(path):
         # the mug ships as a USD-only asset; its true body-frame mesh lives in the baseline
-        # geometry cache (extracted by scripts/12) — a bbox stand-in would false-positive
+        # geometry cache (extracted by scripts/setup/extract_geometry.py) — a bbox stand-in would false-positive
         # the handle spacing checks
         cache_obj = os.path.join(config.CACHE_DIR, "meshes", "object.obj")
         if os.path.exists(cache_obj):

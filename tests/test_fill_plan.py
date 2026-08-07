@@ -14,12 +14,12 @@ from dishsim import fill_plan
 
 needs_cache = pytest.mark.skipif(
     not os.path.exists(os.path.join(config.CACHE_DIR, "scene_state.json")),
-    reason="baseline geometry cache not built yet (run scripts/12)",
+    reason="baseline geometry cache not built yet (run scripts/setup/extract_geometry.py)",
 )
 
 needs_meshes = pytest.mark.skipif(
     not os.path.isdir(os.path.join(config.ASSETS_DIR, "props", "meshes")),
-    reason="object meshes not built yet (run scripts/03)",
+    reason="object meshes not built yet (run scripts/setup/build_object_assets.py)",
 )
 
 

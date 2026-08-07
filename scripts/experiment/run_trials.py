@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Phase F: rack reconfiguration -> countertop pick -> plan -> place -> evaluate, per trial.
+"""Trial runner: rack reconfiguration -> countertop pick -> plan -> place -> evaluate, per trial.
 
 The both_in / both_out scenarios are INITIAL machine states; the machine itself is unmodified.
 Each trial does what a human does:
@@ -26,7 +26,7 @@ Each trial does what a human does:
 Every trial writes ``results/.../trial_<id>.json``, a full MP4, and a final close-up still.
 
 Run with (shake-out):
-    scripts/run_kit.sh scripts/20_plan_and_place.py --headless --enable_cameras \
+    scripts/run_kit.sh scripts/experiment/run_trials.py --headless --enable_cameras \
         --scenario both_in --slots 2 --seeds 0
 """
 
@@ -37,7 +37,7 @@ import os
 
 from isaaclab.app import AppLauncher
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 
 parser = argparse.ArgumentParser(description="OMPL plan-and-place trials with rack + pick phases.")
 parser.add_argument("--slots", type=str, default="1,2,3", help="Comma-separated slot ids.")
@@ -49,6 +49,16 @@ parser.add_argument("--media", type=str, default=None,
                     help="Media dir (default: media/F or media/F/<scenario>).")
 parser.add_argument("--skip_existing", action="store_true", help="Skip trials whose JSON exists (resume).")
 parser.add_argument("--object", type=str, default="mug", help="Carried object class (see config.OBJECTS).")
+parser.add_argument("--planner", type=str, default=None,
+                    help="Motion planner name (default: config.PLANNER; see dishsim.planners).")
+parser.add_argument("--planner_param", type=str, action="append", default=[], metavar="K=V",
+                    help="Override one planner parameter (repeatable), e.g. range_rad=0.3.")
+parser.add_argument("--traj_dir", type=str, default=None,
+                    help="Trajectory-recording dir (default: <run>/trajectories).")
+parser.add_argument("--run_id", type=str, default=None,
+                    help="Name of this run (default: <object>_<scenario>_<planner>_<UTC>).")
+parser.add_argument("--save_plan_debug", action="store_true",
+                    help="Also record each plan query + search tree for the planning visual.")
 parser.add_argument("--scenario", type=str, default="both_out",
                     help="Initial rack-state scenario (see config.SCENARIOS).")
 AppLauncher.add_app_launcher_args(parser)
@@ -77,24 +87,35 @@ from dishsim import config  # noqa: E402
 # scenario BEFORE scene/robots imports — they bind rack targets + the derived USD at import
 config.set_active_object(args_cli.object)
 config.apply_scenario(args_cli.scenario)
-if args_cli.out is None and args_cli.object != "mug":
-    args_cli.out = os.path.join(PROJECT_ROOT, "results", "demos", args_cli.object)
-if args_cli.media is None and args_cli.object != "mug":
-    args_cli.media = os.path.join(config.scenario_media_dir("F"), args_cli.object)
+# Every run writes one self-contained directory — the unit Phase 3 consumes:
+#   results/experiments/<run_id>/{manifest.json,trials/,trajectories/,plans/}
+_PLANNER_NAME = args_cli.planner or config.PLANNER
+RUN_ID = args_cli.run_id or "_".join([
+    args_cli.object, args_cli.scenario, _PLANNER_NAME,
+    __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y%m%d-%H%M%S"),
+])
+RUN_DIR = os.path.join(PROJECT_ROOT, "results", "experiments", RUN_ID)
 if args_cli.out is None:
-    args_cli.out = (os.path.join(PROJECT_ROOT, "results") if config.SCENARIO_NAME == "both_out"
-                    else os.path.join(PROJECT_ROOT, "results", config.SCENARIO_NAME))
+    args_cli.out = os.path.join(RUN_DIR, "trials")
+if args_cli.traj_dir is None:
+    args_cli.traj_dir = os.path.join(RUN_DIR, "trajectories")
 if args_cli.media is None:
-    args_cli.media = config.scenario_media_dir("F")
+    args_cli.media = os.path.join(PROJECT_ROOT, "media", "trials", RUN_ID)
+PLAN_DIR = os.path.join(RUN_DIR, "plans")
 
 from scipy.spatial.transform import Rotation  # noqa: E402
 
-from dishsim import planning, rack_ops  # noqa: E402
+from dishsim import rack_ops  # noqa: E402
+from dishsim import robots as drobots  # noqa: E402
+from dishsim import trajectory as dtraj  # noqa: E402
 from dishsim import scene as dscene  # noqa: E402
 from dishsim.collision_world import CollisionWorld  # noqa: E402
 from dishsim.geometry import config_hash as geometry_config_hash  # noqa: E402
 from dishsim.media import CameraRig, VideoWriter  # noqa: E402
 from dishsim.placement import SlotFrame, evaluate_placement  # noqa: E402
+from dishsim.planners import available as available_planners  # noqa: E402
+from dishsim.planners import PlanDebug, make_planner  # noqa: E402
+from dishsim.plan_debug_io import save_plan_debug  # noqa: E402
 from dishsim.transforms import T_inv, make_T  # noqa: E402
 from dishsim.ur5e_kin import fk_wrist3, ik_wrist3_all  # noqa: E402
 
@@ -106,12 +127,26 @@ ACTION = config.state_params(args_cli.scenario).get("rack_action")
 # Weld-carried classes skip Phase P and START WELDED at the carry pose — the v0 framing
 # (grasp acquisition out of scope): edge-pinch discs cannot be pinched off a flat countertop
 # (the jaw would have to close across the full disc), and rim-edge thin walls give a binary
-# 0->60 N contact against the rigid weld (measured in the scripts/11 staircase) — for both,
+# 0->60 N contact against the rigid weld (measured in the calibrate_grasp staircase) — for both,
 # the visible close stops at first contact and the weld carries.
 # handle_pinch joined the weld-carried set after measurement: the near-closed pad arc
 # drags a free-lying 30 g fork ~21 mm during the close (weld gate 5 mm) — real systems
 # solve this with tactile servoing, out of scope here
 START_WELDED = config.active_object_spec().grasp.family in ("edge_pinch", "rim_edge", "handle_pinch")
+
+
+#: Bumped when the per-trial JSON schema changes incompatibly (evaluation reads this).
+TRIAL_SCHEMA_VERSION = 1
+
+
+def _usd_stamp(path: str) -> dict:
+    """(path, size, mtime) of an asset — the drift guard evaluation checks before replaying."""
+    try:
+        st = os.stat(path)
+        return {"path": os.path.relpath(path, PROJECT_ROOT), "size": st.st_size,
+                "mtime": int(st.st_mtime)}
+    except OSError:
+        return {"path": path, "size": None, "mtime": None}
 
 
 def parse_ids(spec: str) -> list[int]:
@@ -148,6 +183,9 @@ def countertop_T_base(instance: int = 0) -> np.ndarray:
 def main() -> None:
     os.makedirs(args_cli.out, exist_ok=True)
     os.makedirs(args_cli.media, exist_ok=True)
+    os.makedirs(args_cli.traj_dir, exist_ok=True)
+    if args_cli.save_plan_debug:
+        os.makedirs(PLAN_DIR, exist_ok=True)
 
     # ---- collision worlds ---------------------------------------------------------------------
     # Placement-state cache: slots/goals + pick/place/retract planning. For internal states
@@ -166,7 +204,7 @@ def main() -> None:
     if slots_doc.get("config_hash") != geometry_config_hash():
         raise SystemExit(
             f"[FAIL] slots.json is stale for object {config.ACTIVE_OBJECT!r} in the placement "
-            f"state — re-run scripts/15_goal_configs.py --object {config.ACTIVE_OBJECT}"
+            f"state — re-run scripts/setup/goal_configs.py --object {config.ACTIVE_OBJECT}"
         )
     # per-piece cluster for thin-insertion modes (the merged gripper+object hull cannot
     # enter a bay or a tine gap); merged (3x faster, strictly conservative) otherwise
@@ -192,6 +230,38 @@ def main() -> None:
         rack_world, rack_body, rack_joint, rack_params = None, None, None, None
         T_base_rack, e0, e1 = None, 0.0, 0.0
 
+    # ---- planner: selected by name; this runner never mentions an algorithm ----------------
+    planner_name = args_cli.planner or config.PLANNER
+    if planner_name not in available_planners():
+        raise SystemExit(f"[FAIL] unknown planner {planner_name!r} (choices: {available_planners()})")
+    planner_params = dict(config.PLANNER_PARAMS.get(planner_name, {}))
+    for item in args_cli.planner_param:
+        key, _, value = item.partition("=")
+        try:
+            planner_params[key.strip()] = json.loads(value)
+        except json.JSONDecodeError:
+            planner_params[key.strip()] = value
+    planner = make_planner(planner_name, **planner_params)
+    print(f"[INFO] planner: {planner.describe()}")
+
+    manifest = {
+        "run_id": RUN_ID, "schema_version": TRIAL_SCHEMA_VERSION,
+        "created_utc": __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc).isoformat(timespec="seconds"),
+        "object": args_cli.object, "scenario": args_cli.scenario,
+        "planner": planner.describe(),
+        "slots": parse_ids(args_cli.slots), "seeds": parse_ids(args_cli.seeds),
+        "repeats": args_cli.repeats, "sim_dt": config.SIM_DT,
+        "config_hash": geometry_config_hash(), "trials": [],
+    }
+    def write_manifest() -> None:
+        with open(os.path.join(RUN_DIR, "manifest.json"), "w") as f:
+            json.dump(manifest, f, indent=2)
+        with open(os.path.join(PROJECT_ROOT, "results", "experiments", "LATEST"), "w") as f:
+            f.write(RUN_ID + chr(10))
+    write_manifest()
+    print(f"[INFO] run: {os.path.relpath(RUN_DIR, PROJECT_ROOT)}")
+
     T_base_mug0 = countertop_T_base(0)
     if not START_WELDED:
         for w in ((pick_world,) if rack_world is None else (rack_world, pick_world)):
@@ -215,6 +285,7 @@ def main() -> None:
         rig.apply_poses(sim.device)
     dscene.write_default_states(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
     dt = sim.get_physics_dt()
+    rec = dtraj.TrajectoryRecorder()
     robot = scene["robot"]
     obj = scene["carried_object"]
     arm_ids, _ = robot.find_joints(config.ARM_JOINTS, preserve_order=True)
@@ -252,11 +323,13 @@ def main() -> None:
             scene.write_data_to_sim()
             sim.step()
             scene.update(dt)
+            rec.sample()  # post-step state; a no-op until rec.begin() (skips pre-trial settles)
 
     def reset_trial() -> None:
         """Weld OFF, racks at the scenario's initial state, object staged (countertop, or
         welded at the carry pose for START_WELDED classes)."""
-        dscene.set_weld_enabled(scene.stage, weld_path, False)
+        rec.set_phase("release-settle")
+        set_weld(False)
         dscene.set_rack_target_override(None)
         full = template_open.clone()
         robot.write_joint_position_to_sim_index(position=full)
@@ -272,10 +345,15 @@ def main() -> None:
             obj.write_root_pose_to_sim_index(root_pose=mug_pose_t())
         obj.write_root_velocity_to_sim_index(root_velocity=torch.zeros((1, 6), dtype=torch.float32, device=device))
         if START_WELDED:
-            dscene.set_weld_enabled(scene.stage, weld_path, True)
+            set_weld(True)
         dscene.hold_targets(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
         for _ in range(30):
             step_sim(1)
+
+    def set_weld(enabled: bool) -> None:
+        """Toggle the weld and record it, so the replay renders whatever actually held."""
+        dscene.set_weld_enabled(scene.stage, weld_path, enabled)
+        rec.set_weld(enabled)
 
     def object_pose_base() -> np.ndarray:
         p = obj.data.root_pos_w.torch[0].cpu().numpy()
@@ -314,18 +392,34 @@ def main() -> None:
                     print(f"[INFO] {tag}: exists, skipping")
                     continue
                 trial_id += 1
-                record = {"trial": tag, "slot": slot_id, "seed": seed, "repeat": rep,
+                record = {"schema_version": TRIAL_SCHEMA_VERSION,
+                          "trial": tag, "slot": slot_id, "seed": seed, "repeat": rep,
                           "object": config.ACTIVE_OBJECT, "placement_mode": config.active_object_spec().placement.mode,
+                          "planner": planner.describe(),
                           "scenario": args_cli.scenario, "rack_action": ACTION,
-                          "success": False, "failure_stage": None, "plan_time_s": None,
+                          "success": False, "failure_stage": None, "failure_detail": None,
+                          "plan_time_s": None,
                           "path_len_rad": None, "exec_steps": 0, "goal_config_index": None,
                           "grasp_force_n": None, "exec_pad_peak_n": None, "retract": None,
                           "rack_final_err_m": None, "pick_weld_err_mm": None,
+                          "final_pose_err": None, "trajectory": None,
                           "media": {}}
                 slot = slots[slot_id]
                 goals = goal_sets.get(slot_id, np.zeros((0, 6)))
 
                 reset_trial()
+                rec.begin(scene, sim, {
+                    "trial": tag, "slot": slot_id, "seed": seed, "repeat": rep,
+                    "object": config.ACTIVE_OBJECT, "scenario": args_cli.scenario,
+                    "placement_mode": config.active_object_spec().placement.mode,
+                    "start_welded": START_WELDED,
+                    "planner": planner.describe(),
+                    "config_hash": geometry_config_hash(),
+                    "cameras": {k: [list(v[0]), list(v[1])] for k, v in config.CAMERAS.items()},
+                    "camera_hw": list(config.CAMERA_HW), "camera_fps": config.CAMERA_FPS,
+                    "usd": {"dishwasher": _usd_stamp(drobots.DISHWASHER_V0_USD_PATH),
+                            "object": _usd_stamp(config.OBJECT_USD)},
+                })
                 video = None
                 frame_i = 0
                 if rig is not None:
@@ -333,18 +427,26 @@ def main() -> None:
                     record["media"]["video"] = os.path.relpath(video.path, PROJECT_ROOT)
 
                 def capture():
+                    """Advance the capture stride, tag the step, and write a video frame.
+
+                    The counter advances whether or not a video is being written, so the
+                    recorded `captured` mask — the contract the replay renderer follows — is
+                    identical with and without --live_video.
+                    """
                     nonlocal frame_i
+                    frame_i += 1
+                    if frame_i % 2:
+                        return
+                    rec.mark_captured()
                     if video is None:
                         return
-                    frame_i += 1
-                    if frame_i % 2 == 0:
-                        rig.update(dt)
-                        video.add(rig.grab()["front"])
+                    rig.update(dt)
+                    video.add(rig.grab()["front"])
 
                 def run_path(path_q, aperture, stage_name, exclude=(), rack_targets=None):
                     """Execute a joint path under time parameterization with contact gating.
                     Returns None on success, else the failure detail string."""
-                    for wp in planning.time_parameterize(np.asarray(path_q)):
+                    for wp in dtraj.time_parameterize(np.asarray(path_q)):
                         if rack_targets is not None:
                             dscene.set_rack_target_override(rack_targets)
                         dscene.hold_targets(scene, arm_q=wp, aperture=aperture)
@@ -362,6 +464,7 @@ def main() -> None:
                             dscene.hold_targets(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
                             step_sim(1)
                             capture()
+                        rec.set_phase("no-goal-idle")
                         record["failure_stage"] = "no-goal-config"
                         raise StopIteration
 
@@ -395,11 +498,12 @@ def main() -> None:
                             raise StopIteration
                         flip_r, T_engage, T_pre, pre_sols, arm_path = plan_r
 
-                        res = planning.plan_to_goals(rack_world, np.array(config.HOME_Q), np.array(pre_sols),
-                                                     seed=seed * 7 + rep + 1)
+                        res = planner.plan(rack_world, np.array(config.HOME_Q), np.array(pre_sols),
+                                           seed=seed * 7 + rep + 1)
                         if res.status != "solved":
                             record["failure_stage"] = "rack-approach-plan"
                             raise StopIteration
+                        rec.set_phase("rack-approach")
                         fail = run_path(res.path_q, approach_aperture, "rack-approach")
                         if fail:
                             record["failure_stage"] = "rack-approach-plan"
@@ -414,20 +518,23 @@ def main() -> None:
                             record["failure_stage"] = "rack-approach-plan"
                             record["failure_detail"] = "IK discontinuity on the engage reach-in"
                             raise StopIteration
+                        rec.set_phase("rack-engage")
                         fail = run_path(seg, approach_aperture, "rack-engage", exclude=gripper_bodies)
                         if fail:
                             record["failure_stage"] = "rack-slide-fault"
                             record["failure_detail"] = fail
                             raise StopIteration
+                        rec.set_phase("rack-grip-close")
                         if ACTION["mode"] == "pull":  # wrap the rod
                             dscene.ramp_gripper(scene, sim, config.RACK_HANDLE_APERTURE_RAD, 45,
-                                                arm_q=seg[-1], per_step=lambda i: capture())
+                                                arm_q=seg[-1], per_step=lambda i: capture(), step_fn=step_sim)
                         # re-seed the slide path from the actually-reached engage config
                         arm_path2 = rack_ops.slide_arm_path(rack_world, T_base_rack, rack_params, ACTION,
                                                             e0, seg[-1], flip=flip_r)
                         arm_path = arm_path if arm_path2 is None else arm_path2
                         slide_aperture = (config.RACK_HANDLE_APERTURE_RAD if ACTION["mode"] == "pull"
                                           else config.RACK_PUSH_APERTURE_RAD)
+                        rec.set_phase("rack-slide")
                         n_steps = config.RACK_SLIDE_STEPS
                         for i in range(n_steps):
                             s = (i + 1) / n_steps
@@ -450,6 +557,7 @@ def main() -> None:
                             dscene.hold_targets(scene, arm_q=arm_path[-1], aperture=slide_aperture)
                             step_sim(1)
                             capture()
+                        rec.set_phase("rack-settle")
                         rack_err = abs(float(dw.data.joint_pos.torch[0, rack_jids[0]]) - e1)
                         record["rack_final_err_m"] = round(rack_err, 4)
                         if rack_err > config.RACK_SLIDE_TOL_M:
@@ -460,7 +568,8 @@ def main() -> None:
                         # disengage: open (pull mode) and back straight off the handle
                         if ACTION["mode"] == "pull":
                             dscene.ramp_gripper(scene, sim, config.GRIPPER_APERTURE_OPEN_RAD, 45,
-                                                arm_q=arm_path[-1], per_step=lambda i: capture())
+                                                arm_q=arm_path[-1], per_step=lambda i: capture(), step_fn=step_sim)
+                        rec.set_phase("rack-disengage")
                         T_now = fk_wrist3(arm_path[-1]) @ T_w3_tcp
                         T_up = T_now.copy()
                         T_up[:3, 3] = T_now[:3, 3] - approach * config.RACK_APPROACH_HOVER_M
@@ -478,9 +587,10 @@ def main() -> None:
                         # already welded at the carry pose: visible close onto the object,
                         # then carry (the weld bears the load — v0's grasp-acquisition-out-
                         # of-scope framing for flat discs that cannot be pinched off a table)
+                        rec.set_phase("welded-close")
                         dscene.ramp_gripper(scene, sim, config.GRIPPER_APERTURE_GRASP_RAD,
                                             config.GRIPPER_CLOSE_RAMP_STEPS, arm_q=q_free,
-                                            per_step=lambda i: capture())
+                                            per_step=lambda i: capture(), step_fn=step_sim)
                         q_carry = np.asarray(q_free, dtype=float)
                         record["q_carry"] = [round(float(v), 6) for v in q_carry]
                     else:
@@ -495,11 +605,12 @@ def main() -> None:
                             record["failure_stage"] = "pick-plan"
                             record["failure_detail"] = "no collision-free IK at the pre-grasp hover"
                             raise StopIteration
-                        res = planning.plan_to_goals(pick_world, q_free, np.array(pre_sols),
-                                                     seed=seed * 7 + rep + 2)
+                        res = planner.plan(pick_world, q_free, np.array(pre_sols),
+                                           seed=seed * 7 + rep + 2)
                         if res.status != "solved":
                             record["failure_stage"] = "pick-plan"
                             raise StopIteration
+                        rec.set_phase("pick-approach")
                         fail = run_path(res.path_q, config.GRIPPER_APERTURE_OPEN_RAD, "pick-approach")
                         if fail:
                             record["failure_stage"] = "pick-plan"
@@ -522,18 +633,21 @@ def main() -> None:
                             dscene.hold_targets(scene, arm_q=seg[-1], aperture=config.GRIPPER_APERTURE_OPEN_RAD)
                             step_sim(1)
                             capture()
+                        rec.set_phase("pick-pregrasp-settle")
                         f0 = dscene.grip_forces(scene)
                         if max(f0["partners"].values()) > 0.05:
                             record["failure_stage"] = "pick-grasp-fault"
                             record["failure_detail"] = f"contact before the close ({max(f0['partners'].values()):.2f} N)"
                             raise StopIteration
+                        rec.set_phase("pick-close")
                         dscene.ramp_gripper(scene, sim, config.GRIPPER_APERTURE_GRASP_RAD,
                                             config.GRIPPER_CLOSE_RAMP_STEPS, arm_q=seg[-1],
-                                            per_step=lambda i: capture())
+                                            per_step=lambda i: capture(), step_fn=step_sim)
                         for _ in range(60):
                             dscene.hold_targets(scene, arm_q=seg[-1])
                             step_sim(1)
                             capture()
+                        rec.set_phase("pick-hold")
                         gf0 = dscene.grip_forces(scene)
                         record["grasp_force_n"] = round(float(np.mean(gf0["pads_n"])), 2)
                         # per-pad band + non-pad silence; the EXTERNAL residual is legitimately
@@ -552,11 +666,12 @@ def main() -> None:
                             raise StopIteration
 
                         # hidden weld takes the load (anchors == the grasp transform -> zero error)
-                        dscene.set_weld_enabled(scene.stage, weld_path, True)
+                        set_weld(True)
                         for _ in range(30):
                             dscene.hold_targets(scene, arm_q=seg[-1])
                             step_sim(1)
                             capture()
+                        rec.set_phase("pick-weld-verify")
                         obj_pos = obj.data.root_pos_w.torch[0].cpu().numpy()
                         weld_err = float(np.linalg.norm(obj_pos - dscene.grasp_pose_w(seg[-1])[0])) * 1e3
                         record["pick_weld_err_mm"] = round(weld_err, 2)
@@ -573,6 +688,7 @@ def main() -> None:
                             record["failure_stage"] = "pick-plan"
                             record["failure_detail"] = "IK discontinuity on the lift"
                             raise StopIteration
+                        rec.set_phase("pick-lift")
                         fail = run_path(seg, None, "pick-lift", exclude=gripper_bodies)
                         if fail:
                             record["failure_stage"] = "pick-grasp-fault"
@@ -595,7 +711,17 @@ def main() -> None:
                         record["failure_stage"] = "pick-plan"
                         record["failure_detail"] = "carry start config in collision"
                         raise StopIteration
-                    res = planning.plan_to_goals(world, q_carry, sub, seed=seed * 7 + rep + 1)
+                    plan_dbg = PlanDebug() if args_cli.save_plan_debug else None
+                    res = planner.plan(world, q_carry, sub, seed=seed * 7 + rep + 1, debug=plan_dbg)
+                    if plan_dbg is not None:
+                        save_plan_debug(os.path.join(PLAN_DIR, f'{tag}.npz'), plan_dbg, res,
+                                        start_q=q_carry, goal_qs=sub,
+                                        meta={'trial': tag, 'planner': planner.describe(),
+                                              'seed': seed * 7 + rep + 1,
+                                              'cache_dir': os.path.relpath(placement_cache, PROJECT_ROOT),
+                                              'merged_cluster': bool(merged),
+                                              'object': config.ACTIVE_OBJECT,
+                                              'scenario': config.PLACEMENT_STATE})
                     record["plan_time_s"] = round(res.plan_time_s, 3)
                     if res.status != "solved":
                         record["failure_stage"] = "planner-timeout"
@@ -603,7 +729,8 @@ def main() -> None:
                     record["path_len_rad"] = round(res.path_len_rad, 3)
                     record["goal_config_index"] = int(res.goal_index)
 
-                    dense = planning.time_parameterize(res.path_q)
+                    rec.set_phase("place-execute")
+                    dense = dtraj.time_parameterize(res.path_q)
                     exec_fail, exec_pad_peak = None, 0.0
                     for wp in dense:
                         dscene.hold_targets(scene, arm_q=wp)  # squeeze stays commanded
@@ -629,16 +756,19 @@ def main() -> None:
 
                     # hold, verify quiet, then the visible release: open the jaws BEFORE the
                     # weld lets go (pads must unload cleanly), then drop the weld
+                    rec.set_phase("place-hold")
                     goal_q = np.asarray(dense[-1], dtype=float)
                     for _ in range(30):
                         step_sim(1)
                         capture()
+                    rec.set_phase("place-open")
                     dscene.ramp_gripper(scene, sim, config.GRIPPER_APERTURE_OPEN_RAD,
                                         config.GRIPPER_OPEN_RAMP_STEPS, arm_q=goal_q,
-                                        per_step=lambda i: capture())
+                                        per_step=lambda i: capture(), step_fn=step_sim)
                     for _ in range(15):
                         step_sim(1)
                         capture()
+                    rec.set_phase("post-open-hold")
                     gf_open = dscene.grip_forces(scene)
                     if max(gf_open["partners"].values()) > 0.05:
                         record["failure_stage"] = "release-fault"
@@ -646,12 +776,13 @@ def main() -> None:
                             f"pads still load the mug after open ({max(gf_open['partners'].values()):.2f} N)"
                         )
                         raise StopIteration
-                    dscene.set_weld_enabled(scene.stage, weld_path, False)
+                    set_weld(False)
                     for _ in range(150):
                         step_sim(1)
                         capture()
 
                     # -- retract the tool along -z, validated in the post-release world -------
+                    rec.set_phase("retract")
                     T_b_w3 = fk_wrist3(goal_q)
                     tool_dir = T_b_w3[:3, :3] @ np.array([0.0, 1.0, 0.0])  # tool z == +y_wrist3
                     T_target = T_b_w3.copy()
@@ -695,7 +826,7 @@ def main() -> None:
                         record["retract"] = "skipped-no-valid-path"
                     else:
                         retract_fail, graze_peak, graze_body = None, 0.0, ""
-                        for wp in planning.time_parameterize(np.array([goal_q, q_retract])):
+                        for wp in dtraj.time_parameterize(np.array([goal_q, q_retract])):
                             dscene.hold_targets(scene, arm_q=wp,
                                                 aperture=config.GRIPPER_APERTURE_OPEN_RAD)
                             step_sim(1)
@@ -714,6 +845,7 @@ def main() -> None:
                             "" if graze_peak == 0.0 else f", grazed {graze_body} ({graze_peak:.2f} N)"
                         )
 
+                    rec.set_phase("final-settle")
                     for _ in range(config.SETTLE_STEPS):
                         step_sim(1)
                         capture()
@@ -732,6 +864,14 @@ def main() -> None:
                     if not START_WELDED:
                         pick_world.remove_object("countertop_mug")
                         pick_world.add_object("countertop_mug", mug_pieces, T_base_mug0)
+                    # the recording IS the Phase 3 input: write it on every exit path,
+                    # failures included (a failed trial's video is the one worth watching)
+                    traj_path = os.path.join(args_cli.traj_dir, f"{tag}.npz")
+                    tmeta = rec.end(traj_path, extra_meta={"success": record["success"],
+                                                           "failure_stage": record["failure_stage"]})
+                    record["trajectory"] = {"path": os.path.relpath(traj_path, PROJECT_ROOT),
+                                            "n_steps": tmeta["n_steps"],
+                                            "n_captured": tmeta["n_captured"]}
 
                 if video is not None:
                     video.close()
@@ -751,6 +891,9 @@ def main() -> None:
                 with open(json_path, "w") as f:
                     json.dump(record, f, indent=2)
                 summary.append(record)
+                manifest["trials"].append({"trial": tag, "success": record["success"],
+                                           "failure_stage": record["failure_stage"]})
+                write_manifest()
                 print(f"[INFO] {tag}: success={record['success']} stage={record['failure_stage']} "
                       f"rack_err={record['rack_final_err_m']} weld={record['pick_weld_err_mm']}mm "
                       f"plan={record['plan_time_s']}s err={record.get('final_pose_err')}")

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""PlanDebug instrumentation of plan_to_goals: checker capture, PlannerData tree, GraphML fallback.
+"""PlanDebug instrumentation of Planner.plan: checker capture, PlannerData tree, GraphML fallback.
 
 Kit-free and asset-free: the collision world is stubbed, so only ompl + numpy are exercised.
 Run with the project venv:
@@ -14,7 +14,8 @@ Run with the project venv:
 import numpy as np
 
 from dishsim import config
-from dishsim.planning import PlanDebug, _coords_from_graphml, plan_to_goals
+from dishsim.planners import PlanDebug, make_planner
+from dishsim.planners.ompl_base import _coords_from_graphml
 from dishsim.ur5e_kin import JOINT_LIMITS
 
 START = np.array(config.HOME_Q)
@@ -37,7 +38,7 @@ class WallWorld:
 
 def test_debug_capture_free_world():
     dbg = PlanDebug()
-    res = plan_to_goals(FreeWorld(), START, FREE_GOALS, budget_s=2.0, seed=1, debug=dbg)
+    res = make_planner("rrt_connect", budget_s=2.0).plan(FreeWorld(), START, FREE_GOALS, seed=1, debug=dbg)
     assert res.status == "solved"
     assert dbg.n_checks > 0
     assert dbg.checked_q.shape == (dbg.n_checks, 6)
@@ -50,7 +51,7 @@ def test_debug_capture_free_world():
 
 def test_planner_data_tree():
     dbg = PlanDebug()
-    res = plan_to_goals(FreeWorld(), START, FREE_GOALS, budget_s=2.0, seed=1, debug=dbg)
+    res = make_planner("rrt_connect", budget_s=2.0).plan(FreeWorld(), START, FREE_GOALS, seed=1, debug=dbg)
     assert res.status == "solved"
     assert dbg.planner_data_ok, dbg.planner_data_error
     n = len(dbg.tree_q)
@@ -72,7 +73,7 @@ def test_invalid_states_captured():
     goal = START.copy()
     goal[1] = -0.3  # across the slab from HOME's q1 = -1.712
     dbg = PlanDebug()
-    res = plan_to_goals(WallWorld(), START, goal[None, :], budget_s=5.0, seed=1, debug=dbg)
+    res = make_planner("rrt_connect", budget_s=5.0).plan(WallWorld(), START, goal[None, :], seed=1, debug=dbg)
     assert res.status == "solved"
     invalid = dbg.checked_q[~dbg.checked_valid]
     assert len(invalid) > 0, "the slab must reject at least one sampled state"
@@ -81,7 +82,7 @@ def test_invalid_states_captured():
 
 
 def test_no_debug_is_noop():
-    res = plan_to_goals(FreeWorld(), START, FREE_GOALS, budget_s=2.0, seed=1)
+    res = make_planner("rrt_connect", budget_s=2.0).plan(FreeWorld(), START, FREE_GOALS, seed=1)
     assert res.status == "solved" and res.path_q is not None
 
 

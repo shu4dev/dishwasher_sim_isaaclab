@@ -9,13 +9,13 @@ trimesh pieces in the object's canonical frame (Z-up for drinkware/containers, l
 for utensils, origin at the bbox center). The pieces serve three consumers with zero
 decomposition slop:
 
-- ``scripts/03_build_object_assets.py`` authors them as per-part USD mesh prims, each with a
+- ``scripts/setup/build_object_assets.py`` authors them as per-part USD mesh prims, each with a
   convex-hull collider (PhysX side);
-- ``scripts/13_decompose_meshes.py`` writes them verbatim as the FCL pieces (no CoACD — CoACD
+- ``scripts/setup/decompose_meshes.py`` writes them verbatim as the FCL pieces (no CoACD — CoACD
   would seal thin open shells like the glass walls);
 - ``fill_plan`` uses the merged mesh for overlap validation.
 
-Deterministic by construction (fixed segment counts, no RNG): scripts/13 must regenerate
+Deterministic by construction (fixed segment counts, no RNG): scripts/setup/decompose_meshes.py must regenerate
 byte-identical geometry from the registry dims alone. Dims come from
 :data:`dishsim.config.OBJECTS` — edit there, not here.
 """

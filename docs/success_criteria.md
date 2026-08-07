@@ -17,7 +17,7 @@ basket); each object class declares a placement mode in `config.OBJECTS` and
 | `basket_drop` | fork, spoon, knife, serving_spoon | one slot per basket bay; the goal is a release hover 60 mm above the bay, head-down — gravity inserts | settled bbox center inside the bay volume, below the basket top |
 
 Fill-only modes (`upside_down`, `stem_scallop`, `flat_lay`) are exercised by the capacity
-fill (`scripts/25_capacity_fill.py`), which gates per-item settle stability
+fill (`scripts/setup/capacity_fill.py`), which gates per-item settle stability
 (< 5 mm / 3° drift) and load-wide closability instead of slot-frame tolerances.
 
 ## A trial is a SUCCESS iff all of:

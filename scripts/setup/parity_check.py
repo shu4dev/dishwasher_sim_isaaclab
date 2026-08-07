@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Phase D gate: FCL collision world vs Isaac Sim contact ground truth (~200 configs).
+"""Collision-world gate: FCL vs Isaac Sim contact ground truth (~200 configs).
 
 Protocol (docs/environment.md has the rationale):
 
@@ -25,7 +25,7 @@ Acceptance: agreement >= 95 %, and non-conservative mismatches (FCL free / Isaac
 hull-inflation margin is for.
 
 Run with:
-    scripts/run_kit.sh scripts/14_parity_check.py --headless --enable_cameras
+    scripts/run_kit.sh scripts/setup/parity_check.py --headless --enable_cameras
 """
 
 """Launch Isaac Sim Simulator first."""
@@ -35,7 +35,7 @@ import os
 
 from isaaclab.app import AppLauncher
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 
 parser = argparse.ArgumentParser(description="FCL vs Isaac collision parity check.")
 parser.add_argument("--n_uniform", type=int, default=80)
@@ -44,7 +44,7 @@ parser.add_argument("--n_deep", type=int, default=40)
 parser.add_argument("--n_task", type=int, default=20)
 parser.add_argument("--seed", type=int, default=7)
 parser.add_argument("--out_dir", type=str, default=None,
-                    help="Media dir (default: media/D or media/D/<scenario>).")
+                    help="Media dir (default: media/collision_world or media/collision_world/<scenario>).")
 parser.add_argument("--object", type=str, default="mug", help="Carried object class (see config.OBJECTS).")
 parser.add_argument("--scenario", type=str, default="both_out",
                     help="Rack-state scenario (see config.SCENARIOS).")
@@ -76,7 +76,7 @@ from dishsim import config  # noqa: E402
 config.set_active_object(args_cli.object)
 config.apply_scenario(args_cli.scenario)
 if args_cli.out_dir is None:
-    args_cli.out_dir = config.scenario_media_dir("D")
+    args_cli.out_dir = config.scenario_media_dir("collision_world")
 
 from dishsim import scene as dscene  # noqa: E402
 from dishsim.collision_world import CollisionWorld  # noqa: E402

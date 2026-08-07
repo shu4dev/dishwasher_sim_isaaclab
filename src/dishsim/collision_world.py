@@ -172,12 +172,12 @@ class CollisionWorld:
             out_dir = coacd_dir_for(name, mesh_rel, self.cache_dir)
             if not os.path.isdir(out_dir) or not os.listdir(out_dir):
                 raise RuntimeError(
-                    f"missing CoACD pieces for '{name}' — run scripts/13_decompose_meshes.py first"
+                    f"missing CoACD pieces for '{name}' — run scripts/setup/decompose_meshes.py first"
                 )
             files = sorted(os.listdir(out_dir))
             if name in config.RACK_GEN:
                 # rack piece counts are deterministic (rack_gen parts) — reject a piece dir
-                # truncated by an interrupted scripts/13 export, where a missing piece would be
+                # truncated by an interrupted scripts/setup/decompose_meshes.py export, where a missing piece would be
                 # a physically present wire that FCL never sees
                 from . import rack_gen  # local import: only needed on the rack path
 
@@ -185,7 +185,7 @@ class CollisionWorld:
                 if len(files) != expected:
                     raise RuntimeError(
                         f"rack piece dir for '{name}' has {len(files)} pieces, expected {expected} "
-                        "(interrupted export?) — re-run scripts/13_decompose_meshes.py --force"
+                        "(interrupted export?) — re-run scripts/setup/decompose_meshes.py --force"
                     )
             return [trimesh.load(os.path.join(out_dir, f), force="mesh") for f in files]
         return [trimesh.load(os.path.join(self.cache_dir, mesh_rel), force="mesh")]
@@ -238,7 +238,7 @@ class CollisionWorld:
         # contacts — this check is always on, regardless of self_check. (Object vs wrist_2/3
         # and vs gripper links is constant by rigidity and deliberately NOT checked: the pads
         # PRESS the object by design — the pinch is verified in-band at build by the
-        # scripts/11 calibration gates and the scripts/12 grip_gate assert before dump_cache.)
+        # scripts/setup/calibrate_grasp.py calibration gates and the scripts/setup/extract_geometry.py grip_gate assert before dump_cache.)
         for link in ("base_link", "shoulder_link", "upper_arm_link", "forearm_link", "wrist_1_link"):
             if link not in self._arm:
                 continue

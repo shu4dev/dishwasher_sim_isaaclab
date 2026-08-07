@@ -4,7 +4,7 @@
 
 """USD -> mesh extraction and the collision-world cache format.
 
-Kit-side code (called from ``scripts/12_extract_geometry.py``) dumps per-rigid-body trimeshes
+Kit-side code (called from ``scripts/setup/extract_geometry.py``) dumps per-rigid-body trimeshes
 plus a ``scene_state.json`` manifest into ``assets/cache/``; the Kit-free
 :mod:`dishsim.collision_world` loads only from that cache. ``pxr``/``isaaclab`` imports stay
 inside functions so the module itself remains importable everywhere (the cache *reading*
@@ -15,7 +15,7 @@ Cache layout::
     assets/cache/
       meshes/<name>.obj          # body-frame meshes (statics + robot links + object)
       scene_state.json           # manifest: frames, poses, transforms, config hash
-      coacd/<name>_<hash>/piece_*.obj   # written by scripts/13_decompose_meshes.py
+      coacd/<name>_<hash>/piece_*.obj   # written by scripts/setup/decompose_meshes.py
 """
 
 import hashlib
@@ -279,7 +279,7 @@ def load_manifest(cache_dir: str = config.CACHE_DIR) -> dict:
     if manifest["config_hash"] != config_hash():
         raise RuntimeError(
             "collision-world cache is stale (config changed since extraction) — re-run "
-            "scripts/12_extract_geometry.py and scripts/13_decompose_meshes.py"
+            "scripts/setup/extract_geometry.py and scripts/setup/decompose_meshes.py"
         )
     return manifest
 
