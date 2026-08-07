@@ -1,54 +1,48 @@
 # dishwasher_sim_isaaclab
 
-**v0 — classical placement planning:** a UR5e + Robotiq 2F-85 starts with a plate already in its
-gripper and uses **OMPL (RRT-Connect)** to find a collision-free joint-space path that places the
-plate at a valid pose in the lower rack of an articulated **ArtVIP dishwasher** (door locked
-open), then releases it and verifies the placement is stable. Runs on Isaac Lab 3.0 / Isaac Sim
-6.0, fully headless; every result ships with PNG/MP4 evidence under `media/`.
+## Overview
 
-**Why the pivot:** this repo previously implemented an RL door-opening pipeline (PPO,
-`Isaac-Open-Dishwasher-UR5e-v0`, ~93 % success). The lab's direction changed to classical motion
-planning as the v0 for a longer-term **MCTS rearrangement planner** — which is why the collision
-world is built as a standalone, Kit-free module (`src/dishsim/collision_world.py`) capable of
-thousands of fast queries, not planner-internal code. Grasp *acquisition* (approach/pick),
-perception, and path constraints (e.g. keep-upright) are out of scope for v0 — the object
-starts already held in a **calibrated contact pinch** (pads on the mug at a measured force
-band, jaws visibly closing at trial start and opening at release; a hidden wrist weld carries
-the load during planned motion — see `docs/grasp_calibration.md`). The RL pipeline is
-preserved on the `archive/rl-door-opening` branch.
+Isaac Sim environments for loading a dishwasher with a robot arm — a substrate for
+**classical motion planning** (included), **imitation learning**, and **reinforcement
+learning** policies.
 
-> **Pending decision gate:** this plan assumes Isaac Sim remains the simulator. Lab confirmation
-> (PyBullet/MuJoCo vs Isaac) is outstanding; if the lab picks another simulator, work stops after
-> Phase B and the portable pieces are `tests/`, `ur5e_kin.py`, `collision_world.py`,
-> `placement.py`, `planning.py` (pure Python/OMPL/FCL — no Isaac imports).
+![fully loaded dishwasher](docs/figures/loaded_iso.png)
 
-See [docs/environment.md](docs/environment.md) for the machine/software stack, launcher
-landmines, and pinned dependency versions, and [docs/joint_report.md](docs/joint_report.md) for
-the measured articulation numbers every config derives from.
+The scene: an articulated ArtVIP dishwasher (hinged door, two sliding racks — replaced with
+procedurally generated, reference-styled wire racks plus a 3-bay cutlery basket), a UR5e +
+Robotiq 2F-85 on a pedestal, and a 15-class kitchen-object library (plates, saucers, bowls,
+mugs, cups, tumblers, wine glasses, cutlery, serving utensils, pitcher, food container)
+scaled to fit the compact machine, each with measured grasp and placement specifications.
 
-## Layout
+What ships around the scene:
 
-```
-src/dishsim/                       the project package (installable, `pip install -e .`)
-  robots.py                        UR5e+2F85 and dishwasher ArticulationCfgs (measured values)
-  usd_prep.py                      derived dishwasher USDs (world-weld removal, drive prep)
-  ur5e_kin.py                      analytic UR5e FK/IK, 8 branches          (Phase B)
-  config.py                        every tunable: grasp, tolerances, CoACD, budgets, cameras (C)
-  scene.py, media.py               v0 scene + camera/video capture          (Phase C)
-  geometry.py, collision_world.py  USD→FCL extraction + Kit-free collision world (Phase D)
-  placement.py, planning.py        slot frames + IK goal sets, OMPL wrapper (Phases E/F)
-scripts/                           numbered entry points (00–30), boot-first AppLauncher pattern
-tests/                             venv pytest for the planning stack       (Phase B)
-docs/                              environment, joint report, success criteria, v0 report
-assets/                            downloaded + derived assets (gitignored — see below)
-media/  results/                   visual evidence + trial JSONs (gitignored, stay on disk)
-```
+- **`src/dishsim/`** — the environment package: scene/robot configs, per-object registry
+  (`config.py`, every tunable in one place), procedural rack + prop generators, USD
+  derivation, analytic UR5e IK (8 branches, Pinocchio-validated), and a **Kit-free FCL
+  collision world** mirroring the PhysX scene at 100% measured parity — built for
+  thousands of fast queries by external planners.
+- **Classical planning runner** — OMPL RRT-Connect in 6-D joint space: rack
+  reconfiguration, countertop pick with a calibrated contact pinch, collision-monitored
+  execution, release, and per-mode placement evaluation (standing cells, plate tine slots,
+  bowl lean, cutlery-basket drops).
+- **Fully-loaded scene generator** — a deterministic, FCL-validated 34-item fill that
+  physically settles a complete load (31 items stable, racks close) — initial states for
+  rearrangement planning, IL demonstrations, or RL resets.
 
-## Setup
+Everything runs headless on a single GPU (Isaac Sim **6.0.1** + Isaac Lab **3.0.0**);
+media capture needs `--enable_cameras`. One frame convention throughout: robot-base frame,
+meters, Z-up, XYZW quaternions. Reference docs: [docs/environment.md](docs/environment.md)
+(setup landmines), [docs/joint_report.md](docs/joint_report.md) (measured articulation
+numbers), [docs/success_criteria.md](docs/success_criteria.md) (task definitions),
+[docs/grasp_calibration.md](docs/grasp_calibration.md) and
+[docs/asset_survey.md](docs/asset_survey.md) (measurement provenance).
 
-Everything Isaac-side runs through `scripts/run_kit.sh` (a thin shim that exports the Isaac Sim
-environment and hands off to `isaaclab.sh -p` — required once the venv exists, see
-[docs/environment.md](docs/environment.md)), from this project root:
+## Installation
+
+Requires an Isaac Sim 6.0.1 / Isaac Lab 3.0.0 install at `/workspace/isaaclab` (this repo
+nests inside that tree as an independent git repo). All Kit-side scripts run through
+`scripts/run_kit.sh`; see [docs/environment.md](docs/environment.md) for why, and for the
+launcher landmines.
 
 ```bash
 # 1. planning venv (the wrapper auto-detects this exact path)
@@ -57,68 +51,114 @@ environment and hands off to `isaaclab.sh -p` — required once the venv exists,
     matplotlib imageio pytest requests pyyaml filelock tqdm fsspec
 /workspace/isaaclab/env_isaaclab/bin/pip install -e .
 
-# 2. download the ArtVIP dishwasher assets (~82 MB) into assets/artvip/
+# 2. dishwasher asset (~82 MB) + derived USDs + joint report
 scripts/run_kit.sh -c "from huggingface_hub import snapshot_download; \
   snapshot_download(repo_id='X-Humanoid/ArtVIP', repo_type='dataset', \
   allow_patterns=['Articulated_objects/major_appliances/dishwasher/**'], local_dir='assets/artvip')"
-
-# 3. generate the derived dishwasher USD + joint report (runs the stability/door tests)
 scripts/run_kit.sh scripts/00_inspect_scene.py --headless --test_door
 
-# 4. derive the physics-enabled YCB plate (or mug fallback: --object 025_mug)
-scripts/run_kit.sh scripts/01_make_prop_physics_usd.py --object 029_plate
+# 3. object library (mug from the Isaac asset bucket; the rest from YCB scans + procedural)
+scripts/run_kit.sh scripts/01_make_prop_physics_usd.py --object 025_mug
+scripts/run_kit.sh scripts/03_build_object_assets.py
 
-# 5. planning-stack tests (no Kit)
+# 4. verify: Kit smoke test + planning-stack tests
+scripts/run_kit.sh scripts/05_kit_smoke.py --headless --enable_cameras
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m pytest tests/
 ```
 
-### Fast setup: restore archived assets (skips steps 2-4 + all cache rebuilds)
-
-The generated artifacts (built prop USDs, every geometry cache — ~1.5 h of Kit compute —
-plus the run-evidence media) are archived as tarballs on a **private** Hugging Face dataset
-(`<user>/dishsim-assets`; it contains NVIDIA-EULA/YCB-derived files — never make it
-public). On a fresh instance, after venv step 1:
+**Fast path** — if you have access to the private asset archive (a Hugging Face dataset
+holding the built props and geometry caches; keeps ~1.5 h of rebuilds off the clock), run
+step 1, then:
 
 ```bash
-huggingface-cli login          # once, with a token that can read the private dataset
+huggingface-cli login   # once
 /workspace/isaaclab/env_isaaclab/bin/python scripts/36_restore_assets.py --with_media
 ```
 
-The restore safe-extracts `assets/`, `results/` (and `media/` with `--with_media`),
-re-downloads the ArtVIP originals, validates every restored cache's `config_hash` stamp
-against the current `config.py` (a `STALE` warning means re-run `scripts/12` for that
-state), and runs the test suite. To save the current state at the end of a work phase:
-
-```bash
-/workspace/isaaclab/env_isaaclab/bin/python scripts/35_archive_assets.py --upload
-```
-
-> Note: the Python package is named `dishsim` (not `dishwasher_sim_isaaclab`) on purpose — a
-> package with the same name as this repo directory gets shadowed by a namespace package when
-> Kit scans extension paths, which breaks imports at app boot.
-
-> `./isaaclab.sh -p` exits 0 even when the wrapped script crashes: judge success from log
+> `./isaaclab.sh -p` exits 0 even when the wrapped script crashes — judge success from log
 > content (`[RESULT] PASS`, absence of tracebacks), never from the exit code.
 
-## v0 pipeline (phases)
+## Usage
 
-| Phase | Entry point | Output |
-|---|---|---|
-| B — dependency spike | `tests/`, `scripts/05_kit_smoke.py` | deps verified, media capture proven |
-| C — static scene | `scripts/10_v0_scene.py` | scene stills/clips, pose log, pad map (`--measure`), visible close/open |
-| C2 — grasp calibration | `scripts/11_calibrate_grasp.py` | measured pinch constants, `docs/grasp_calibration.md`, force curve |
-| D — collision world | `scripts/12…14_*.py` | FCL world + Isaac parity report |
-| E — placement goals | `scripts/15_goal_configs.py` | slot frames + IK goal sets, `docs/success_criteria.md` |
-| F — plan & place | `scripts/20…21_*.py` | per-trial JSON + MP4 in `results/`, `media/F/`, planner visual PNG |
-| G — benchmark | `scripts/30_make_report.py` | `docs/v0_report.md`, `docs/slides_notes.md` |
+Run everything from the repo root. Kit scripts take `--headless` (+ `--enable_cameras` for
+media); venv scripts run with `/workspace/isaaclab/env_isaaclab/bin/python`.
 
-## Asset sources and licenses
+**Build and validate the collision world** (per machine state: `both_out`, `both_in`,
+`placement`, `placement_open`; per carried object via `--object`):
 
-| Asset | Source | License | Notes |
-|---|---|---|---|
-| ArtVIP dishwasher (`assets/artvip/`) | HuggingFace dataset [`X-Humanoid/ArtVIP`](https://huggingface.co/datasets/X-Humanoid/ArtVIP), `Articulated_objects/major_appliances/dishwasher/` | **Apache-2.0** | articulated USD, door + sliding racks |
-| UR5e + Robotiq 2F-85 | Isaac Sim 6.0 asset library, `Robots/UniversalRobots/ur5e/ur5e.usd` (`Gripper=Robotiq_2f_85` variant) | NVIDIA Omniverse asset EULA | fetched from Nucleus S3 at spawn |
-| YCB plate / mug (`assets/props/*_physics.usd`) | Isaac Sim 6.0 asset library `Props/YCB/Axis_Aligned/{029_plate,025_mug}.usd`, physics APIs added locally | YCB dataset terms / NVIDIA asset EULA | derived files, gitignored |
+```bash
+scripts/run_kit.sh scripts/12_extract_geometry.py --headless --scenario placement   # extract
+env_isaaclab/bin/python scripts/13_decompose_meshes.py --scenario placement         # FCL pieces
+scripts/run_kit.sh scripts/14_parity_check.py --headless --scenario placement       # FCL vs PhysX
+```
 
-Downloaded assets are **never committed** (`assets/` is gitignored); `media/` and `results/`
-stay on disk for review, with curated figures copied into `docs/figures/`.
+**Generate placement goal sets** (slots + IK goal configurations for the active object's
+placement mode):
+
+```bash
+scripts/run_kit.sh scripts/15_goal_configs.py --headless --enable_cameras --object mug
+```
+
+**Run classical planning trials** (pick → RRT-Connect plan → place → evaluate; per-trial
+JSON under `results/`, MP4 + stills under `media/`):
+
+```bash
+# full choreography incl. robot rack reconfiguration, from an initial machine state
+scripts/run_kit.sh scripts/20_plan_and_place.py --headless --enable_cameras \
+    --scenario both_out --slots 2,7 --seeds 0-1
+# per-object demo in a pre-positioned state
+scripts/run_kit.sh scripts/20_plan_and_place.py --headless --enable_cameras \
+    --object tumbler --scenario placement --slots 2,7 --seeds 0
+```
+
+Success criteria per placement mode are defined in
+[docs/success_criteria.md](docs/success_criteria.md); planner internals can be visualized
+with `scripts/21_plan_visual.py` (venv, no Kit).
+
+**Generate a fully-loaded scene** (34-item deterministic fill, per-item stability gates,
+rack-closability check, timelapse/orbit/still media):
+
+```bash
+scripts/run_kit.sh scripts/25_capacity_fill.py --headless --enable_cameras
+```
+
+**Add or recalibrate an object**: add its spec to `config.OBJECTS`, build the asset
+(`scripts/03_build_object_assets.py`), measure the pinch
+(`scripts/10_v0_scene.py --measure`, then `scripts/11_calibrate_grasp.py --object <name>`),
+and freeze the measured constants (`scripts/freeze_calibration.py --object <name>`). Never
+eyeball-edit measured values — every number traces to a calibration or inspection run.
+
+**Archive / restore the generated artifacts** (private HF dataset):
+
+```bash
+env_isaaclab/bin/python scripts/35_archive_assets.py --upload
+env_isaaclab/bin/python scripts/36_restore_assets.py --with_media
+```
+
+## Credits
+
+- **ArtVIP dishwasher** — [`X-Humanoid/ArtVIP`](https://huggingface.co/datasets/X-Humanoid/ArtVIP)
+  dataset (Apache-2.0): the articulated `dishwasher_2` asset (door + sliding racks).
+- **YCB Object & Model Set** — Calli et al., *"The YCB Object and Model Set"* (IEEE ICAR
+  2015), [ycbbenchmarks.com](https://www.ycbbenchmarks.com/): textured `google_16k` scans
+  (plate, bowl, cups, cutlery, spatula, pitcher), used under the YCB dataset terms; the mug
+  comes from NVIDIA's Isaac Sim YCB mirror.
+- **NVIDIA Isaac Sim / Isaac Lab & Omniverse asset library** — simulator, PhysX ground
+  truth, and the pre-assembled UR5e + Robotiq 2F-85 (NVIDIA Omniverse asset EULA; fetched
+  at spawn, derived copies stay local).
+- **OMPL** — Șucan, Moll, Kavraki, *"The Open Motion Planning Library"* (IEEE RAM 2012):
+  RRT-Connect planning.
+- **FCL / python-fcl** — Pan, Chitta, Manocha, *"FCL: A general purpose library for
+  collision and proximity queries"* (ICRA 2012): the Kit-free collision world.
+- **CoACD** — Wei et al., *"Approximate Convex Decomposition for 3D Meshes with
+  Collision-Aware Concavity and Tree Search"* (SIGGRAPH 2022): convex decomposition of
+  concave bodies.
+- **trimesh** — mesh processing throughout the asset and collision pipelines.
+- **Pinocchio** — Carpentier et al.: independent validation of the analytic UR5e kinematics
+  in the test suite.
+- Rack geometry is procedurally generated, styled after publicly documented Whirlpool,
+  Bosch, and Frigidaire rack designs (design reference only; no third-party geometry).
+
+Downloaded and derived assets are never committed (`assets/`, `media/`, `results/` are
+gitignored); the asset archive must remain private, as it contains NVIDIA-EULA- and
+YCB-derived files.

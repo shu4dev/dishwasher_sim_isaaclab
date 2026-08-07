@@ -4,13 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-v0 of the lab's dishwasher-loading project: **classical motion planning, not RL.** A UR5e +
-Robotiq 2F-85 starts with a plate welded to its TCP; OMPL (RRT-Connect, 6-D joint space) plans a
-collision-free path to a slot in the lower rack of an articulated ArtVIP dishwasher (door locked
-open at 90°), the weld is released, and placement stability is verified. The collision world
-(`src/dishsim/collision_world.py`) is a standalone Kit-free module because a future MCTS
-rearrangement planner will reuse it for thousands of queries. The old RL door-opening pipeline
-lives on the `archive/rl-door-opening` branch.
+Isaac Sim **environments** for dishwasher loading — the substrate for classical motion
+planning (shipped), imitation learning, and RL policies. A UR5e + Robotiq 2F-85 loads a
+15-class kitchen-object library (per-object grasp/placement specs in `config.OBJECTS`) into
+an articulated ArtVIP dishwasher (door locked open at 90°, procedural realistic racks + a
+3-bay cutlery basket). The shipped classical stack: OMPL (RRT-Connect, 6-D joint space)
+plans against a standalone Kit-free FCL collision world
+(`src/dishsim/collision_world.py`, built for thousands of external-planner queries); the
+carried object rides a calibrated contact pinch with a hidden wrist weld bearing the load;
+placement stability is verified per mode. `scripts/25_capacity_fill.py` physically settles
+a full 34-item load — initial states for rearrangement/IL/RL. The old RL door-opening
+pipeline lives on the `archive/rl-door-opening` branch.
 
 Runs on Isaac Sim **6.0.1-rc.7** + Isaac Lab **3.0.0** at `/workspace/isaaclab` (this repo is
 nested inside that tree, but is an independent git repo). Never upgrade or downgrade Isaac Sim /
@@ -42,8 +46,9 @@ scripts/run_kit.sh scripts/01_make_prop_physics_usd.py --object 029_plate
 # planning-stack tests (venv, no Kit; plugin autoload off — hydra's plugin breaks outside Kit)
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m pytest tests/
 
-# phase entry points (see README phase table): 05 kit smoke, 10 v0 scene, 12–14 collision
-# world, 15 goal configs, 20 plan-and-place, 30 report
+# entry points (see README Usage): 05 kit smoke, 10 scene checks/pad map, 11 grasp
+# calibration, 12–14 collision world, 15 goal configs, 20 plan-and-place, 25 capacity
+# fill, 35/36 asset archive/restore
 ```
 
 **`./isaaclab.sh -p` exits 0 even when the wrapped script crashes.** Always verify success from

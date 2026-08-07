@@ -92,7 +92,7 @@ def trial_start_q() -> np.ndarray:
 
 START_Q = trial_start_q()
 
-# house palette (30_make_report.py / dataviz reference); series hues are consistent across
+# house palette (dataviz reference); series hues are consistent across
 # panels: blue = start tree, orange = goal tree, aqua = solution path, muted gray = context.
 SURFACE = "#fcfcfb"
 INK = "#0b0b0b"
