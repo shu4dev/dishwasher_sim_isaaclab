@@ -74,7 +74,7 @@ SCENARIOS = {
     "both_out": {  # both racks fully extended -> push the UPPER rack in, place into the lower
         "rack_lower_m": -0.20,
         "rack_upper_m": -0.20,
-        "min_feasible_slots": 3,
+        "min_feasible_slots": 2,  # v3: the cutlery basket eats the x=0.2432 slot columns
         "rack_action": {
             "joint": "PrismaticJoint_dishwasher_2_up",
             "body": "E_shelf_03",
@@ -85,7 +85,7 @@ SCENARIOS = {
     "both_in": {  # both racks fully retracted -> pull the LOWER rack out, place into it
         "rack_lower_m": 0.0,
         "rack_upper_m": 0.0,
-        "min_feasible_slots": 3,
+        "min_feasible_slots": 2,  # v3: the cutlery basket eats the x=0.2432 slot columns
         "rack_action": {
             "joint": "PrismaticJoint_dishwasher_2_down",
             "body": "E_shelf_1_04",
@@ -101,7 +101,14 @@ SCENARIO_NAME = "both_out"  # active scenario; switch via apply_scenario() BEFOR
 # cache/goal scripts (12-15) so pick/place planning has its own validated collision world.
 PLACEMENT_STATE = "placement"
 INTERNAL_STATES = {
-    PLACEMENT_STATE: {"rack_lower_m": -0.20, "rack_upper_m": 0.0, "min_feasible_slots": 3},
+    PLACEMENT_STATE: {"rack_lower_m": -0.20, "rack_upper_m": 0.0, "min_feasible_slots": 2},
+    # Both racks extended, no rack action: the loading state for the REAR plate bank. The
+    # ArtVIP rack travel (0.2 m) is smaller than the rack depth (0.287 m), so the rear
+    # ~90 mm — the entire tine bank — never leaves the machine mouth: with the upper rack
+    # stowed, its front rail sits directly above the bank and no collision-free insertion
+    # exists (measured: 0/11 feasible plate slots in the `placement` state). Pulling the
+    # upper rack out clears the airspace — exactly what a human does.
+    "placement_open": {"rack_lower_m": -0.20, "rack_upper_m": -0.20, "min_feasible_slots": 2},
 }
 
 
@@ -137,8 +144,16 @@ def state_params(name: str | None = None) -> dict:
 
 
 def scenario_cache_dir(name: str | None = None) -> str:
-    """Collision-cache root for a scenario (baseline keeps the legacy ``assets/cache/``)."""
+    """Collision-cache root for a scenario + the active carried object.
+
+    The mug keeps the legacy layout (baseline ``assets/cache/``, other states under
+    ``assets/cache/scenarios/<state>``) so the validated v0 caches stay byte-stable; every
+    other object gets ``assets/cache/objects/<object>/<state>``. CoACD piece dirs are
+    content-addressed under the baseline root, so rack/shell decompositions are shared.
+    """
     name = name or SCENARIO_NAME
+    if ACTIVE_OBJECT != "mug":
+        return os.path.join(ASSETS_DIR, "cache", "objects", ACTIVE_OBJECT, name)
     if name == "both_out":
         return CACHE_DIR
     return os.path.join(ASSETS_DIR, "cache", "scenarios", name)
@@ -291,10 +306,12 @@ WORLD_CHECK_EXCLUDE = ["base_link"]
 # (floor_top = crossbar top = the slot datum the Phase-E percentile must land on — everything
 # floor-level therefore stays inside placement.py's 15 mm bottom-slab band).
 # ---------------------------------------------------------------------------------------------
-RACK_GEN_VERSION = 2  # v2: reference-appliance realism (Whirlpool WDTA50SAKZ / Bosch 800 /
+RACK_GEN_VERSION = 3  # v2: reference-appliance realism (Whirlpool WDTA50SAKZ / Bosch 800 /
 #                       Frigidaire FDPC4314AS) — 3-gauge wires, 30 mm Whirlpool tine rows with
 #                       candy-cane ends, fillets/ties/beads, fold-down insert row, wheels,
 #                       front loading dip + handle, cup shelves, RackMatic blocks
+#                       v3: cutlery basket in the lower rack's open zone (multi-object v1) —
+#                       3-compartment plastic basket riding the rack, own mesh + material
 RACK_GEN = {
     "E_shelf_1_04": {  # lower rack: rear plate bank + open zone (robot side) + bowl/slope side
         "usd_scale_x": 0.9191,  # authored x-scale on the body Xform (asserted at authoring)
@@ -357,9 +374,22 @@ RACK_GEN = {
         "bowl_tine_h": 0.042,
         # roller wheels: 4, outer face exactly on the footprint plane, bottoms exactly z=0
         "wheels": {"dia": 0.022, "width": 0.008, "y_inset": 0.030},
-        # open zone (flat floor, mug slots; drives the Phase-D probes + the Phase-E guarantee:
-        # slot-grid columns x={0.1832, 0.2432} x y={0.0834, 0.1434} stay mug-clear by design)
+        # open zone (flat floor, mug slots; drives the Phase-D probes + the Phase-E guarantee).
+        # v3: the cutlery basket occupies the x-high end, killing the x=0.2432 slot columns —
+        # the guarantee drops to the x=0.1832 columns x y={0.0834, 0.1434} (min_feasible_slots
+        # 3 -> 2 in the scenario tables, encoded honestly)
         "open_zones": ((0.115, 0.360, 0.010, 0.190),),
+        # cutlery basket (v3): 3-compartment plastic basket against the x-high open-zone end;
+        # dividers split y into 3 bays; arch carry handle over the x-center line
+        "basket": {
+            "x": (0.264, 0.352),
+            "y": (0.012, 0.180),
+            "h": 0.095,
+            "wall_t": 0.004,
+            "floor_t": 0.003,
+            "dividers_y": (0.068, 0.124),
+            "handle": {"clearance": 0.022, "bar_dia": 0.008, "post_dia": 0.006},
+        },
         "mass_kg": 0.9,  # authored explicitly (deterministic vs auto-mass); horizontal joint
         "sdf_resolution": 768,  # 0.48 mm voxel -> ~4.6 across a 2.2 mm wire
     },
@@ -433,11 +463,15 @@ RELEASE_HOVER_M = 0.012  # goal poses hover the object above the wire floor (> c
 # y [-0.24, 0.242].
 COUNTERTOP_SIZE = (0.395, 0.482, 0.020)  # world-aligned box extents [m]
 COUNTERTOP_CENTER_W = (0.8475, 0.001, 0.48)  # world center; top surface at z 0.49
-# Mug initial pose: standing upright on the countertop at the robot-nearest corner (the wrist
+# Object staging poses: upright on the countertop at the robot-nearest corner (the wrist
 # IK target lands at ~0.81 of the 0.85 m reach — verified with the analytic IK offline). Yaw
-# orients the handle so the fixed calibrated grasp transform stays IK-reachable.
-MUG_COUNTERTOP_POS_W = (0.665, -0.185, 0.5307)  # root (= bbox center); mug base at z 0.49
-MUG_COUNTERTOP_YAW_DEG = 0.0
+# orients the handle so the fixed calibrated grasp transform stays IK-reachable. This is the
+# ACTIVE-OBJECT view (rewritten by set_active_object); tuple of ((x, y, z), yaw_deg) staging
+# poses, one per trial instance. Entry 0 reproduces the frozen v0 mug pose.
+OBJECT_COUNTERTOP_POSES_W: tuple = (
+    ((0.665, -0.185, 0.5307), 0.0),  # root (= bbox center); mug base at z 0.49
+    ((0.665, -0.105, 0.5307), 0.0),  # second staging spot, one footprint toward +y
+)
 PICK_HOVER_M = 0.10  # planned pre-grasp TCP hover above the grasp pose; the descent is a
 #                      scripted straight line gated by the calibrated pinch band, not FCL
 #                      (the goal pose is inside the inflated-hull margin of the mug by design)
@@ -467,4 +501,488 @@ GOALS_PER_PLAN = 64  # random goal-set subset handed to OMPL per trial
 PLAN_JOINT_BOUNDS_MARGIN_RAD = 0.05
 PLAN_VALIDITY_RESOLUTION_RAD = 0.015
 EXEC_JOINT_SPEED_RAD_S = 0.5  # constant joint-speed cap for time parameterization
+
+# =============================================================================================
+# object library (multi-object v1)
+# =============================================================================================
+# Each ObjectSpec is the single source of truth for one manipulable object class. The
+# module-level OBJECT_* / GRASP_* / GRIP_* constants above are the ACTIVE-OBJECT VIEW:
+# set_active_object() rewrites them in place before scene imports — the same pattern as
+# apply_scenario(), so every existing consumer keeps reading plain module attributes. The
+# "mug" entry reproduces the frozen v0 constants exactly (and keeps cache_name "025_mug" so
+# the baseline cache hash is byte-stable).
+#
+# Scale factors: the ArtVIP dishwasher is compact (lower rack 0.366 x 0.287 m, 154 mm
+# inter-rack clearance, 30 mm tine pitch) — real-size dinner plates cannot fit, so every
+# sourced object is scaled to rack-proportional size. `scale` documents that factor against
+# the source asset; dims below are the TARGET scaled dims, re-measured and frozen by
+# scripts/03_build_object_assets.py (numeric-provenance rule).
+#
+# Masses are design choices for the scaled objects (ceramic/steel/plastic at that size), not
+# volume-scaled YCB masses (which would be unrealistically light); the mug mass is measured.
+
+from dataclasses import dataclass, field  # noqa: E402
+
+
+@dataclass(frozen=True)
+class GraspSpec:
+    """How the gripper pinches this object class.
+
+    Families (carry orientation + contact patch):
+      - ``rim_diam``: upright carry, pads on the outer wall across the DIAMETER (mug family).
+      - ``rim_edge``: upright carry, pads straddle the rim WALL (bowl, container).
+      - ``edge_pinch``: on-edge (vertical) carry for flat discs, pads across the face
+        thickness at the rim (plate, saucer, lid).
+      - ``handle_pinch``: flat pick, pads across the handle width (cutlery, utensils).
+      - ``stem_pinch``: registry-only (wine glass); never robot-executed.
+    """
+
+    family: str
+    grasp_width_m: float  # object width between the pads at the contact patch [m]
+    rim_tcp_z_m: float = -0.020  # engagement offset of the grasped feature along tool z [m]
+    grasp_point_m: float = 0.0  # handle_pinch only: grasp-point offset along the long axis [m]
+    aperture_rad: float | None = None  # calibrated by scripts/11; None until frozen
+    force_min_n: float | None = None  # calibrated steady per-pad band [N]
+    force_max_n: float | None = None
+    force_exec_max_n: float | None = None  # dynamic per-pad allowance during motion [N]
+    target_force_n: float = 5.0  # scripts/11 staircase target [N]
+
+
+@dataclass(frozen=True)
+class PlacementSpec:
+    """Default placement mode for demos/fill.
+
+    Modes: ``floor_stand`` | ``plate_slot`` | ``bowl_lean`` | ``basket_drop`` (robot-capable)
+    and ``upside_down`` | ``stem_scallop`` | ``flat_lay`` (capacity-fill only).
+    """
+
+    mode: str
+    rack: str  # "lower" | "upper" | "basket"
+    params: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ObjectSpec:
+    """One manipulable object class (dims in the object's own canonical frame).
+
+    Frame convention: NEW assets are authored Z-up with the origin at the bbox center
+    (``axis_obj = (0, 0, 1)``); the legacy mug keeps its validated Y-up frame. ``bbox_half``
+    is origin-to-face half extents [m]; ``body_center_uv`` is the axis-perpendicular offset
+    (u, v) of the body circle center from the origin [m] (for the Y-up mug: (x, z)).
+    """
+
+    name: str
+    source: str  # "isaac_ycb" | "ycb16k" | "procedural"
+    source_id: str | None  # YCB id / prop_gen builder name
+    scale: float  # documented scale factor vs the source asset
+    mass_kg: float
+    bbox_half: tuple[float, float, float]
+    axis_obj: tuple[float, float, float]  # object "up" (bottom -> opening) direction
+    body_center_uv: tuple[float, float]
+    rim_radius_m: float
+    height_m: float  # extent along axis_obj [m]
+    grasp: GraspSpec
+    placement: PlacementSpec
+    coacd: dict  # scripts/13 params, or {"analytic": True} for prop_gen part lists
+    countertop_poses_w: tuple = ()  # ((x, y, z), yaw_deg) staging poses; demo classes only
+    robot_demo: bool = False
+    cache_name: str | None = None  # manifest/hash name; defaults to `name`
+    usd_basename: str | None = None  # defaults to f"{name}_physics.usd"
+
+    @property
+    def object_name(self) -> str:
+        return self.cache_name or self.name
+
+    @property
+    def usd_path(self) -> str:
+        return os.path.join(ASSETS_DIR, "props", self.usd_basename or f"{self.name}_physics.usd")
+
+
+OBJECTS: dict[str, ObjectSpec] = {
+    # ---- the frozen v0 mug (measured 2026-07-29/31; do not edit) ------------------------------
+    "mug": ObjectSpec(
+        name="mug",
+        source="isaac_ycb",
+        source_id="025_mug",
+        scale=1.0,
+        mass_kg=0.118,
+        bbox_half=(0.0585, 0.0407, 0.0465),
+        axis_obj=(0.0, 1.0, 0.0),  # legacy Axis_Aligned asset lies on its side
+        body_center_uv=(-0.0110, 0.0),
+        rim_radius_m=0.0399,
+        height_m=0.0813,
+        grasp=GraspSpec(
+            family="rim_diam",
+            grasp_width_m=0.0798,  # 2 * rim radius
+            rim_tcp_z_m=-0.0200,
+            aperture_rad=0.058,
+            force_min_n=1.7,
+            force_max_n=15.4,
+            force_exec_max_n=12.0,
+        ),
+        placement=PlacementSpec(mode="floor_stand", rack="lower"),
+        coacd={"threshold": 0.03, "max_convex_hull": 32},
+        countertop_poses_w=(((0.665, -0.185, 0.5307), 0.0), ((0.665, -0.105, 0.5307), 0.0)),
+        robot_demo=True,
+        cache_name="025_mug",
+        usd_basename="025_mug_physics.usd",
+    ),
+    # ---- YCB google_16k dishware (scaled to fit; dims frozen from scripts/03 measurement) -----
+    "plate": ObjectSpec(
+        name="plate",
+        source="ycb16k",
+        source_id="029_plate",
+        scale=0.54,  # real dia 258 mm -> 139 mm (top clears the stowed upper rack's runners
+        #              by ~4 mm; 0.55 grazed them by 1 mm in the closability z-budget check)
+        mass_kg=0.20,
+        bbox_half=(0.0702, 0.0705, 0.0072),
+        axis_obj=(0.0, 0.0, 1.0),
+        body_center_uv=(0.0, 0.0),
+        rim_radius_m=0.0706,
+        height_m=0.0144,
+        grasp=GraspSpec(
+            family="edge_pinch", grasp_width_m=0.006, rim_tcp_z_m=-0.014,
+            # first-contact aperture from the 2026-08-07 staircase (right pad touches at
+            # theta_meas 0.647): the visible close stops at the rim; the weld carries
+            # (pinch-band calibration is not applicable to a rigid-weld thin disc —
+            # the contact is one-sided and binary).
+            aperture_rad=0.640,
+        ),
+        placement=PlacementSpec(mode="plate_slot", rack="lower", params={"lean_deg": 7.0}),
+        coacd={"threshold": 0.02, "max_convex_hull": 48},
+        countertop_poses_w=(((0.70, -0.185, 0.562), 0.0), ((0.70, -0.10, 0.562), 0.0)),
+        robot_demo=True,
+    ),
+    "saucer": ObjectSpec(
+        name="saucer",
+        source="ycb16k",
+        source_id="029_plate",
+        scale=0.42,  # real dia 258 mm -> 108 mm side plate
+        mass_kg=0.12,
+        bbox_half=(0.0546, 0.0548, 0.0056),
+        axis_obj=(0.0, 0.0, 1.0),
+        body_center_uv=(0.0, 0.0),
+        rim_radius_m=0.0549,
+        height_m=0.0112,
+        grasp=GraspSpec(family="edge_pinch", grasp_width_m=0.005, rim_tcp_z_m=-0.012),
+        placement=PlacementSpec(mode="plate_slot", rack="lower", params={"lean_deg": 7.0}),
+        coacd={"threshold": 0.02, "max_convex_hull": 48},
+    ),
+    "bowl": ObjectSpec(
+        name="bowl",
+        source="ycb16k",
+        source_id="024_bowl",
+        scale=0.68,  # real dia 159 mm -> 108 mm cereal bowl
+        mass_kg=0.15,
+        bbox_half=(0.0549, 0.0548, 0.0187),
+        axis_obj=(0.0, 0.0, 1.0),
+        body_center_uv=(0.0, 0.0),
+        rim_radius_m=0.0551,
+        height_m=0.0374,
+        grasp=GraspSpec(
+            family="rim_edge", grasp_width_m=0.004, rim_tcp_z_m=0.030,
+            # first-contact aperture from the 2026-08-07 staircase (60 N spike within
+            # one 0.002 rad plateau at theta 0.716): visible close stops just shy;
+            # the weld carries.
+            aperture_rad=0.700,
+        ),
+        # rim_z +0.030: at -0.016 the fingertips reached ~34 mm below the rim and crushed
+        # the bowl interior at full open (measured 88 N in the scripts/11 open gate)
+        placement=PlacementSpec(mode="bowl_lean", rack="lower", params={"lean_deg": 48.0}),
+        coacd={"threshold": 0.03, "max_convex_hull": 32},
+        countertop_poses_w=(((0.665, -0.185, 0.5087), 0.0), ((0.665, -0.10, 0.5087), 0.0)),
+        robot_demo=True,
+    ),
+    "cup": ObjectSpec(
+        name="cup",
+        source="ycb16k",
+        source_id="065-a_cups",
+        scale=1.10,  # stacking cup A ~ 55 mm dia -> 60 mm teacup
+        mass_kg=0.06,
+        bbox_half=(0.0314, 0.0316, 0.0338),
+        axis_obj=(0.0, 0.0, 1.0),
+        body_center_uv=(0.0, 0.0),
+        rim_radius_m=0.0317,
+        height_m=0.0677,
+        grasp=GraspSpec(
+            family="rim_diam", grasp_width_m=0.0634, rim_tcp_z_m=-0.004,
+            # frozen from the 2026-08-07 scripts/11 staircase at the minimal both-pads
+            # point (pads [13.7, 2.5] N; the 3/5 N crossings are one-sided on this
+            # small rim). Band = steady/3 .. 3x steady around the ~8.1 N mean.
+            aperture_rad=0.264, force_min_n=2.0, force_max_n=24.3, force_exec_max_n=16.2,
+        ),
+        placement=PlacementSpec(mode="floor_stand", rack="lower"),
+        coacd={"threshold": 0.03, "max_convex_hull": 32},
+        countertop_poses_w=(((0.665, -0.185, 0.5238), 0.0), ((0.665, -0.105, 0.5238), 0.0)),
+        robot_demo=True,
+    ),
+    # ---- YCB google_16k cutlery + utensils (scaled to the basket) -----------------------------
+    "fork": ObjectSpec(
+        name="fork",
+        source="ycb16k",
+        source_id="030_fork",
+        scale=0.60,  # real 198 mm -> 119 mm (basket interior is 168 mm long, 95 mm tall)
+        mass_kg=0.030,
+        bbox_half=(0.0592, 0.0082, 0.0046),
+        axis_obj=(1.0, 0.0, 0.0),  # long axis; head at +x, handle at -x
+        body_center_uv=(0.0, 0.0),
+        rim_radius_m=0.0082,
+        height_m=0.1185,
+        grasp=GraspSpec(
+            family="handle_pinch", grasp_width_m=0.009, rim_tcp_z_m=0.005, grasp_point_m=-0.038,
+            target_force_n=3.0, aperture_rad=0.74,  # free-pick close: 0.70 never touched the centered free fork
+            # (0 N both pads); the welded-curve crossing 0.8 dragged it ~20 mm (22.9 N)
+            force_min_n=0.5, force_max_n=40.0, force_exec_max_n=35.0,
+            # exec cap raised after measurement: the welded one-sided handle contact
+            # (~15 N static per the staircase) spikes to ~28 N under motion dynamics
+        ),
+        placement=PlacementSpec(mode="basket_drop", rack="basket"),
+        coacd={"threshold": 0.05, "max_convex_hull": 16},
+        countertop_poses_w=(((0.68, -0.19, 0.4946), 90.0), ((0.68, -0.11, 0.4946), 90.0)),
+        robot_demo=True,
+    ),
+    "spoon": ObjectSpec(
+        name="spoon",
+        source="ycb16k",
+        source_id="031_spoon",
+        scale=0.60,  # real 195 mm -> 117 mm
+        mass_kg=0.030,
+        bbox_half=(0.0587, 0.0125, 0.0063),
+        axis_obj=(1.0, 0.0, 0.0),
+        body_center_uv=(0.0, 0.0),
+        rim_radius_m=0.0125,
+        height_m=0.1174,
+        grasp=GraspSpec(
+            family="handle_pinch", grasp_width_m=0.009, rim_tcp_z_m=-0.010, grasp_point_m=-0.038,
+            target_force_n=3.0,
+        ),
+        placement=PlacementSpec(mode="basket_drop", rack="basket"),
+        coacd={"threshold": 0.05, "max_convex_hull": 16},
+    ),
+    "knife": ObjectSpec(
+        name="knife",
+        source="ycb16k",
+        source_id="032_knife",
+        scale=0.60,  # real 215 mm -> 129 mm
+        mass_kg=0.040,
+        bbox_half=(0.0644, 0.0064, 0.0047),
+        axis_obj=(1.0, 0.0, 0.0),
+        body_center_uv=(0.0, 0.0),
+        rim_radius_m=0.0064,
+        height_m=0.1289,
+        grasp=GraspSpec(
+            family="handle_pinch", grasp_width_m=0.009, rim_tcp_z_m=-0.010, grasp_point_m=-0.042,
+            target_force_n=3.0,
+        ),
+        placement=PlacementSpec(mode="basket_drop", rack="basket"),
+        coacd={"threshold": 0.05, "max_convex_hull": 16},
+    ),
+    "spatula": ObjectSpec(
+        name="spatula",
+        source="ycb16k",
+        source_id="033_spatula",
+        scale=0.45,  # real ~350 mm -> 158 mm serving tool
+        mass_kg=0.050,
+        bbox_half=(0.0700, 0.0188, 0.0074),
+        axis_obj=(1.0, 0.0, 0.0),
+        body_center_uv=(0.0, 0.0),
+        rim_radius_m=0.0188,
+        height_m=0.1401,
+        grasp=GraspSpec(
+            family="handle_pinch", grasp_width_m=0.012, rim_tcp_z_m=-0.010, grasp_point_m=-0.050,
+            target_force_n=3.0,
+        ),
+        placement=PlacementSpec(mode="flat_lay", rack="upper"),
+        coacd={"threshold": 0.05, "max_convex_hull": 16},
+    ),
+    "pitcher": ObjectSpec(
+        name="pitcher",
+        source="ycb16k",
+        source_id="019_pitcher_base",
+        scale=0.50,  # real 242 mm tall -> 121 mm carafe (fits under the tub ceiling)
+        mass_kg=0.15,
+        bbox_half=(0.0373, 0.0362, 0.0606),
+        axis_obj=(0.0, 0.0, 1.0),
+        body_center_uv=(0.0, 0.0),
+        rim_radius_m=0.0475,  # max radial incl. spout (fill-only spacing bound)
+        height_m=0.1212,
+        grasp=GraspSpec(family="rim_diam", grasp_width_m=0.0724, rim_tcp_z_m=-0.018),
+        placement=PlacementSpec(mode="floor_stand", rack="lower"),
+        coacd={"threshold": 0.03, "max_convex_hull": 32},
+    ),
+    # ---- procedural drinkware + containers (prop_gen; dims exact by construction) -------------
+    "tumbler": ObjectSpec(
+        name="tumbler",
+        source="procedural",
+        source_id="tumbler",
+        scale=1.0,
+        mass_kg=0.090,
+        bbox_half=(0.0300, 0.0300, 0.0525),
+        axis_obj=(0.0, 0.0, 1.0),
+        body_center_uv=(0.0, 0.0),
+        rim_radius_m=0.0300,
+        height_m=0.1050,
+        grasp=GraspSpec(family="rim_diam", grasp_width_m=0.0600, rim_tcp_z_m=-0.018, aperture_rad=0.303, force_min_n=1.6, force_max_n=14.7, force_exec_max_n=12.0,),
+        placement=PlacementSpec(mode="floor_stand", rack="lower"),
+        coacd={"analytic": True},
+        countertop_poses_w=(((0.665, -0.185, 0.5425), 0.0), ((0.665, -0.105, 0.5425), 0.0)),
+        robot_demo=True,
+    ),
+    "wine_glass": ObjectSpec(
+        name="wine_glass",
+        source="procedural",
+        source_id="wine_glass",
+        scale=1.0,
+        mass_kg=0.100,
+        bbox_half=(0.0290, 0.0290, 0.0600),
+        axis_obj=(0.0, 0.0, 1.0),
+        body_center_uv=(0.0, 0.0),
+        rim_radius_m=0.0290,
+        height_m=0.1200,
+        grasp=GraspSpec(family="stem_pinch", grasp_width_m=0.008),  # never robot-executed
+        placement=PlacementSpec(mode="stem_scallop", rack="upper"),
+        coacd={"analytic": True},
+    ),
+    "serving_spoon": ObjectSpec(
+        name="serving_spoon",
+        source="procedural",
+        source_id="serving_spoon",
+        scale=1.0,
+        mass_kg=0.060,
+        bbox_half=(0.0900, 0.0200, 0.0060),
+        axis_obj=(1.0, 0.0, 0.0),
+        body_center_uv=(0.0, 0.0),
+        rim_radius_m=0.0200,
+        height_m=0.1800,
+        grasp=GraspSpec(
+            family="handle_pinch", grasp_width_m=0.012, rim_tcp_z_m=-0.010, grasp_point_m=-0.060,
+            target_force_n=3.0,
+        ),
+        placement=PlacementSpec(mode="basket_drop", rack="basket"),
+        coacd={"analytic": True},
+    ),
+    "container": ObjectSpec(
+        name="container",
+        source="procedural",
+        source_id="container",
+        scale=1.0,
+        mass_kg=0.110,
+        bbox_half=(0.0600, 0.0450, 0.0275),
+        axis_obj=(0.0, 0.0, 1.0),
+        body_center_uv=(0.0, 0.0),
+        rim_radius_m=0.0450,  # half the short side (rim_edge grasps the long wall)
+        height_m=0.0550,
+        grasp=GraspSpec(family="rim_edge", grasp_width_m=0.0025, rim_tcp_z_m=-0.014),
+        placement=PlacementSpec(mode="upside_down", rack="upper"),
+        coacd={"analytic": True},
+    ),
+    "lid": ObjectSpec(
+        name="lid",
+        source="procedural",
+        source_id="lid",
+        scale=1.0,
+        mass_kg=0.060,
+        bbox_half=(0.0630, 0.0480, 0.0040),
+        axis_obj=(0.0, 0.0, 1.0),
+        body_center_uv=(0.0, 0.0),
+        rim_radius_m=0.0480,
+        height_m=0.0080,
+        grasp=GraspSpec(family="edge_pinch", grasp_width_m=0.008, rim_tcp_z_m=-0.010),
+        placement=PlacementSpec(mode="flat_lay", rack="upper"),
+        coacd={"analytic": True},
+    ),
+}
+
+ACTIVE_OBJECT = "mug"
+
+
+def grasp_transform(spec: ObjectSpec) -> tuple[tuple, tuple]:
+    """T_tcp_obj (pos, quat XYZW) for a spec, from its grasp family + measured dims.
+
+    Derivations (documented per family; the mug case reproduces the frozen v0 transform):
+      - Y-up ``rim_diam`` (mug): R = Rx(-90) maps z_tcp = -y_obj (upright carry, opening
+        toward the gripper); the rim-center axis point (u, h/2, v) lands on (0, 0, rim_z).
+      - Z-up ``rim_diam``/``rim_edge``: R = Rx(180) (z_tcp = -z_obj); rim center — or the rim
+        wall point on the +y side (jaw axis) for ``rim_edge`` — lands on (0, 0, rim_z).
+      - ``edge_pinch``: on-edge carry; the disc's rim point on +x_obj is the top of the
+        vertical disc, radial direction up toward the wrist; pads close across the thickness
+        (z_obj along the jaw axis y_tcp).
+      - ``handle_pinch``: flat pick; pads across the handle width (y_obj), grasp point at
+        ``grasp_point_m`` along the long axis.
+    """
+    fam = spec.grasp.family
+    u, v = spec.body_center_uv
+    r = spec.rim_radius_m
+    z = spec.grasp.rim_tcp_z_m
+    if spec.axis_obj == (0.0, 1.0, 0.0):  # legacy Y-up mug frame
+        if fam != "rim_diam":
+            raise ValueError(f"unsupported family {fam!r} for the legacy Y-up frame")
+        # h2 from the bbox half along the axis (0.0407, the frozen v0 literal), NOT
+        # height_m / 2 — the measured bbox is 0.1 mm asymmetric and the baseline cache hash
+        # depends on the exact float. `+ 0.0` normalizes -0.0 for stable JSON hashing.
+        h2 = spec.bbox_half[1]
+        return (-u + 0.0, -v + 0.0, z + h2), (-0.70710678, 0.0, 0.0, 0.70710678)
+    h2 = spec.bbox_half[2]
+    if fam in ("rim_diam", "stem_pinch"):
+        return (-u + 0.0, v + 0.0, z + h2), (1.0, 0.0, 0.0, 0.0)
+    if fam == "rim_edge":
+        return (-u + 0.0, v + r, z + h2), (1.0, 0.0, 0.0, 0.0)
+    if fam == "edge_pinch":
+        return (v + 0.0, 0.0, z + u + r), (-0.5, 0.5, 0.5, 0.5)
+    if fam == "handle_pinch":
+        # Rx(180): head (+x_obj) -> +x_tcp, the jaw-free direction (the Ry(180) variant
+        # pointed the head into the wrist — measured 116 N at the scripts/11 open gate)
+        return (-spec.grasp.grasp_point_m + 0.0, 0.0, z), (1.0, 0.0, 0.0, 0.0)
+    raise ValueError(f"unknown grasp family {fam!r}")
+
+
+def set_active_object(name: str) -> None:
+    """Activate an object class by rewriting the active-object view in place.
+
+    Must run before importing :mod:`dishsim.robots`/:mod:`dishsim.scene` (they bind the
+    object USD path at import time) and before building collision caches.
+    :func:`geometry.config_hash` reads these attributes at call time, so per-object caches
+    invalidate correctly.
+
+    Args:
+        name: Key into :data:`OBJECTS`.
+    """
+    global ACTIVE_OBJECT, OBJECT_NAME, OBJECT_USD, OBJECT_MASS_KG, OBJECT_BBOX_HALF
+    global OBJECT_AXIS_OBJ, OBJECT_BODY_CENTER_XZ, OBJECT_RIM_RADIUS_M, OBJECT_HEIGHT_M
+    global GRASP_RIM_TCP_Z_M, GRASP_TCP_OBJ_POS, GRASP_TCP_OBJ_QUAT
+    global GRIPPER_APERTURE_GRASP_RAD, GRIP_FORCE_MIN_N, GRIP_FORCE_MAX_N, GRIP_FORCE_EXEC_MAX_N
+    global OBJECT_COUNTERTOP_POSES_W
+    if name not in OBJECTS:
+        raise ValueError(f"unknown object {name!r} (choices: {sorted(OBJECTS)})")
+    spec = OBJECTS[name]
+    ACTIVE_OBJECT = name
+    OBJECT_NAME = spec.object_name
+    OBJECT_USD = spec.usd_path
+    OBJECT_MASS_KG = spec.mass_kg
+    OBJECT_BBOX_HALF = spec.bbox_half
+    OBJECT_AXIS_OBJ = spec.axis_obj
+    OBJECT_BODY_CENTER_XZ = spec.body_center_uv
+    OBJECT_RIM_RADIUS_M = spec.rim_radius_m
+    OBJECT_HEIGHT_M = spec.height_m
+    GRASP_RIM_TCP_Z_M = spec.grasp.rim_tcp_z_m
+    GRASP_TCP_OBJ_POS, GRASP_TCP_OBJ_QUAT = grasp_transform(spec)
+    # apertures/bands: calibrated values when frozen, else a linear-jaw estimate that only
+    # gates FCL cluster prep (scripts/11 must run before any demo trial trusts the pinch)
+    if spec.grasp.aperture_rad is not None:
+        GRIPPER_APERTURE_GRASP_RAD = spec.grasp.aperture_rad
+    else:
+        GRIPPER_APERTURE_GRASP_RAD = round(0.8 * (1.0 - spec.grasp.grasp_width_m / 0.085), 3)
+    GRIP_FORCE_MIN_N = spec.grasp.force_min_n if spec.grasp.force_min_n is not None else 0.5
+    GRIP_FORCE_MAX_N = spec.grasp.force_max_n if spec.grasp.force_max_n is not None else 20.0
+    GRIP_FORCE_EXEC_MAX_N = (
+        spec.grasp.force_exec_max_n if spec.grasp.force_exec_max_n is not None else 12.0
+    )
+    COACD["object"] = dict(spec.coacd)
+    if spec.countertop_poses_w:
+        OBJECT_COUNTERTOP_POSES_W = spec.countertop_poses_w
+
+
+def active_object_spec() -> ObjectSpec:
+    """The currently active :class:`ObjectSpec`."""
+    return OBJECTS[ACTIVE_OBJECT]
 SIM_DT = 1.0 / 60.0

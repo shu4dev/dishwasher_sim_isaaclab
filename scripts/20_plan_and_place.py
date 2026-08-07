@@ -48,6 +48,7 @@ parser.add_argument("--out", type=str, default=None,
 parser.add_argument("--media", type=str, default=None,
                     help="Media dir (default: media/F or media/F/<scenario>).")
 parser.add_argument("--skip_existing", action="store_true", help="Skip trials whose JSON exists (resume).")
+parser.add_argument("--object", type=str, default="mug", help="Carried object class (see config.OBJECTS).")
 parser.add_argument("--scenario", type=str, default="both_out",
                     help="Initial rack-state scenario (see config.SCENARIOS).")
 AppLauncher.add_app_launcher_args(parser)
@@ -74,7 +75,12 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 from dishsim import config  # noqa: E402
 
 # scenario BEFORE scene/robots imports — they bind rack targets + the derived USD at import
+config.set_active_object(args_cli.object)
 config.apply_scenario(args_cli.scenario)
+if args_cli.out is None and args_cli.object != "mug":
+    args_cli.out = os.path.join(PROJECT_ROOT, "results", "demos", args_cli.object)
+if args_cli.media is None and args_cli.object != "mug":
+    args_cli.media = os.path.join(config.scenario_media_dir("F"), args_cli.object)
 if args_cli.out is None:
     args_cli.out = (os.path.join(PROJECT_ROOT, "results") if config.SCENARIO_NAME == "both_out"
                     else os.path.join(PROJECT_ROOT, "results", config.SCENARIO_NAME))
@@ -86,12 +92,26 @@ from scipy.spatial.transform import Rotation  # noqa: E402
 from dishsim import planning, rack_ops  # noqa: E402
 from dishsim import scene as dscene  # noqa: E402
 from dishsim.collision_world import CollisionWorld  # noqa: E402
+from dishsim.geometry import config_hash as geometry_config_hash  # noqa: E402
 from dishsim.media import CameraRig, VideoWriter  # noqa: E402
-from dishsim.placement import SlotFrame  # noqa: E402
+from dishsim.placement import SlotFrame, evaluate_placement  # noqa: E402
 from dishsim.transforms import T_inv, make_T  # noqa: E402
 from dishsim.ur5e_kin import fk_wrist3, ik_wrist3_all  # noqa: E402
 
-ACTION = config.SCENARIOS[args_cli.scenario]["rack_action"]
+# Rack action of the initial scenario. Internal states (e.g. --scenario placement) have the
+# racks pre-positioned and no rack_action: Phase R is skipped — used by the per-class object
+# demos, where rack reconfiguration is object-independent (demonstrated by the mug campaign).
+ACTION = config.state_params(args_cli.scenario).get("rack_action")
+
+# Weld-carried classes skip Phase P and START WELDED at the carry pose — the v0 framing
+# (grasp acquisition out of scope): edge-pinch discs cannot be pinched off a flat countertop
+# (the jaw would have to close across the full disc), and rim-edge thin walls give a binary
+# 0->60 N contact against the rigid weld (measured in the scripts/11 staircase) — for both,
+# the visible close stops at first contact and the weld carries.
+# handle_pinch joined the weld-carried set after measurement: the near-closed pad arc
+# drags a free-lying 30 g fork ~21 mm during the close (weld gate 5 mm) — real systems
+# solve this with tactile servoing, out of scope here
+START_WELDED = config.active_object_spec().grasp.family in ("edge_pinch", "rim_edge", "handle_pinch")
 
 
 def parse_ids(spec: str) -> list[int]:
@@ -106,11 +126,23 @@ def parse_ids(spec: str) -> list[int]:
     return out
 
 
-def mug_countertop_T_base() -> np.ndarray:
-    """The mug's initial pose (base frame): upright on the countertop at the configured spot."""
-    pos_b = np.array(config.MUG_COUNTERTOP_POS_W) - np.array(config.ROBOT_BASE_POS_W)
-    rot = Rotation.from_euler("z", np.radians(config.MUG_COUNTERTOP_YAW_DEG)) * Rotation.from_euler("x", np.pi / 2)
-    return make_T(pos_b, rot.as_quat())
+def countertop_staging_rot(yaw_deg: float) -> "Rotation":
+    """World rotation of the object staged on the countertop (axis convention aware).
+
+    Y-up objects (the legacy mug) stand via Rx(+90); Z-up objects stand as authored; X-up
+    objects (cutlery/utensils) lie flat as authored. Yaw spins about world z on top.
+    """
+    yaw = Rotation.from_euler("z", np.radians(yaw_deg))
+    if tuple(config.OBJECT_AXIS_OBJ) == (0.0, 1.0, 0.0):
+        return yaw * Rotation.from_euler("x", np.pi / 2)
+    return yaw
+
+
+def countertop_T_base(instance: int = 0) -> np.ndarray:
+    """The object's staged pose (base frame) for a trial instance."""
+    (pos_w, yaw_deg) = config.OBJECT_COUNTERTOP_POSES_W[instance]
+    pos_b = np.array(pos_w) - np.array(config.ROBOT_BASE_POS_W)
+    return make_T(pos_b, countertop_staging_rot(yaw_deg).as_quat())
 
 
 def main() -> None:
@@ -118,35 +150,52 @@ def main() -> None:
     os.makedirs(args_cli.media, exist_ok=True)
 
     # ---- collision worlds ---------------------------------------------------------------------
-    # placement-state cache (lower out, upper in): slots/goals + pick/place/retract planning
-    placement_cache = config.scenario_cache_dir(config.PLACEMENT_STATE)
+    # Placement-state cache: slots/goals + pick/place/retract planning. For internal states
+    # (no rack action) the trial PLACES in that state directly — e.g. placement_open (both
+    # racks out) for the rear plate bank, which the stowed upper rack otherwise blocks.
+    place_cache_state = args_cli.scenario if ACTION is None else config.PLACEMENT_STATE
+    placement_cache = config.scenario_cache_dir(place_cache_state)
     with open(os.path.join(placement_cache, "slots", "slots.json")) as f:
-        slots = {s["slot_id"]: SlotFrame.from_json(s) for s in json.load(f)["slots"]}
+        slots_doc = json.load(f)
+    slots = {s["slot_id"]: SlotFrame.from_json(s) for s in slots_doc["slots"]}
     with open(os.path.join(placement_cache, "slots", "goal_sets.json")) as f:
         goal_sets = {g["slot_id"]: np.array(g["configs"]) for g in json.load(f)["goal_sets"]}
 
     place_state = config.SCENARIO_NAME
-    config.apply_scenario(config.PLACEMENT_STATE)  # manifest hash of the placement cache
-    world = CollisionWorld(cache_dir=placement_cache, self_check=True)
-    retract_world = CollisionWorld(cache_dir=placement_cache, self_check=True)
+    config.apply_scenario(place_cache_state)  # manifest hash of the placement cache
+    if slots_doc.get("config_hash") != geometry_config_hash():
+        raise SystemExit(
+            f"[FAIL] slots.json is stale for object {config.ACTIVE_OBJECT!r} in the placement "
+            f"state — re-run scripts/15_goal_configs.py --object {config.ACTIVE_OBJECT}"
+        )
+    # per-piece cluster for thin-insertion modes (the merged gripper+object hull cannot
+    # enter a bay or a tine gap); merged (3x faster, strictly conservative) otherwise
+    merged = config.active_object_spec().placement.mode not in ("basket_drop", "plate_slot")
+    world = CollisionWorld(cache_dir=placement_cache, self_check=True, merged_cluster=merged)
+    retract_world = CollisionWorld(cache_dir=placement_cache, self_check=True, merged_cluster=merged)
     pick_world = CollisionWorld(cache_dir=placement_cache, self_check=True, object_attached=False)
     config.apply_scenario(place_state)  # back to the trial's initial state
     mug_pieces = retract_world.carried_object_pieces()
     retract_world.detach_carried_object()
-    # initial-state cache: rack-approach + slide planning (nothing carried yet)
-    rack_world = CollisionWorld(cache_dir=config.scenario_cache_dir(), self_check=True, object_attached=False)
 
-    rack_body = ACTION["body"]
-    rack_joint = ACTION["joint"]
-    rack_params = config.RACK_GEN[rack_body]
-    T_base_rack = np.array(rack_world.manifest["statics"][rack_body]["T_base_body"])
-    state0 = rack_world.manifest["statics_state"]
-    cached_ext = state0["rack_upper_m"] if rack_joint.endswith("_up") else state0["rack_lower_m"]
-    e0, e1 = float(cached_ext), float(ACTION["to"])
+    if ACTION is not None:
+        # initial-state cache: rack-approach + slide planning (nothing carried yet)
+        rack_world = CollisionWorld(cache_dir=config.scenario_cache_dir(), self_check=True, object_attached=False)
+        rack_body = ACTION["body"]
+        rack_joint = ACTION["joint"]
+        rack_params = config.RACK_GEN[rack_body]
+        T_base_rack = np.array(rack_world.manifest["statics"][rack_body]["T_base_body"])
+        state0 = rack_world.manifest["statics_state"]
+        cached_ext = state0["rack_upper_m"] if rack_joint.endswith("_up") else state0["rack_lower_m"]
+        e0, e1 = float(cached_ext), float(ACTION["to"])
+    else:  # internal state: racks pre-positioned, no rack phase
+        rack_world, rack_body, rack_joint, rack_params = None, None, None, None
+        T_base_rack, e0, e1 = None, 0.0, 0.0
 
-    T_base_mug0 = mug_countertop_T_base()
-    for w in (rack_world, pick_world):
-        w.add_object("countertop_mug", mug_pieces, T_base_mug0)
+    T_base_mug0 = countertop_T_base(0)
+    if not START_WELDED:
+        for w in ((pick_world,) if rack_world is None else (rack_world, pick_world)):
+            w.add_object("countertop_mug", mug_pieces, T_base_mug0)
 
     T_w3_tcp = rack_ops.t_wrist3_tcp()
     T_tcp_obj = make_T(config.GRASP_TCP_OBJ_POS, config.GRASP_TCP_OBJ_QUAT)
@@ -170,16 +219,18 @@ def main() -> None:
     obj = scene["carried_object"]
     arm_ids, _ = robot.find_joints(config.ARM_JOINTS, preserve_order=True)
     dw = scene["dishwasher"]
-    rack_jids, _ = dw.find_joints(rack_joint)
+    rack_jids = dw.find_joints(rack_joint)[0] if rack_joint is not None else None
     device = robot.data.joint_pos.torch.device
     sensors = [scene["robot_contacts_arm"], scene["robot_contacts_gripper"]]
     sensor_names = [list(getattr(s, "body_names", [])) for s in sensors]
     gripper_bodies = tuple(sensor_names[1])
 
-    def mug_pose_t() -> torch.Tensor:
-        pos_w = np.array(config.MUG_COUNTERTOP_POS_W)
-        rot = Rotation.from_euler("z", np.radians(config.MUG_COUNTERTOP_YAW_DEG)) * Rotation.from_euler("x", np.pi / 2)
-        return torch.tensor(np.concatenate([pos_w, rot.as_quat()])[None], dtype=torch.float32, device=device)
+    def mug_pose_t(instance: int = 0) -> torch.Tensor:
+        (pos_w, yaw_deg) = config.OBJECT_COUNTERTOP_POSES_W[instance]
+        rot = countertop_staging_rot(yaw_deg)
+        return torch.tensor(
+            np.concatenate([np.array(pos_w), rot.as_quat()])[None], dtype=torch.float32, device=device
+        )
 
     # settle once with jaws open: the teleport template for every trial reset
     for _ in range(60):
@@ -203,7 +254,8 @@ def main() -> None:
             scene.update(dt)
 
     def reset_trial() -> None:
-        """Weld OFF, racks at the scenario's initial state, mug back on the countertop."""
+        """Weld OFF, racks at the scenario's initial state, object staged (countertop, or
+        welded at the carry pose for START_WELDED classes)."""
         dscene.set_weld_enabled(scene.stage, weld_path, False)
         dscene.set_rack_target_override(None)
         full = template_open.clone()
@@ -211,8 +263,16 @@ def main() -> None:
         robot.write_joint_velocity_to_sim_index(velocity=torch.zeros_like(full))
         dw.write_joint_position_to_sim_index(position=dw.data.default_joint_pos.torch.clone())
         dw.write_joint_velocity_to_sim_index(velocity=torch.zeros_like(dw.data.default_joint_pos.torch))
-        obj.write_root_pose_to_sim_index(root_pose=mug_pose_t())
+        if START_WELDED:
+            q_arm = template_open[0, arm_ids].cpu().numpy().astype(float)
+            pos, quat = dscene.grasp_pose_w(q_arm)
+            pose = torch.tensor(np.concatenate([pos, quat])[None], dtype=torch.float32, device=device)
+            obj.write_root_pose_to_sim_index(root_pose=pose)
+        else:
+            obj.write_root_pose_to_sim_index(root_pose=mug_pose_t())
         obj.write_root_velocity_to_sim_index(root_velocity=torch.zeros((1, 6), dtype=torch.float32, device=device))
+        if START_WELDED:
+            dscene.set_weld_enabled(scene.stage, weld_path, True)
         dscene.hold_targets(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
         for _ in range(30):
             step_sim(1)
@@ -221,16 +281,6 @@ def main() -> None:
         p = obj.data.root_pos_w.torch[0].cpu().numpy()
         q = obj.data.root_quat_w.torch[0].cpu().numpy()
         return T_base_w @ make_T(p, q)
-
-    def placement_errors(slot: SlotFrame) -> tuple[float, float, float]:
-        T_base_obj = object_pose_base()
-        axis_dir = T_base_obj[:3, :3] @ np.array([0.0, 1.0, 0.0])
-        p_bottom = (T_base_obj @ np.array([config.OBJECT_BODY_CENTER_XZ[0], -config.OBJECT_BBOX_HALF[1],
-                                           config.OBJECT_BODY_CENTER_XZ[1], 1.0]))[:3]
-        d = T_inv(slot.T_base_slot) @ np.append(p_bottom, 1.0)
-        lateral = float(np.hypot(d[0], d[1]))
-        tilt = float(np.degrees(np.arccos(np.clip(axis_dir @ slot.T_base_slot[:3, 2], -1.0, 1.0))))
-        return lateral, tilt, float(d[2])
 
     def arm_q_now() -> np.ndarray:
         return robot.data.joint_pos.torch[0, arm_ids].cpu().numpy().astype(float)
@@ -265,6 +315,7 @@ def main() -> None:
                     continue
                 trial_id += 1
                 record = {"trial": tag, "slot": slot_id, "seed": seed, "repeat": rep,
+                          "object": config.ACTIVE_OBJECT, "placement_mode": config.active_object_spec().placement.mode,
                           "scenario": args_cli.scenario, "rack_action": ACTION,
                           "success": False, "failure_stage": None, "plan_time_s": None,
                           "path_len_rad": None, "exec_steps": 0, "goal_config_index": None,
@@ -314,215 +365,228 @@ def main() -> None:
                         record["failure_stage"] = "no-goal-config"
                         raise StopIteration
 
-                    # ================= PHASE R: rack reconfiguration ==========================
-                    approach_aperture = (config.GRIPPER_APERTURE_OPEN_RAD if ACTION["mode"] == "pull"
-                                         else config.RACK_PUSH_APERTURE_RAD)
-                    approach = rack_ops.approach_dir(T_base_rack)
-                    # a human reaches the handle horizontally from the front; try both rod-axis
-                    # signs (wrist-flip) and keep the first with a valid approach AND slide path
-                    plan_r = None
-                    for flip in (False, True):
-                        T_engage = rack_ops.engage_pose(T_base_rack, rack_params, ACTION, e0, flip=flip)
-                        T_pre = T_engage.copy()
-                        T_pre[:3, 3] = T_engage[:3, 3] - approach * config.RACK_APPROACH_HOVER_M
-                        pre_sols = [q for q in ik_wrist3_all(T_pre @ T_inv(T_w3_tcp), q_seed=np.array(config.HOME_Q))
-                                    if not rack_world.in_collision(q)]
-                        if not pre_sols:
-                            continue
-                        arm_path = rack_ops.slide_arm_path(rack_world, T_base_rack, rack_params, ACTION,
-                                                           e0, pre_sols[0], flip=flip)
-                        if arm_path is None:
-                            continue
-                        plan_r = (flip, T_engage, T_pre, pre_sols, arm_path)
-                        break
-                    if plan_r is None:
-                        record["failure_stage"] = "rack-slide-plan"
-                        record["failure_detail"] = "no flip variant yields a valid engage + slide path"
-                        raise StopIteration
-                    flip_r, T_engage, T_pre, pre_sols, arm_path = plan_r
-
-                    res = planning.plan_to_goals(rack_world, np.array(config.HOME_Q), np.array(pre_sols),
-                                                 seed=seed * 7 + rep + 1)
-                    if res.status != "solved":
-                        record["failure_stage"] = "rack-approach-plan"
-                        raise StopIteration
-                    fail = run_path(res.path_q, approach_aperture, "rack-approach")
-                    if fail:
-                        record["failure_stage"] = "rack-approach-plan"
-                        record["failure_detail"] = fail
-                        raise StopIteration
-                    q_pre = np.asarray(res.path_q[-1], dtype=float)
-
-                    # scripted horizontal reach-in onto the handle (gripper-rack contact is the
-                    # POINT here: gripper bodies leave the unexpected-contact gate, arm stays)
-                    seg = ik_track(T_pre, T_engage, 15, q_pre)
-                    if seg is None:
-                        record["failure_stage"] = "rack-approach-plan"
-                        record["failure_detail"] = "IK discontinuity on the engage reach-in"
-                        raise StopIteration
-                    fail = run_path(seg, approach_aperture, "rack-engage", exclude=gripper_bodies)
-                    if fail:
-                        record["failure_stage"] = "rack-slide-fault"
-                        record["failure_detail"] = fail
-                        raise StopIteration
-                    if ACTION["mode"] == "pull":  # wrap the rod
-                        dscene.ramp_gripper(scene, sim, config.RACK_HANDLE_APERTURE_RAD, 45,
-                                            arm_q=seg[-1], per_step=lambda i: capture())
-                    # re-seed the slide path from the actually-reached engage config
-                    arm_path2 = rack_ops.slide_arm_path(rack_world, T_base_rack, rack_params, ACTION,
-                                                        e0, seg[-1], flip=flip_r)
-                    arm_path = arm_path if arm_path2 is None else arm_path2
-                    slide_aperture = (config.RACK_HANDLE_APERTURE_RAD if ACTION["mode"] == "pull"
-                                      else config.RACK_PUSH_APERTURE_RAD)
-                    n_steps = config.RACK_SLIDE_STEPS
-                    for i in range(n_steps):
-                        s = (i + 1) / n_steps
-                        e_s = e0 + (e1 - e0) * s
-                        idx = s * (len(arm_path) - 1)
-                        lo = int(np.floor(idx))
-                        hi = min(lo + 1, len(arm_path) - 1)
-                        wp = arm_path[lo] + (idx - lo) * (arm_path[hi] - arm_path[lo])
-                        dscene.set_rack_target_override({rack_joint: e_s})
-                        dscene.hold_targets(scene, arm_q=wp, aperture=slide_aperture)
-                        step_sim(1)
-                        capture()
-                        peak, body = dscene.unexpected_robot_contact(scene, sensors, sensor_names,
-                                                                     exclude=gripper_bodies)
-                        if peak > config.RETRACT_GRAZE_MAX_N:
-                            record["failure_stage"] = "rack-slide-fault"
-                            record["failure_detail"] = f"arm contact during slide: {body} ({peak:.1f} N)"
+                    if ACTION is None:  # internal state: racks pre-positioned, no rack phase
+                        q_free = np.asarray(config.HOME_Q, dtype=float)
+                    else:
+                        # ================= PHASE R: rack reconfiguration ==========================
+                        approach_aperture = (config.GRIPPER_APERTURE_OPEN_RAD if ACTION["mode"] == "pull"
+                                             else config.RACK_PUSH_APERTURE_RAD)
+                        approach = rack_ops.approach_dir(T_base_rack)
+                        # a human reaches the handle horizontally from the front; try both rod-axis
+                        # signs (wrist-flip) and keep the first with a valid approach AND slide path
+                        plan_r = None
+                        for flip in (False, True):
+                            T_engage = rack_ops.engage_pose(T_base_rack, rack_params, ACTION, e0, flip=flip)
+                            T_pre = T_engage.copy()
+                            T_pre[:3, 3] = T_engage[:3, 3] - approach * config.RACK_APPROACH_HOVER_M
+                            pre_sols = [q for q in ik_wrist3_all(T_pre @ T_inv(T_w3_tcp), q_seed=np.array(config.HOME_Q))
+                                        if not rack_world.in_collision(q)]
+                            if not pre_sols:
+                                continue
+                            arm_path = rack_ops.slide_arm_path(rack_world, T_base_rack, rack_params, ACTION,
+                                                               e0, pre_sols[0], flip=flip)
+                            if arm_path is None:
+                                continue
+                            plan_r = (flip, T_engage, T_pre, pre_sols, arm_path)
+                            break
+                        if plan_r is None:
+                            record["failure_stage"] = "rack-slide-plan"
+                            record["failure_detail"] = "no flip variant yields a valid engage + slide path"
                             raise StopIteration
-                    for _ in range(60):
-                        dscene.hold_targets(scene, arm_q=arm_path[-1], aperture=slide_aperture)
-                        step_sim(1)
-                        capture()
-                    rack_err = abs(float(dw.data.joint_pos.torch[0, rack_jids[0]]) - e1)
-                    record["rack_final_err_m"] = round(rack_err, 4)
-                    if rack_err > config.RACK_SLIDE_TOL_M:
-                        record["failure_stage"] = "rack-slide-fault"
-                        record["failure_detail"] = f"rack settled {rack_err * 1e3:.1f} mm off target"
-                        raise StopIteration
+                        flip_r, T_engage, T_pre, pre_sols, arm_path = plan_r
 
-                    # disengage: open (pull mode) and back straight off the handle
-                    if ACTION["mode"] == "pull":
-                        dscene.ramp_gripper(scene, sim, config.GRIPPER_APERTURE_OPEN_RAD, 45,
-                                            arm_q=arm_path[-1], per_step=lambda i: capture())
-                    T_now = fk_wrist3(arm_path[-1]) @ T_w3_tcp
-                    T_up = T_now.copy()
-                    T_up[:3, 3] = T_now[:3, 3] - approach * config.RACK_APPROACH_HOVER_M
-                    seg = ik_track(T_now, T_up, 12, arm_path[-1])
-                    if seg is not None:
-                        fail = run_path(seg, config.GRIPPER_APERTURE_OPEN_RAD, "rack-disengage",
-                                        exclude=gripper_bodies)
+                        res = planning.plan_to_goals(rack_world, np.array(config.HOME_Q), np.array(pre_sols),
+                                                     seed=seed * 7 + rep + 1)
+                        if res.status != "solved":
+                            record["failure_stage"] = "rack-approach-plan"
+                            raise StopIteration
+                        fail = run_path(res.path_q, approach_aperture, "rack-approach")
+                        if fail:
+                            record["failure_stage"] = "rack-approach-plan"
+                            record["failure_detail"] = fail
+                            raise StopIteration
+                        q_pre = np.asarray(res.path_q[-1], dtype=float)
+
+                        # scripted horizontal reach-in onto the handle (gripper-rack contact is the
+                        # POINT here: gripper bodies leave the unexpected-contact gate, arm stays)
+                        seg = ik_track(T_pre, T_engage, 15, q_pre)
+                        if seg is None:
+                            record["failure_stage"] = "rack-approach-plan"
+                            record["failure_detail"] = "IK discontinuity on the engage reach-in"
+                            raise StopIteration
+                        fail = run_path(seg, approach_aperture, "rack-engage", exclude=gripper_bodies)
                         if fail:
                             record["failure_stage"] = "rack-slide-fault"
                             record["failure_detail"] = fail
                             raise StopIteration
-                    q_free = seg[-1] if seg is not None else arm_path[-1]
+                        if ACTION["mode"] == "pull":  # wrap the rod
+                            dscene.ramp_gripper(scene, sim, config.RACK_HANDLE_APERTURE_RAD, 45,
+                                                arm_q=seg[-1], per_step=lambda i: capture())
+                        # re-seed the slide path from the actually-reached engage config
+                        arm_path2 = rack_ops.slide_arm_path(rack_world, T_base_rack, rack_params, ACTION,
+                                                            e0, seg[-1], flip=flip_r)
+                        arm_path = arm_path if arm_path2 is None else arm_path2
+                        slide_aperture = (config.RACK_HANDLE_APERTURE_RAD if ACTION["mode"] == "pull"
+                                          else config.RACK_PUSH_APERTURE_RAD)
+                        n_steps = config.RACK_SLIDE_STEPS
+                        for i in range(n_steps):
+                            s = (i + 1) / n_steps
+                            e_s = e0 + (e1 - e0) * s
+                            idx = s * (len(arm_path) - 1)
+                            lo = int(np.floor(idx))
+                            hi = min(lo + 1, len(arm_path) - 1)
+                            wp = arm_path[lo] + (idx - lo) * (arm_path[hi] - arm_path[lo])
+                            dscene.set_rack_target_override({rack_joint: e_s})
+                            dscene.hold_targets(scene, arm_q=wp, aperture=slide_aperture)
+                            step_sim(1)
+                            capture()
+                            peak, body = dscene.unexpected_robot_contact(scene, sensors, sensor_names,
+                                                                         exclude=gripper_bodies)
+                            if peak > config.RETRACT_GRAZE_MAX_N:
+                                record["failure_stage"] = "rack-slide-fault"
+                                record["failure_detail"] = f"arm contact during slide: {body} ({peak:.1f} N)"
+                                raise StopIteration
+                        for _ in range(60):
+                            dscene.hold_targets(scene, arm_q=arm_path[-1], aperture=slide_aperture)
+                            step_sim(1)
+                            capture()
+                        rack_err = abs(float(dw.data.joint_pos.torch[0, rack_jids[0]]) - e1)
+                        record["rack_final_err_m"] = round(rack_err, 4)
+                        if rack_err > config.RACK_SLIDE_TOL_M:
+                            record["failure_stage"] = "rack-slide-fault"
+                            record["failure_detail"] = f"rack settled {rack_err * 1e3:.1f} mm off target"
+                            raise StopIteration
 
-                    # ================= PHASE P: pick the mug off the countertop ==============
-                    T_base_obj0 = object_pose_base()  # measured (absorbs any settle drift)
-                    T_grasp_tcp = T_base_obj0 @ T_inv(T_tcp_obj)
-                    T_pre_pick = T_grasp_tcp.copy()
-                    T_pre_pick[2, 3] += config.PICK_HOVER_M
-                    pre_sols = [q for q in ik_wrist3_all(T_pre_pick @ T_inv(T_w3_tcp), q_seed=q_free)
-                                if not pick_world.in_collision(q)]
-                    if not pre_sols:
-                        record["failure_stage"] = "pick-plan"
-                        record["failure_detail"] = "no collision-free IK at the pre-grasp hover"
-                        raise StopIteration
-                    res = planning.plan_to_goals(pick_world, q_free, np.array(pre_sols),
-                                                 seed=seed * 7 + rep + 2)
-                    if res.status != "solved":
-                        record["failure_stage"] = "pick-plan"
-                        raise StopIteration
-                    fail = run_path(res.path_q, config.GRIPPER_APERTURE_OPEN_RAD, "pick-approach")
-                    if fail:
-                        record["failure_stage"] = "pick-plan"
-                        record["failure_detail"] = fail
-                        raise StopIteration
-                    q_hover = np.asarray(res.path_q[-1], dtype=float)
+                        # disengage: open (pull mode) and back straight off the handle
+                        if ACTION["mode"] == "pull":
+                            dscene.ramp_gripper(scene, sim, config.GRIPPER_APERTURE_OPEN_RAD, 45,
+                                                arm_q=arm_path[-1], per_step=lambda i: capture())
+                        T_now = fk_wrist3(arm_path[-1]) @ T_w3_tcp
+                        T_up = T_now.copy()
+                        T_up[:3, 3] = T_now[:3, 3] - approach * config.RACK_APPROACH_HOVER_M
+                        seg = ik_track(T_now, T_up, 12, arm_path[-1])
+                        if seg is not None:
+                            fail = run_path(seg, config.GRIPPER_APERTURE_OPEN_RAD, "rack-disengage",
+                                            exclude=gripper_bodies)
+                            if fail:
+                                record["failure_stage"] = "rack-slide-fault"
+                                record["failure_detail"] = fail
+                                raise StopIteration
+                        q_free = seg[-1] if seg is not None else arm_path[-1]
 
-                    seg = ik_track(T_pre_pick, T_grasp_tcp, 20, q_hover)
-                    if seg is None:
-                        record["failure_stage"] = "pick-plan"
-                        record["failure_detail"] = "IK discontinuity on the pick descent"
-                        raise StopIteration
-                    fail = run_path(seg, config.GRIPPER_APERTURE_OPEN_RAD, "pick-descend",
-                                    exclude=gripper_bodies)
-                    if fail:
-                        record["failure_stage"] = "pick-grasp-fault"
-                        record["failure_detail"] = fail
-                        raise StopIteration
-                    for _ in range(30):
-                        dscene.hold_targets(scene, arm_q=seg[-1], aperture=config.GRIPPER_APERTURE_OPEN_RAD)
-                        step_sim(1)
-                        capture()
-                    f0 = dscene.grip_forces(scene)
-                    if max(f0["partners"].values()) > 0.05:
-                        record["failure_stage"] = "pick-grasp-fault"
-                        record["failure_detail"] = f"contact before the close ({max(f0['partners'].values()):.2f} N)"
-                        raise StopIteration
-                    dscene.ramp_gripper(scene, sim, config.GRIPPER_APERTURE_GRASP_RAD,
-                                        config.GRIPPER_CLOSE_RAMP_STEPS, arm_q=seg[-1],
-                                        per_step=lambda i: capture())
-                    for _ in range(60):
-                        dscene.hold_targets(scene, arm_q=seg[-1])
-                        step_sim(1)
-                        capture()
-                    gf0 = dscene.grip_forces(scene)
-                    record["grasp_force_n"] = round(float(np.mean(gf0["pads_n"])), 2)
-                    # per-pad band + non-pad silence; the EXTERNAL residual is legitimately
-                    # nonzero here (the countertop still supports the mug) — it is gated
-                    # after the lift instead, when the mug must be airborne
-                    grip_detail = None
-                    for pad, mag in zip(config.GRIP_PAD_BODIES, gf0["pads_n"]):
-                        if not config.GRIP_FORCE_MIN_N <= mag <= config.GRIP_FORCE_MAX_N:
-                            grip_detail = f"{pad} force {mag:.2f} N outside the calibrated band"
-                    for nm, mag in gf0["partners"].items():
-                        if nm not in config.GRIP_PAD_BODIES and mag > config.CONTACT_FORCE_THRESH_N:
-                            grip_detail = f"non-pad partner {nm} touches the mug ({mag:.2f} N)"
-                    if grip_detail:
-                        record["failure_stage"] = "pick-grasp-fault"
-                        record["failure_detail"] = grip_detail
-                        raise StopIteration
+                    if START_WELDED:
+                        # already welded at the carry pose: visible close onto the object,
+                        # then carry (the weld bears the load — v0's grasp-acquisition-out-
+                        # of-scope framing for flat discs that cannot be pinched off a table)
+                        dscene.ramp_gripper(scene, sim, config.GRIPPER_APERTURE_GRASP_RAD,
+                                            config.GRIPPER_CLOSE_RAMP_STEPS, arm_q=q_free,
+                                            per_step=lambda i: capture())
+                        q_carry = np.asarray(q_free, dtype=float)
+                        record["q_carry"] = [round(float(v), 6) for v in q_carry]
+                    else:
+                        # ================= PHASE P: pick the mug off the countertop ==============
+                        T_base_obj0 = object_pose_base()  # measured (absorbs any settle drift)
+                        T_grasp_tcp = T_base_obj0 @ T_inv(T_tcp_obj)
+                        T_pre_pick = T_grasp_tcp.copy()
+                        T_pre_pick[2, 3] += config.PICK_HOVER_M
+                        pre_sols = [q for q in ik_wrist3_all(T_pre_pick @ T_inv(T_w3_tcp), q_seed=q_free)
+                                    if not pick_world.in_collision(q)]
+                        if not pre_sols:
+                            record["failure_stage"] = "pick-plan"
+                            record["failure_detail"] = "no collision-free IK at the pre-grasp hover"
+                            raise StopIteration
+                        res = planning.plan_to_goals(pick_world, q_free, np.array(pre_sols),
+                                                     seed=seed * 7 + rep + 2)
+                        if res.status != "solved":
+                            record["failure_stage"] = "pick-plan"
+                            raise StopIteration
+                        fail = run_path(res.path_q, config.GRIPPER_APERTURE_OPEN_RAD, "pick-approach")
+                        if fail:
+                            record["failure_stage"] = "pick-plan"
+                            record["failure_detail"] = fail
+                            raise StopIteration
+                        q_hover = np.asarray(res.path_q[-1], dtype=float)
 
-                    # hidden weld takes the load (anchors == the grasp transform -> zero error)
-                    dscene.set_weld_enabled(scene.stage, weld_path, True)
-                    for _ in range(30):
-                        dscene.hold_targets(scene, arm_q=seg[-1])
-                        step_sim(1)
-                        capture()
-                    obj_pos = obj.data.root_pos_w.torch[0].cpu().numpy()
-                    weld_err = float(np.linalg.norm(obj_pos - dscene.grasp_pose_w(seg[-1])[0])) * 1e3
-                    record["pick_weld_err_mm"] = round(weld_err, 2)
-                    if weld_err > 5.0:
-                        record["failure_stage"] = "pick-weld-fault"
-                        record["failure_detail"] = f"weld error {weld_err:.1f} mm after enable"
-                        raise StopIteration
-                    pick_world.remove_object("countertop_mug")  # it is in-hand now
+                        seg = ik_track(T_pre_pick, T_grasp_tcp, 20, q_hover)
+                        if seg is None:
+                            record["failure_stage"] = "pick-plan"
+                            record["failure_detail"] = "IK discontinuity on the pick descent"
+                            raise StopIteration
+                        fail = run_path(seg, config.GRIPPER_APERTURE_OPEN_RAD, "pick-descend",
+                                        exclude=gripper_bodies)
+                        if fail:
+                            record["failure_stage"] = "pick-grasp-fault"
+                            record["failure_detail"] = fail
+                            raise StopIteration
+                        for _ in range(30):
+                            dscene.hold_targets(scene, arm_q=seg[-1], aperture=config.GRIPPER_APERTURE_OPEN_RAD)
+                            step_sim(1)
+                            capture()
+                        f0 = dscene.grip_forces(scene)
+                        if max(f0["partners"].values()) > 0.05:
+                            record["failure_stage"] = "pick-grasp-fault"
+                            record["failure_detail"] = f"contact before the close ({max(f0['partners'].values()):.2f} N)"
+                            raise StopIteration
+                        dscene.ramp_gripper(scene, sim, config.GRIPPER_APERTURE_GRASP_RAD,
+                                            config.GRIPPER_CLOSE_RAMP_STEPS, arm_q=seg[-1],
+                                            per_step=lambda i: capture())
+                        for _ in range(60):
+                            dscene.hold_targets(scene, arm_q=seg[-1])
+                            step_sim(1)
+                            capture()
+                        gf0 = dscene.grip_forces(scene)
+                        record["grasp_force_n"] = round(float(np.mean(gf0["pads_n"])), 2)
+                        # per-pad band + non-pad silence; the EXTERNAL residual is legitimately
+                        # nonzero here (the countertop still supports the mug) — it is gated
+                        # after the lift instead, when the mug must be airborne
+                        grip_detail = None
+                        for pad, mag in zip(config.GRIP_PAD_BODIES, gf0["pads_n"]):
+                            if not config.GRIP_FORCE_MIN_N <= mag <= config.GRIP_FORCE_MAX_N:
+                                grip_detail = f"{pad} force {mag:.2f} N outside the calibrated band"
+                        for nm, mag in gf0["partners"].items():
+                            if nm not in config.GRIP_PAD_BODIES and mag > config.CONTACT_FORCE_THRESH_N:
+                                grip_detail = f"non-pad partner {nm} touches the mug ({mag:.2f} N)"
+                        if grip_detail:
+                            record["failure_stage"] = "pick-grasp-fault"
+                            record["failure_detail"] = grip_detail
+                            raise StopIteration
 
-                    T_lift = T_grasp_tcp.copy()
-                    T_lift[2, 3] += config.PICK_LIFT_M
-                    seg = ik_track(T_grasp_tcp, T_lift, 15, seg[-1])
-                    if seg is None:
-                        record["failure_stage"] = "pick-plan"
-                        record["failure_detail"] = "IK discontinuity on the lift"
-                        raise StopIteration
-                    fail = run_path(seg, None, "pick-lift", exclude=gripper_bodies)
-                    if fail:
-                        record["failure_stage"] = "pick-grasp-fault"
-                        record["failure_detail"] = fail
-                        raise StopIteration
-                    gf_lift = dscene.grip_forces(scene)
-                    if gf_lift["external_n"] > config.CONTACT_FORCE_THRESH_N:
-                        record["failure_stage"] = "pick-grasp-fault"
-                        record["failure_detail"] = (
-                            f"mug still externally loaded after the lift ({gf_lift['external_n']:.2f} N)"
-                        )
-                        raise StopIteration
-                    q_carry = seg[-1]
-                    record["q_carry"] = [round(float(v), 6) for v in q_carry]
+                        # hidden weld takes the load (anchors == the grasp transform -> zero error)
+                        dscene.set_weld_enabled(scene.stage, weld_path, True)
+                        for _ in range(30):
+                            dscene.hold_targets(scene, arm_q=seg[-1])
+                            step_sim(1)
+                            capture()
+                        obj_pos = obj.data.root_pos_w.torch[0].cpu().numpy()
+                        weld_err = float(np.linalg.norm(obj_pos - dscene.grasp_pose_w(seg[-1])[0])) * 1e3
+                        record["pick_weld_err_mm"] = round(weld_err, 2)
+                        if weld_err > 5.0:
+                            record["failure_stage"] = "pick-weld-fault"
+                            record["failure_detail"] = f"weld error {weld_err:.1f} mm after enable"
+                            raise StopIteration
+                        pick_world.remove_object("countertop_mug")  # it is in-hand now
+
+                        T_lift = T_grasp_tcp.copy()
+                        T_lift[2, 3] += config.PICK_LIFT_M
+                        seg = ik_track(T_grasp_tcp, T_lift, 15, seg[-1])
+                        if seg is None:
+                            record["failure_stage"] = "pick-plan"
+                            record["failure_detail"] = "IK discontinuity on the lift"
+                            raise StopIteration
+                        fail = run_path(seg, None, "pick-lift", exclude=gripper_bodies)
+                        if fail:
+                            record["failure_stage"] = "pick-grasp-fault"
+                            record["failure_detail"] = fail
+                            raise StopIteration
+                        gf_lift = dscene.grip_forces(scene)
+                        if gf_lift["external_n"] > config.CONTACT_FORCE_THRESH_N:
+                            record["failure_stage"] = "pick-grasp-fault"
+                            record["failure_detail"] = (
+                                f"mug still externally loaded after the lift ({gf_lift['external_n']:.2f} N)"
+                            )
+                            raise StopIteration
+                        q_carry = seg[-1]
+                        record["q_carry"] = [round(float(v), 6) for v in q_carry]
 
                     # ================= PHASE F: plan to the slot and place ====================
                     rng = np.random.default_rng(seed * 1000 + rep)
@@ -654,12 +718,10 @@ def main() -> None:
                         step_sim(1)
                         capture()
 
-                    lateral, tilt, height = placement_errors(slot)
+                    ev = evaluate_placement(slot, object_pose_base())
                     peak, body = dscene.unexpected_robot_contact(scene, sensors, sensor_names)
-                    ok = (lateral <= config.SLOT_TOL_LATERAL_M and tilt <= config.SLOT_TOL_TILT_DEG
-                          and height <= 0.02 and peak <= config.CONTACT_FORCE_THRESH_N)
-                    record["final_pose_err"] = {"lateral_m": round(lateral, 4), "tilt_deg": round(tilt, 2),
-                                                "bottom_height_m": round(height, 4)}
+                    ok = ev.pop("ok") and peak <= config.CONTACT_FORCE_THRESH_N
+                    record["final_pose_err"] = ev
                     record["success"] = bool(ok)
                     if not ok:
                         record["failure_stage"] = "unstable-after-release"
@@ -667,8 +729,9 @@ def main() -> None:
                     pass
                 finally:
                     # trial-scoped world mutations must not leak into the next trial
-                    pick_world.remove_object("countertop_mug")
-                    pick_world.add_object("countertop_mug", mug_pieces, T_base_mug0)
+                    if not START_WELDED:
+                        pick_world.remove_object("countertop_mug")
+                        pick_world.add_object("countertop_mug", mug_pieces, T_base_mug0)
 
                 if video is not None:
                     video.close()

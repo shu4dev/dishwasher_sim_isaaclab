@@ -16,6 +16,7 @@ import json
 import os
 import shutil
 import statistics
+import sys
 
 import matplotlib
 
@@ -23,6 +24,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
+
+from dishsim import config  # noqa: E402
 RESULTS = os.path.join(PROJECT_ROOT, "results")
 FIG_DIR = os.path.join(PROJECT_ROOT, "docs", "figures")
 DOCS = os.path.join(PROJECT_ROOT, "docs")
@@ -113,7 +117,7 @@ def main() -> None:
     ax.hist(plan_times, bins=12, color=SERIES, edgecolor=SURFACE, linewidth=1.5)
     ax.set_xlabel("plan time [s]", color=INK2)
     ax.set_ylabel("trials", color=INK2)
-    ax.set_title("RRT-Connect planning time (5 s budget)", color=INK, fontsize=11)
+    ax.set_title(f"RRT-Connect planning time ({config.PLAN_TIME_BUDGET_S:.0f} s budget)", color=INK, fontsize=11)
     fig.savefig(os.path.join(FIG_DIR, "plan_time_hist.png"), dpi=140, bbox_inches="tight",
                 facecolor=SURFACE)
     plt.close(fig)
@@ -179,10 +183,10 @@ def main() -> None:
         "[success_criteria.md](success_criteria.md). Both racks are procedurally generated",
         "realistic wire racks (rack_gen v2, styled after the Whirlpool WDTA50SAKZ / Bosch 800 /",
         "Frigidaire FDPC4314AS references: 3-gauge wires, 30 mm tine rows with candy-cane ends,",
-        "fold-down insert row, wheels, cup shelves). The derived scene raises the upper rack by",
-        "120 mm to restore a real machine's 250-300 mm inter-rack loading clearance (the ArtVIP",
-        "asset gives 154 mm to real-scale dishware). Validated in the two robot-facing rack",
-        "states: **both_out** (both racks fully extended) and **both_in** (fully retracted).",
+        "fold-down insert row, wheels, cup shelves). The machine itself is unmodified (no rack",
+        "raise): the robot RECONFIGURES the racks first (drive-synchronized handle slide), and",
+        "scale-to-fit dishware absorbs the compact 154 mm inter-rack clearance. Validated in the",
+        "two robot-facing rack states: **both_out** (fully extended) and **both_in** (retracted).",
         "Stack: Isaac Sim 6.0.1 + Isaac Lab 3.0 (execution/ground truth), OMPL 2.0.1 +",
         "python-fcl 0.7 + CoACD 1.0 (planning), analytic UR5e IK (see docs/environment.md).",
         "",
@@ -271,17 +275,17 @@ def main() -> None:
         f"{len(slots)} scenario-slots x {len({t['seed'] for t in trials})} RNG seeds; failures "
         f"are dominated by goal-infeasible deep-interior slots (reach limit), not planner or "
         f"execution errors.",
-        f"- Plan times: {stats_line(plan_times)} s against a 5 s budget — RRT-Connect over a "
+        f"- Plan times: {stats_line(plan_times)} s against a {config.PLAN_TIME_BUDGET_S:.0f} s budget — RRT-Connect over a "
         f"custom FCL collision world ({parity_note}).",
         "- Both racks are PROCEDURAL realistic wire racks (rack_gen v2, styled after Whirlpool",
         "  WDTA50SAKZ / Bosch 800 / Frigidaire FDPC4314AS): 3-gauge wire hierarchy, 30 mm",
         "  Whirlpool-pattern tine rows with candy-cane ends, dark fold-down insert row, roller",
         "  wheels, dipped front rail + grab handle, cup shelves + RackMatic blocks up top. The",
         "  FCL pieces are the generator's exact convex parts — zero decomposition slop.",
-        "- The derived scene raises the upper rack 120 mm: the ArtVIP asset gives real-scale",
-        "  dishware only 154 mm of inter-rack clearance where real machines give 250-300 mm —",
-        "  the raise restores a real loading geometry (274 mm) and is what makes the retracted",
-        "  (both_in) state loadable at all.",
+        "- The machine is unmodified (no rack raise): the compact 154 mm inter-rack clearance",
+        "  is absorbed by scale-to-fit dishware (documented per-object factors in",
+        "  docs/capacity_report.md), and the robot reconfigures the racks like a human would",
+        "  (rack_action handle slides) before placing.",
         "- Analytic UR5e IK (8 branches, hand-rolled; ur-analytic-ik has no py3.12 wheel)",
         "  matches Pinocchio to 1e-9 and live Isaac FK to 0.2 mm — goal sets are thousands of",
         "  configs per feasible slot, with per-slot rejection funnels as reach-feasibility maps.",

@@ -1,20 +1,24 @@
-# v0 placement success criteria
+# Placement success criteria (v0 mug + multi-object v1)
 
-Defined for the v0 task: OMPL places the carried object (YCB mug — the plate stand-in, since
-`029_plate` is absent from the Isaac 6.0 asset bucket) at a slot in the dishwasher's lower
-rack. Frames: robot-base frame, meters, Z-up, XYZW quaternions.
+Defined for OMPL placing the carried object at a slot in the dishwasher's lower rack.
+Frames: robot-base frame, meters, Z-up, XYZW quaternions.
 
-## Slot model
+## Slot model (per placement mode)
 
-The ArtVIP `dishwasher_2` lower rack (`E_shelf_1_04`) is a shallow **wire basket** (~5 cm deep
-wire grid), not a tined plate rack — measured from the Phase D decomposition
-(`media/D/overlay_E_shelf_1_04.png`). The object therefore *stands on the wire floor*; a
-**slot** is a standing cell on a grid derived from the basket geometry
-(`dishsim.placement.derive_slots_from_rack`): footprint-sized cells, inset
-`SLOT_RIM_INSET_M` from the rim walls, pitch = footprint + `SLOT_MIN_PITCH_M`. Slot frames sit
-**on** the wire floor, z up. Derivation is recorded per slot (`source: derived`); if it ever
-fails on a different asset, slots are hand-placed from the Phase C measurements
-(`config.SLOTS_OVERRIDE`, `source: manual`).
+Since rack_gen v2/v3 the racks are procedurally generated (tine bank, bowl tines, cutlery
+basket); each object class declares a placement mode in `config.OBJECTS` and
+`dishsim.placement.derive_slots` dispatches:
+
+| mode | classes | slot definition | evaluated as |
+|---|---|---|---|
+| `floor_stand` | mug, cup, tumbler, pitcher | v0 standing cell on the wire-floor grid (`derive_slots_from_rack`: footprint cells, `SLOT_RIM_INSET_M` inset, `SLOT_GRID_PITCH_M` pitch) | lateral ≤ `SLOT_TOL_LATERAL_M`, axis-vs-z tilt ≤ `SLOT_TOL_TILT_DEG`, bottom within 2 cm of the floor |
+| `plate_slot` | plate, saucer, lid | one slot per tine-bank gap (11 gaps at 30 mm pitch); disc face normal along the pitch direction, leaned +7° like the tines, bottom edge seated on the bank floor bar | face-normal deviation ≤ 12° (flip-insensitive), off-gap drift ≤ 12 mm, center height within 2 cm of nominal |
+| `bowl_lean` | bowl | lean positions against the bowl tines over the drinkware slope (opening down-slope at ~48°) | axis within 20° of the lean cone, lateral ≤ 4 cm, height within 6 cm |
+| `basket_drop` | fork, spoon, knife, serving_spoon | one slot per basket bay; the goal is a release hover 60 mm above the bay, head-down — gravity inserts | settled bbox center inside the bay volume, below the basket top |
+
+Fill-only modes (`upside_down`, `stem_scallop`, `flat_lay`) are exercised by the capacity
+fill (`scripts/25_capacity_fill.py`), which gates per-item settle stability
+(< 5 mm / 3° drift) and load-wide closability instead of slot-frame tolerances.
 
 ## A trial is a SUCCESS iff all of:
 

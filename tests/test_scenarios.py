@@ -47,7 +47,7 @@ def test_internal_placement_state():
         config.apply_scenario(config.PLACEMENT_STATE)
         assert config.RACK_LOWER_EXT_M == -0.20
         assert config.RACK_UPPER_EXT_M == 0.0
-        assert config.state_params()["min_feasible_slots"] == 3
+        assert config.state_params()["min_feasible_slots"] == 2  # v3: basket eats a column
         assert config.scenario_cache_dir().endswith(os.path.join("cache", "scenarios", "placement"))
     finally:
         config.apply_scenario(BASELINE)

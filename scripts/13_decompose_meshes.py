@@ -41,10 +41,12 @@ from dishsim.geometry import coacd_dir_for, load_manifest  # noqa: E402
 
 parser = argparse.ArgumentParser(description="CoACD decomposition of the collision cache.")
 parser.add_argument("--force", action="store_true", help="Re-decompose even if outputs exist.")
+parser.add_argument("--object", type=str, default="mug", help="Carried object class (see config.OBJECTS).")
 parser.add_argument("--scenario", type=str, default="both_out",
                     help="Rack-state scenario (see config.SCENARIOS).")
 args = parser.parse_args()
 
+config.set_active_object(args.object)
 config.apply_scenario(args.scenario)
 CACHE = config.scenario_cache_dir()
 
@@ -100,6 +102,37 @@ def decompose(name: str, mesh_rel: str) -> str | None:
         for i, part in enumerate(parts):
             part.mesh.export(os.path.join(out_dir, f"piece_{i:03d}.obj"))
         print(f"[INFO] {name}: {len(parts)} analytic pieces (rack_gen) -> {out_dir}")
+        return out_dir
+
+    params = coacd_params_for(name)
+    if name == "object" and params.get("analytic"):
+        # analytic path for procedural props: prop_gen's convex parts ARE the decomposition
+        # (CoACD would seal thin open shells like the glass walls). Alignment gate mirrors
+        # the rack path: extracted mesh vs regenerated parts.
+        from dishsim import prop_gen  # noqa: PLC0415
+
+        spec = config.active_object_spec()
+        parts, _ = prop_gen.build(spec.source_id)
+        mesh = trimesh.load(os.path.join(CACHE, mesh_rel), force="mesh")
+        ref = trimesh.util.concatenate(parts)
+        dev = float(np.abs(np.asarray(mesh.bounds) - np.asarray(ref.bounds)).max())
+        ok = dev < 2e-3
+        check(
+            f"prop_gen alignment ({spec.name})",
+            ok,
+            f"extracted vs generated: bounds dev {dev * 1e3:.2f} mm (stale cache -> re-run scripts/12)",
+        )
+        if not ok:
+            if os.path.isdir(out_dir):
+                for old in os.listdir(out_dir):
+                    os.remove(os.path.join(out_dir, old))
+            return None
+        os.makedirs(out_dir, exist_ok=True)
+        for old in os.listdir(out_dir):
+            os.remove(os.path.join(out_dir, old))
+        for i, part in enumerate(parts):
+            part.export(os.path.join(out_dir, f"piece_{i:03d}.obj"))
+        print(f"[INFO] {name}: {len(parts)} analytic pieces (prop_gen {spec.source_id}) -> {out_dir}")
         return out_dir
 
     if cached:
@@ -170,6 +203,23 @@ def rack_probes(rack_name: str, out_dir: str) -> None:
             f"tine negative control ({rack_name})",
             got,
             f"box centered on the tine column at x={ctr[0]:.3f} {'collides as expected' if got else 'is UNEXPECTEDLY free'}",
+        )
+    if "basket" in params:
+        # cutlery-sized box in each basket bay: must be free (the basket's actual purpose)
+        for i, (ext, ctr) in enumerate(rack_gen.basket_probes(params)):
+            got = hits(ext, ctr)
+            check(
+                f"basket-bay probe ({rack_name} #{i})",
+                not got,
+                f"cutlery box in bay {i} {'collides' if got else 'is free'}",
+            )
+        # negative control ON a divider: must collide
+        ext, ctr = rack_gen.basket_divider_negative_probe(params)
+        got = hits(ext, ctr)
+        check(
+            f"basket divider negative control ({rack_name})",
+            got,
+            f"box straddling the divider at y={ctr[1]:.3f} {'collides as expected' if got else 'is UNEXPECTEDLY free'}",
         )
 
 

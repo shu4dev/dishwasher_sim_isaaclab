@@ -45,6 +45,7 @@ parser.add_argument("--n_task", type=int, default=20)
 parser.add_argument("--seed", type=int, default=7)
 parser.add_argument("--out_dir", type=str, default=None,
                     help="Media dir (default: media/D or media/D/<scenario>).")
+parser.add_argument("--object", type=str, default="mug", help="Carried object class (see config.OBJECTS).")
 parser.add_argument("--scenario", type=str, default="both_out",
                     help="Rack-state scenario (see config.SCENARIOS).")
 AppLauncher.add_app_launcher_args(parser)
@@ -72,6 +73,7 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 from dishsim import config  # noqa: E402
 
 # scenario BEFORE scene/robots imports — they bind rack targets + the derived USD at import
+config.set_active_object(args_cli.object)
 config.apply_scenario(args_cli.scenario)
 if args_cli.out_dir is None:
     args_cli.out_dir = config.scenario_media_dir("D")

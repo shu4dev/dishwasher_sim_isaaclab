@@ -209,7 +209,10 @@ def test_bounds_and_envelope(racks):
         assert abs(mx[1] - p["footprint"][1]) < 1e-6
     lo_top = rack_gen.merged_mesh(racks[LOWER]).bounds[1][2]
     p = config.RACK_GEN[LOWER]
-    assert abs(lo_top - (rack_gen.floor_top_z(p) + p["plate_tine_h"])) < 1e-6  # tine tips = bbox top
+    # v3: the basket's arch handle bar is the new bbox top (was the plate-tine tips in v2)
+    b = p["basket"]
+    bar_top = rack_gen.floor_top_z(p) + b["h"] + b["handle"]["clearance"] + b["handle"]["bar_dia"] / 2.0
+    assert abs(lo_top - bar_top) < 1e-6
     assert lo_top <= 0.14
     assert rack_gen.merged_mesh(racks[UPPER]).bounds[1][2] <= 0.10
 
@@ -288,12 +291,23 @@ def test_slot_feasibility_guarantee(racks):
         for x in xs:
             if not _hits(mgr, (2 * half, 2 * half, z1 - z0), (float(x), float(y), (z0 + z1) / 2.0)):
                 feasible.append((round(float(x), 4), round(float(y), 4)))
-    assert len(feasible) >= 3, f"only {len(feasible)} mug-feasible slot columns: {feasible}"
+    # v3: the cutlery basket eats the x=0.2432 columns — >= 2 standing columns remain
+    assert len(feasible) >= 2, f"only {len(feasible)} mug-feasible slot columns: {feasible}"
     ox0, ox1, oy0, oy1 = p["open_zones"][0]
     for x, y in feasible:
         assert ox0 - half <= x <= ox1 + half and oy0 - half <= y <= oy1 + half, (
             f"feasible slot ({x}, {y}) outside the open zone — layout drifted"
         )
+    # the basket is WHY the count dropped: without it the v2 guarantee (>= 3) must still hold
+    no_basket = {k: v for k, v in p.items() if k != "basket"}
+    mgr_nb = _manager(rack_gen.build_rack(no_basket))
+    feasible_nb = [
+        (float(x), float(y))
+        for y in ys
+        for x in xs
+        if not _hits(mgr_nb, (2 * half, 2 * half, z1 - z0), (float(x), float(y), (z0 + z1) / 2.0))
+    ]
+    assert len(feasible_nb) >= 3, f"basket-free rack lost the v2 guarantee: {feasible_nb}"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -303,7 +317,7 @@ def test_slot_feasibility_guarantee(racks):
 
 def test_insert_group(racks):
     groups = rack_gen.parts_by_group(racks[LOWER])
-    assert set(groups) == {"frame", "insert"}
+    assert set(groups) == {"frame", "insert", "basket"}
     insert = groups["insert"]
     p = config.RACK_GEN[LOWER]
     row = p["insert"]["row"]
@@ -320,13 +334,54 @@ def test_insert_group(racks):
     # the OTHER row stays in the frame
     other = 1 - row
     assert all(f"_r{other}_" not in part.name for part in insert)
-    # both groups merged reproduce the full bounds
+    # all groups merged reproduce the full bounds
     full = rack_gen.merged_mesh(racks[LOWER]).bounds
-    union_lo = np.minimum(rack_gen.merged_mesh(groups["frame"]).bounds[0], rack_gen.merged_mesh(insert).bounds[0])
-    union_hi = np.maximum(rack_gen.merged_mesh(groups["frame"]).bounds[1], rack_gen.merged_mesh(insert).bounds[1])
+    bounds = [rack_gen.merged_mesh(g).bounds for g in groups.values()]
+    union_lo = np.min([b[0] for b in bounds], axis=0)
+    union_hi = np.max([b[1] for b in bounds], axis=0)
     assert np.allclose(full[0], union_lo) and np.allclose(full[1], union_hi)
-    # the upper rack has no insert
+    # the upper rack has neither insert nor basket
     assert set(rack_gen.parts_by_group(racks[UPPER])) == {"frame"}
+
+
+# ---------------------------------------------------------------------------------------------
+# 7b. cutlery basket (v3)
+# ---------------------------------------------------------------------------------------------
+
+
+def test_basket_geometry_contracts(racks):
+    p = config.RACK_GEN[LOWER]
+    b = p["basket"]
+    W, D = p["footprint"]
+    # inside the footprint and the open zone, clear of the plate bank
+    ox0, ox1, oy0, oy1 = p["open_zones"][0]
+    assert ox0 <= b["x"][0] < b["x"][1] <= min(ox1, W)
+    assert 0.0 < b["y"][0] < b["y"][1] <= min(p["plate_zone_y"][0], D)
+    # 3 bays, each long enough for scaled cutlery to lean (>= 44 mm) and wide enough (>= 70 mm)
+    bays = rack_gen.basket_bays(p)
+    assert len(bays) == 3
+    for x0, x1, y0, y1 in bays:
+        assert (y1 - y0) >= 0.044 and (x1 - x0) >= 0.070
+    # basket parts stay inside the assembled bounds (exact-bounds test covers the rest)
+    basket_parts = [part for part in racks[LOWER] if part.group == "basket"]
+    assert len(basket_parts) == 10  # floor + 4 walls + 2 dividers + 2 posts + bar
+    merged = rack_gen.merged_mesh(basket_parts)
+    assert merged.bounds[0][2] >= rack_gen.floor_top_z(p) - 1e-9
+    assert merged.bounds[1][2] <= 0.14  # under the lower-rack height budget
+
+
+def test_basket_probes(racks):
+    p = config.RACK_GEN[LOWER]
+    mgr = _manager(racks[LOWER])
+    # a cutlery box in every bay is free
+    for i, (ext, ctr) in enumerate(rack_gen.basket_probes(p)):
+        assert not _hits(mgr, ext, ctr), f"basket bay {i} obstructed"
+    # negative control: a box straddling a divider collides
+    ext, ctr = rack_gen.basket_divider_negative_probe(p)
+    assert _hits(mgr, ext, ctr), "divider negative control unexpectedly free"
+    # the clipped open zone excludes the basket footprint
+    zones = rack_gen.open_zones_effective(p)
+    assert all(x1 <= p["basket"]["x"][0] for _, x1, _, _ in zones)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -380,8 +435,9 @@ def test_mug_countertop_pick_reachable():
     from dishsim.ur5e_kin import ik_wrist3_all
     from scipy.spatial.transform import Rotation
 
-    pos_b = np.array(config.MUG_COUNTERTOP_POS_W) - np.array(config.ROBOT_BASE_POS_W)
-    rot = Rotation.from_euler("z", np.radians(config.MUG_COUNTERTOP_YAW_DEG)) * Rotation.from_euler("x", np.pi / 2)
+    (pos_w, yaw_deg) = config.OBJECT_COUNTERTOP_POSES_W[0]
+    pos_b = np.array(pos_w) - np.array(config.ROBOT_BASE_POS_W)
+    rot = Rotation.from_euler("z", np.radians(yaw_deg)) * Rotation.from_euler("x", np.pi / 2)
     T_base_obj = make_T(pos_b, rot.as_quat())
     T_tcp_obj = make_T(config.GRASP_TCP_OBJ_POS, config.GRASP_TCP_OBJ_QUAT)
     T_grasp = T_base_obj @ T_inv(T_tcp_obj)

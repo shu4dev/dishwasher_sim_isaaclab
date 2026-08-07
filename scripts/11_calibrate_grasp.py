@@ -40,6 +40,7 @@ from isaaclab.app import AppLauncher
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 parser = argparse.ArgumentParser(description="Calibrate the contact pinch grasp.")
+parser.add_argument("--object", type=str, default="mug", help="Object class (see config.OBJECTS).")
 parser.add_argument("--rim_z", type=float, default=None,
                     help="Candidate GRASP_RIM_TCP_Z_M [m] (default: the frozen config value).")
 parser.add_argument("--theta_max", type=float, default=0.35, help="Staircase hard stop [rad].")
@@ -57,7 +58,8 @@ parser.add_argument("--verify", action="store_true",
                          "measured constants against config.py (touch aperture, force band, "
                          "mimic signs) instead of proposing new constants. Writes verify_* "
                          "outputs and leaves docs/grasp_calibration.md untouched.")
-parser.add_argument("--out_dir", type=str, default=os.path.join(PROJECT_ROOT, "media", "C2"))
+parser.add_argument("--out_dir", type=str, default=None,
+                    help="Media dir (default: media/C2 for the mug, media/C2/<object> otherwise).")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -80,11 +82,23 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from dishsim import config  # noqa: E402
 
+config.set_active_object(args_cli.object)
+if args_cli.out_dir is None:
+    args_cli.out_dir = os.path.join(PROJECT_ROOT, "media", "C2")
+    if args_cli.object != "mug":
+        args_cli.out_dir = os.path.join(args_cli.out_dir, args_cli.object)
+
 # candidate-grasp override BEFORE any scene/weld construction (t_wrist3_obj reads config
-# lazily, so an in-memory override is enough — no file edits during iteration)
+# lazily, so an in-memory override is enough — no file edits during iteration). The transform
+# is rebuilt from the active spec's grasp family via config.grasp_transform — no object
+# literals here.
 if args_cli.rim_z is not None:
+    import dataclasses  # noqa: PLC0415
+
+    spec = config.active_object_spec()
+    spec = dataclasses.replace(spec, grasp=dataclasses.replace(spec.grasp, rim_tcp_z_m=args_cli.rim_z))
     config.GRASP_RIM_TCP_Z_M = args_cli.rim_z
-    config.GRASP_TCP_OBJ_POS = (0.011, 0.0, args_cli.rim_z + 0.0407)
+    config.GRASP_TCP_OBJ_POS, config.GRASP_TCP_OBJ_QUAT = config.grasp_transform(spec)
 elif config.GRASP_TCP_OBJ_POS is None:
     raise SystemExit("[FAIL] no --rim_z given and config.GRASP_RIM_TCP_Z_M is not frozen — "
                      "run scripts/10_v0_scene.py --measure for the candidate value first.")

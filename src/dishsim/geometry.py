@@ -55,6 +55,13 @@ def config_hash() -> str:
         "rack_gen_version": config.RACK_GEN_VERSION,
         "countertop": (config.COUNTERTOP_SIZE, config.COUNTERTOP_CENTER_W),
     }
+    # Non-mug objects additionally hash their registry geometry (scale/mass/bbox/coacd), so a
+    # registry edit invalidates that object's caches. Conditional on purpose: the mug payload
+    # predates the registry and the frozen v0 baseline hash must stay byte-stable (the mug's
+    # dims are frozen measured values, covered by `object`/`grasp`/`aperture` above).
+    if config.ACTIVE_OBJECT != "mug":
+        spec = config.active_object_spec()
+        payload["object_spec"] = (spec.scale, spec.mass_kg, spec.bbox_half, spec.coacd)
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
 
 

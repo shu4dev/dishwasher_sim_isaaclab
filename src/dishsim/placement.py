@@ -27,20 +27,28 @@ from .geometry import config_hash, load_manifest
 from .transforms import T_inv, make_T
 from .ur5e_kin import JOINT_LIMITS, expand_2pi_wraps, ik_wrist3_all
 
-# object-frame constants (measured, see config): the mug axis runs along +y_obj through
-# (x, z) = OBJECT_BODY_CENTER_XZ; origin is the bbox center
-_AXIS_XZ = np.array(config.OBJECT_BODY_CENTER_XZ)
-_HALF_H = config.OBJECT_HEIGHT_M / 2.0
+# Object-frame values (measured, see config) are read from `config` at CALL time, never bound
+# at import — set_active_object() rewrites the active-object view in place, and an import-time
+# copy here would silently keep the previous object's geometry.
 
 
 @dataclass
 class SlotFrame:
-    """A standing slot on the lower-rack wire floor, in the robot-base frame."""
+    """A placement slot in the lower rack, in the robot-base frame.
+
+    ``mode`` selects the goal-pose generator and success criteria: ``floor_stand`` (origin ON
+    the wire floor, z up — the v0 standing cell), ``plate_slot`` (origin at the disc bottom
+    edge between two tines), ``bowl_lean`` (origin at the lean contact), ``basket_drop``
+    (origin at the basket-bay floor center; goals hover above it).
+    """
 
     slot_id: int
-    T_base_slot: np.ndarray  # [4, 4]; origin ON the wire floor at the slot center, z up
-    width_m: float  # usable footprint width (square cell edge)
+    T_base_slot: np.ndarray  # [4, 4]; origin per mode (see class docstring), z up
+    width_m: float  # usable footprint width (square cell edge / gap width / bay width)
     source: str  # "derived" | "manual"
+    mode: str = "floor_stand"
+    rack: str = "lower"
+    params: dict = field(default_factory=dict)
 
     def to_json(self) -> dict:
         return {
@@ -48,11 +56,22 @@ class SlotFrame:
             "T_base_slot": self.T_base_slot.tolist(),
             "width_m": self.width_m,
             "source": self.source,
+            "mode": self.mode,
+            "rack": self.rack,
+            "params": self.params,
         }
 
     @staticmethod
     def from_json(d: dict) -> "SlotFrame":
-        return SlotFrame(d["slot_id"], np.array(d["T_base_slot"]), d["width_m"], d["source"])
+        return SlotFrame(
+            d["slot_id"],
+            np.array(d["T_base_slot"]),
+            d["width_m"],
+            d["source"],
+            mode=d.get("mode", "floor_stand"),
+            rack=d.get("rack", "lower"),
+            params=d.get("params", {}),
+        )
 
 
 @dataclass
@@ -103,7 +122,11 @@ def derive_slots_from_rack(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]
     bottom = verts[verts[:, 2] < mn[2] + 0.015]
     floor_top_z = float(np.percentile(bottom[:, 2], 95))
 
-    footprint = 2.0 * max(config.OBJECT_BBOX_HALF[0], config.OBJECT_BBOX_HALF[2])
+    # standing footprint = the two axis-perpendicular half extents (Y-up mug: x/z; Z-up: x/y)
+    if tuple(config.OBJECT_AXIS_OBJ) == (0.0, 1.0, 0.0):
+        footprint = 2.0 * max(config.OBJECT_BBOX_HALF[0], config.OBJECT_BBOX_HALF[2])
+    else:
+        footprint = 2.0 * max(config.OBJECT_BBOX_HALF[0], config.OBJECT_BBOX_HALF[1])
     pitch = config.SLOT_GRID_PITCH_M
     lo = mn[:2] + config.SLOT_RIM_INSET_M
     hi = mx[:2] - config.SLOT_RIM_INSET_M
@@ -141,17 +164,21 @@ def object_pose_for_slot(slot: SlotFrame, yaw: float, lateral: np.ndarray, tilt:
     """
     from scipy.spatial.transform import Rotation  # noqa: PLC0415
 
-    # object frame -> "standing" frame: y_obj (mug axis) -> +z, then yaw about z.
-    # NOTE Rx(+90) maps +y to +z; the -90 variant stands the mug on its head 8 cm underground
-    # and sends the wrist below the floor (cost one full debugging cycle — leave the sign be).
-    R_stand = Rotation.from_euler("x", np.pi / 2).as_matrix()  # maps +y_obj to +z
+    # object frame -> "standing" frame (axis-aware): the Y-up mug stands via Rx(+90) — the
+    # -90 variant stands it on its head 8 cm underground (cost one full debugging cycle);
+    # Z-up objects stand as authored. Then yaw about z.
+    R_stand = _spec_R_stand()
     R = (
         Rotation.from_euler("xy", tilt).as_matrix()
         @ Rotation.from_euler("z", yaw).as_matrix()
         @ R_stand
     )
-    # axis point at the mug BOTTOM (obj frame): (axis_x, -half_h_along_axis, axis_z)
-    p_bottom_obj = np.array([_AXIS_XZ[0], -config.OBJECT_BBOX_HALF[1], _AXIS_XZ[1]])
+    # axis point at the object BOTTOM (obj frame), per the axis convention
+    axis_uv = config.OBJECT_BODY_CENTER_XZ
+    if tuple(config.OBJECT_AXIS_OBJ) == (0.0, 1.0, 0.0):
+        p_bottom_obj = np.array([axis_uv[0], -config.OBJECT_BBOX_HALF[1], axis_uv[1]])
+    else:
+        p_bottom_obj = np.array([axis_uv[0], axis_uv[1], -config.OBJECT_BBOX_HALF[2]])
     T = np.eye(4)
     T[:3, :3] = R
     # place the (rotated) bottom axis point at slot center + lateral, hover above the floor
@@ -162,14 +189,237 @@ def object_pose_for_slot(slot: SlotFrame, yaw: float, lateral: np.ndarray, tilt:
     return T
 
 
+# ---------------------------------------------------------------------------------------------
+# mode-aware slot derivation + goal poses (multi-object v1)
+# ---------------------------------------------------------------------------------------------
+
+
+def derive_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
+    """Slots for the ACTIVE object's placement mode (dispatch; ids are mode-local)."""
+    mode = config.active_object_spec().placement.mode
+    if mode == "floor_stand":
+        return derive_slots_from_rack(cache_dir)
+    if mode == "plate_slot":
+        return derive_plate_slots(cache_dir)
+    if mode == "bowl_lean":
+        return derive_bowl_slots(cache_dir)
+    if mode == "basket_drop":
+        return derive_basket_slots(cache_dir)
+    raise ValueError(f"no robot slot derivation for placement mode {mode!r}")
+
+
+def _rack_T(cache_dir: str) -> np.ndarray:
+    manifest = load_manifest(cache_dir)
+    return np.array(manifest["statics"]["E_shelf_1_04"]["T_base_body"])
+
+
+def derive_plate_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
+    """One slot per tine-bank gap (11 gaps; goal-config collision filtering prunes the ones
+    over the cutlery basket). Slot origin = the disc's bottom-edge target on the bank floor;
+    slot z up, slot x along the rack pitch direction."""
+    from . import rack_gen  # noqa: PLC0415
+
+    p = config.RACK_GEN["E_shelf_1_04"]
+    T_base_rack = _rack_T(cache_dir)
+    xs = np.asarray(rack_gen._plate_tine_xs(p))
+    gaps = (xs[:-1] + xs[1:]) / 2.0
+    z_floor = rack_gen.floor_top_z(p)
+    lean = float(p["plate_tine_lean_deg"])
+    # dinner plates seat forward (bottom on the ~y 0.197 bank bar) — see fill_plan for the
+    # disc-spans-full-diameter geometry note; smaller discs may sit deeper via params
+    y_bottom = 0.197
+    slots = []
+    for gi, gx in enumerate(gaps):
+        T_rack_slot = np.eye(4)
+        T_rack_slot[:3, 3] = (float(gx), y_bottom, z_floor)
+        slots.append(
+            SlotFrame(
+                slot_id=gi,
+                T_base_slot=T_base_rack @ T_rack_slot,
+                width_m=float(p["plate_tine_pitch"]),
+                source="derived",
+                mode="plate_slot",
+                rack="lower",
+                params={"lean_deg": lean},
+            )
+        )
+    return slots
+
+
+def derive_bowl_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
+    """Lean positions over the drinkware slope against the bowl tines (x ~ 0.070)."""
+    from . import rack_gen  # noqa: PLC0415
+
+    p = config.RACK_GEN["E_shelf_1_04"]
+    T_base_rack = _rack_T(cache_dir)
+    z_floor = rack_gen.floor_top_z(p)
+    lean = float(config.active_object_spec().placement.params.get("lean_deg", 48.0))
+    slots = []
+    for si, y in enumerate((0.060, 0.105, 0.150)):
+        T_rack_slot = np.eye(4)
+        T_rack_slot[:3, 3] = (0.070, float(y), z_floor)
+        slots.append(
+            SlotFrame(
+                slot_id=si,
+                T_base_slot=T_base_rack @ T_rack_slot,
+                width_m=0.110,
+                source="derived",
+                mode="bowl_lean",
+                rack="lower",
+                params={"lean_deg": lean},
+            )
+        )
+    return slots
+
+
+def derive_basket_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
+    """One slot per cutlery-basket bay (origin at the bay floor center)."""
+    from . import rack_gen  # noqa: PLC0415
+
+    p = config.RACK_GEN["E_shelf_1_04"]
+    T_base_rack = _rack_T(cache_dir)
+    b = p["basket"]
+    z_bfloor = rack_gen.floor_top_z(p) + b["floor_t"]
+    slots = []
+    for bi, (x0, x1, y0, y1) in enumerate(rack_gen.basket_bays(p)):
+        T_rack_slot = np.eye(4)
+        # drop point offset -20 mm in x from the bay center: the arch carry-handle bar runs
+        # along y directly over every bay center — a centered descent always hits it
+        T_rack_slot[:3, 3] = ((x0 + x1) / 2.0 - 0.020, (y0 + y1) / 2.0, z_bfloor)
+        slots.append(
+            SlotFrame(
+                slot_id=bi,
+                T_base_slot=T_base_rack @ T_rack_slot,
+                width_m=float(x1 - x0),
+                source="derived",
+                mode="basket_drop",
+                rack="basket",
+                params={"bay": [x0, x1, y0, y1], "top_z": float(b["h"] - b["floor_t"])},
+            )
+        )
+    return slots
+
+
+def _spec_R_stand() -> np.ndarray:
+    """Rotation standing the ACTIVE object's axis up (design/base z)."""
+    from scipy.spatial.transform import Rotation  # noqa: PLC0415
+
+    axis = tuple(config.OBJECT_AXIS_OBJ)
+    if axis == (0.0, 1.0, 0.0):
+        return Rotation.from_euler("x", np.pi / 2).as_matrix()  # the mug convention
+    if axis == (0.0, 0.0, 1.0):
+        return np.eye(3)
+    raise ValueError(f"floor_stand unsupported for axis {axis}")
+
+
+def object_pose_for_mode(slot: SlotFrame, spin: float, lateral: np.ndarray, tilt: np.ndarray, hover: float) -> np.ndarray:
+    """Object goal pose at a slot, per the slot's mode (generalizes the v0 standing pose).
+
+    Args:
+        slot: Target slot.
+        spin: Free rotation about the object's own axis [rad].
+        lateral: Lateral offset from the slot origin, shape [2] [m] (mode-scaled).
+        tilt: Small perturbation angles, shape [2] [rad].
+        hover: Release clearance [m].
+
+    Returns:
+        T_base_obj, shape [4, 4].
+    """
+    from scipy.spatial.transform import Rotation  # noqa: PLC0415
+
+    if slot.mode == "floor_stand":
+        return object_pose_for_slot(slot, spin, lateral, tilt, hover)
+
+    R_slot = slot.T_base_slot[:3, :3]
+    spec = config.active_object_spec()
+    if slot.mode == "plate_slot":
+        lean = np.radians(slot.params.get("lean_deg", 7.0))
+        r = spec.rim_radius_m
+        # disc face normal along slot x, leaned toward slot +y like the tines; spin about the
+        # disc normal is free; tiny lateral x inside the gap
+        R_local = (
+            Rotation.from_euler("x", -(lean + tilt[0])).as_matrix()
+            @ Rotation.from_euler("y", np.pi / 2).as_matrix()
+            @ Rotation.from_euler("z", spin).as_matrix()
+        )
+        t_local = np.array(
+            [lateral[0] * 0.25, np.sin(lean) * r + lateral[1] * 0.25, hover + np.cos(lean) * r]
+        )
+    elif slot.mode == "bowl_lean":
+        lean = np.radians(slot.params.get("lean_deg", 48.0))
+        # opening faces down-interior (+x), leaning back onto the tines; spin free
+        R_local = (
+            Rotation.from_euler("y", lean + tilt[0]).as_matrix()
+            @ Rotation.from_euler("x", np.pi).as_matrix()
+            @ Rotation.from_euler("z", spin).as_matrix()
+        )
+        t_local = np.array(
+            [lateral[0] * 0.3, lateral[1] * 0.3, hover + np.sin(lean) * spec.rim_radius_m + 0.004]
+        )
+    elif slot.mode == "basket_drop":
+        # cutlery hangs head-DOWN below the gripper (grasped at the handle = top), released
+        # high above the bay so gravity inserts it
+        R_local = (
+            Rotation.from_euler("z", tilt[0] * 0.5).as_matrix()
+            @ Rotation.from_euler("y", np.pi / 2).as_matrix()  # +x_obj (head) -> -z
+            @ Rotation.from_euler("x", spin * 0.05).as_matrix()
+        )
+        t_local = np.array(
+            [lateral[0] * 0.3, lateral[1] * 0.3, hover + spec.height_m / 2.0]
+        )
+    else:
+        raise ValueError(f"no goal-pose generator for mode {slot.mode!r}")
+
+    T = np.eye(4)
+    T[:3, :3] = R_slot @ R_local
+    T[:3, 3] = slot.T_base_slot[:3, 3] + R_slot @ t_local
+    return T
+
+
+def _top_grasp_spin(slot: SlotFrame) -> float | None:
+    """Spin putting the grasped feature at the TOP of the placed object (or None if free).
+
+    For plate_slot/bowl_lean the grasp point is a fixed rim location in the object frame and
+    the spin rotates it around the rim: only spins with the gripper ABOVE the object are
+    reachable (any other spin buries the wrist in the rack — measured 0/11 feasible slots
+    with uniform spin). Solved numerically: argmax of the grasp point's world z over spin.
+    """
+    if slot.mode not in ("plate_slot", "bowl_lean"):
+        return None
+    pos, _ = config.grasp_transform(config.active_object_spec())
+    # the grasped feature in the OBJECT frame: invert the tcp<-obj transform's grasp point.
+    # For edge_pinch it is the rim point on +x_obj; for rim_edge the rim point on +y_obj.
+    spec = config.active_object_spec()
+    u, v = spec.body_center_uv
+    if spec.grasp.family == "edge_pinch":
+        p_g = np.array([u + spec.rim_radius_m, v, 0.0])
+    else:
+        p_g = np.array([u, v + spec.rim_radius_m, spec.bbox_half[2]])
+    spins = np.linspace(0.0, 2.0 * np.pi, 72, endpoint=False)
+    zs = []
+    for s in spins:
+        T = object_pose_for_mode(slot, s, np.zeros(2), np.zeros(2), config.RELEASE_HOVER_M)
+        zs.append((T @ np.append(p_g, 1.0))[2])
+    return float(spins[int(np.argmax(zs))])
+
+
 def sample_goal_poses(slot: SlotFrame, n: int, rng: np.random.Generator) -> list[np.ndarray]:
-    """Sample object poses in the slot's tolerance region (free yaw, small lateral/tilt)."""
+    """Sample object poses in the slot's tolerance region (spin, small lateral/tilt).
+
+    The spin is uniform for standing/basket modes; for plate_slot/bowl_lean it concentrates
+    in a +-0.5 rad window around the top-grasp spin (see :func:`_top_grasp_spin`).
+    """
     poses = []
+    hover = config.RELEASE_HOVER_M if slot.mode != "basket_drop" else 0.060
+    spin0 = _top_grasp_spin(slot)
     for _ in range(n):
-        yaw = rng.uniform(0.0, 2.0 * np.pi)
+        if spin0 is None:
+            spin = rng.uniform(0.0, 2.0 * np.pi)
+        else:
+            spin = spin0 + rng.uniform(-0.5, 0.5)
         lateral = rng.uniform(-config.SLOT_TOL_LATERAL_M, config.SLOT_TOL_LATERAL_M, 2) * 0.66
         tilt = rng.uniform(-1.0, 1.0, 2) * np.radians(config.SLOT_TOL_TILT_DEG) * 0.3
-        poses.append(object_pose_for_slot(slot, yaw, lateral, tilt, config.RELEASE_HOVER_M))
+        poses.append(object_pose_for_mode(slot, spin, lateral, tilt, hover))
     return poses
 
 
@@ -236,3 +486,69 @@ def save_slots(slots: list[SlotFrame], goal_sets: list[GoalSet], out_dir: str) -
     with open(goals_path, "w") as f:
         json.dump({**stamp, "goal_sets": [g.to_json() for g in goal_sets]}, f, indent=2)
     return slots_path, goals_path
+
+
+def evaluate_placement(slot: SlotFrame, T_base_obj: np.ndarray) -> dict:
+    """Per-mode success evaluation of a settled object pose (physics-backed).
+
+    Returns ``{"lateral_m", "tilt_deg", "bottom_height_m", "ok"}``; the tilt reference and
+    tolerances depend on the slot mode (documented in docs/success_criteria.md).
+    """
+    spec = config.active_object_spec()
+    axis_obj = np.array(spec.axis_obj)
+    axis_base = T_base_obj[:3, :3] @ axis_obj
+    R_slot = slot.T_base_slot[:3, :3]
+    p_slot = slot.T_base_slot[:3, 3]
+
+    if slot.mode == "floor_stand":
+        # v0 criteria: bottom axis point near the slot center, axis near slot z
+        if tuple(spec.axis_obj) == (0.0, 1.0, 0.0):
+            u, v = config.OBJECT_BODY_CENTER_XZ
+            p_bottom_obj = np.array([u, -spec.bbox_half[1], v])
+        else:
+            u, v = config.OBJECT_BODY_CENTER_XZ
+            p_bottom_obj = np.array([u, v, -spec.bbox_half[2]])
+        p_bottom = (T_base_obj @ np.append(p_bottom_obj, 1.0))[:3]
+        d = R_slot.T @ (p_bottom - p_slot)
+        lateral = float(np.hypot(d[0], d[1]))
+        tilt = float(np.degrees(np.arccos(np.clip(axis_base @ R_slot[:, 2], -1.0, 1.0))))
+        ok = lateral <= config.SLOT_TOL_LATERAL_M and tilt <= config.SLOT_TOL_TILT_DEG and abs(d[2]) <= 0.02
+        return {"lateral_m": round(lateral, 4), "tilt_deg": round(tilt, 2), "bottom_height_m": round(float(d[2]), 4), "ok": bool(ok)}
+
+    d = R_slot.T @ (T_base_obj[:3, 3] - p_slot)
+    if slot.mode == "plate_slot":
+        lean = np.radians(slot.params.get("lean_deg", 7.0))
+        # target disc normal (slot frame): x leaned by the tine angle; flip-insensitive
+        n_target = R_slot @ np.array([np.cos(0.0), 0.0, 0.0])
+        cosang = abs(float(axis_base @ n_target))
+        tilt = float(np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0))))
+        lateral = abs(float(d[0]))  # off-gap drift along the pitch direction
+        bottom = float(d[2] - spec.rim_radius_m * np.cos(lean))  # center height above nominal
+        ok = lateral <= 0.012 and tilt <= 12.0 and abs(bottom) <= 0.02
+        return {"lateral_m": round(lateral, 4), "tilt_deg": round(tilt, 2), "bottom_height_m": round(bottom, 4), "ok": bool(ok)}
+
+    if slot.mode == "bowl_lean":
+        lean = np.radians(slot.params.get("lean_deg", 48.0))
+        a_target = R_slot @ np.array([-np.sin(lean), 0.0, -np.cos(lean)])  # opening down-wall
+        cosang = abs(float(axis_base @ a_target))
+        tilt = float(np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0))))
+        lateral = float(np.hypot(d[0], d[1]))
+        ok = tilt <= 20.0 and lateral <= 0.04 and abs(d[2]) <= 0.06
+        return {"lateral_m": round(lateral, 4), "tilt_deg": round(tilt, 2), "bottom_height_m": round(float(d[2]), 4), "ok": bool(ok)}
+
+    if slot.mode == "basket_drop":
+        bay = slot.params.get("bay")
+        top_z = slot.params.get("top_z", 0.092)
+        # success = the settled bbox CENTER is inside the bay volume, below the basket top
+        inside_xy = abs(d[0]) <= slot.width_m / 2.0 and abs(d[1]) <= 0.035
+        if bay is not None:
+            half_x = (bay[1] - bay[0]) / 2.0
+            half_y = (bay[3] - bay[2]) / 2.0
+            inside_xy = abs(d[0]) <= half_x and abs(d[1]) <= half_y + 0.005
+        inside_z = -0.005 <= d[2] <= top_z + spec.height_m / 2.0
+        lateral = float(np.hypot(d[0], d[1]))
+        tilt = float(np.degrees(np.arccos(np.clip(abs(axis_base[2]), -1.0, 1.0))))
+        ok = bool(inside_xy and inside_z)
+        return {"lateral_m": round(lateral, 4), "tilt_deg": round(tilt, 2), "bottom_height_m": round(float(d[2]), 4), "ok": ok}
+
+    raise ValueError(f"no evaluation for mode {slot.mode!r}")

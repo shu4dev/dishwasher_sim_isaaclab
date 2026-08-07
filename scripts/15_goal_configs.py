@@ -31,8 +31,9 @@ parser.add_argument("--seed", type=int, default=11)
 parser.add_argument("--out_dir", type=str, default=None,
                     help="Media dir (default: media/E or media/E/<scenario>).")
 parser.add_argument("--sheets_per_slot", type=int, default=6)
-parser.add_argument("--scenario", type=str, default="both_out",
-                    help="Rack-state scenario (see config.SCENARIOS).")
+parser.add_argument("--object", type=str, default="mug", help="Carried object class (see config.OBJECTS).")
+parser.add_argument("--scenario", type=str, default=None,
+                    help="Rack-state scenario (default: the placement state scripts/20 reads).")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -56,7 +57,8 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 from dishsim import config  # noqa: E402
 
 # scenario BEFORE scene/robots imports — they bind rack targets + the derived USD at import
-config.apply_scenario(args_cli.scenario)
+config.set_active_object(args_cli.object)
+config.apply_scenario(args_cli.scenario or config.PLACEMENT_STATE)
 if args_cli.out_dir is None:
     args_cli.out_dir = config.scenario_media_dir("E")
 
@@ -118,8 +120,11 @@ def main() -> None:
     rng = np.random.default_rng(args_cli.seed)
 
     # ---- Kit-free computation ------------------------------------------------------------
-    world = CollisionWorld(cache_dir=config.scenario_cache_dir(), self_check=True)
-    slots = placement.derive_slots_from_rack(config.scenario_cache_dir())
+    # thin-insertion modes (cutlery into a bay, a disc into a 30 mm tine gap): the merged
+    # gripper+object hull is a giant wedge that can never fit — use the per-piece cluster
+    merged = config.active_object_spec().placement.mode not in ("basket_drop", "plate_slot")
+    world = CollisionWorld(cache_dir=config.scenario_cache_dir(), self_check=True, merged_cluster=merged)
+    slots = placement.derive_slots(config.scenario_cache_dir())  # mode dispatch per object
     print(f"[INFO] scenario {config.SCENARIO_NAME}: home config in_collision: "
           f"{bool(world.in_collision(np.array(config.HOME_Q)))}")
     print(f"[INFO] derived {len(slots)} slots")

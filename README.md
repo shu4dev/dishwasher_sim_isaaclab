@@ -53,7 +53,8 @@ environment and hands off to `isaaclab.sh -p` — required once the venv exists,
 ```bash
 # 1. planning venv (the wrapper auto-detects this exact path)
 /isaac-sim/kit/python/bin/python3 -m venv --system-site-packages /workspace/isaaclab/env_isaaclab
-/workspace/isaaclab/env_isaaclab/bin/pip install ompl python-fcl coacd trimesh matplotlib imageio pytest
+/workspace/isaaclab/env_isaaclab/bin/pip install 'trimesh==4.12.2' ompl python-fcl coacd \
+    matplotlib imageio pytest requests pyyaml filelock tqdm fsspec
 /workspace/isaaclab/env_isaaclab/bin/pip install -e .
 
 # 2. download the ArtVIP dishwasher assets (~82 MB) into assets/artvip/
@@ -69,6 +70,27 @@ scripts/run_kit.sh scripts/01_make_prop_physics_usd.py --object 029_plate
 
 # 5. planning-stack tests (no Kit)
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m pytest tests/
+```
+
+### Fast setup: restore archived assets (skips steps 2-4 + all cache rebuilds)
+
+The generated artifacts (built prop USDs, every geometry cache — ~1.5 h of Kit compute —
+plus the run-evidence media) are archived as tarballs on a **private** Hugging Face dataset
+(`<user>/dishsim-assets`; it contains NVIDIA-EULA/YCB-derived files — never make it
+public). On a fresh instance, after venv step 1:
+
+```bash
+huggingface-cli login          # once, with a token that can read the private dataset
+/workspace/isaaclab/env_isaaclab/bin/python scripts/36_restore_assets.py --with_media
+```
+
+The restore safe-extracts `assets/`, `results/` (and `media/` with `--with_media`),
+re-downloads the ArtVIP originals, validates every restored cache's `config_hash` stamp
+against the current `config.py` (a `STALE` warning means re-run `scripts/12` for that
+state), and runs the test suite. To save the current state at the end of a work phase:
+
+```bash
+/workspace/isaaclab/env_isaaclab/bin/python scripts/35_archive_assets.py --upload
 ```
 
 > Note: the Python package is named `dishsim` (not `dishwasher_sim_isaaclab`) on purpose — a

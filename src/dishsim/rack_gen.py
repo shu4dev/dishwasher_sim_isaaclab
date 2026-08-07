@@ -62,6 +62,8 @@ ZONE_COLORS = {
     "handle": "#1a80bb",
     "cup_shelf": "#7b52ab",
     "rackmatic": "#33343a",
+    "basket": "#9aa0a6",
+    "basket_handle": "#7d838a",
 }
 
 
@@ -564,6 +566,92 @@ def _plate_bank(parts: list[RackPart], p: dict) -> None:
         )
 
 
+def _cutlery_basket(parts: list[RackPart], p: dict) -> None:
+    """3-compartment plastic cutlery basket in the lower rack's open zone (v3).
+
+    Rides the rack (fixed part of the rack body mesh, group ``basket`` -> own USD mesh +
+    material): a free-standing basket would skate during the 0.2 m rack slide. Convex parts
+    only: floor slab, 4 walls, 2 y-dividers (3 bays), and an arch carry handle (2 posts +
+    bar). The floor slab contributes 8 vertices to the bottom 15 mm percentile band —
+    negligible against the thousands of floor-wire vertices, so the slot datum contract
+    holds (asserted in tests).
+    """
+    b = p["basket"]
+    zl = _z_levels(p)
+    x0, x1 = b["x"]
+    y0, y1 = b["y"]
+    z0 = zl["floor_top"]
+    h, t, ft = b["h"], b["wall_t"], b["floor_t"]
+    n = p["wire_sides"]
+    cx = (x0 + x1) / 2.0
+
+    parts.append(RackPart("basket_floor", "basket", group="basket", mesh=_block(((x0 + x1) / 2.0, (y0 + y1) / 2.0, z0 + ft / 2.0), (x1 - x0, y1 - y0, ft))))
+    z_wall = z0 + ft + (h - ft) / 2.0
+    wall_h = h - ft
+    parts.append(RackPart("basket_wall_x0", "basket", group="basket", mesh=_block((x0 + t / 2.0, (y0 + y1) / 2.0, z_wall), (t, y1 - y0, wall_h))))
+    parts.append(RackPart("basket_wall_x1", "basket", group="basket", mesh=_block((x1 - t / 2.0, (y0 + y1) / 2.0, z_wall), (t, y1 - y0, wall_h))))
+    parts.append(RackPart("basket_wall_y0", "basket", group="basket", mesh=_block(((x0 + x1) / 2.0, y0 + t / 2.0, z_wall), (x1 - x0 - 2 * t, t, wall_h))))
+    parts.append(RackPart("basket_wall_y1", "basket", group="basket", mesh=_block(((x0 + x1) / 2.0, y1 - t / 2.0, z_wall), (x1 - x0 - 2 * t, t, wall_h))))
+    for di, dy in enumerate(b["dividers_y"]):
+        parts.append(RackPart(f"basket_divider_{di}", "basket", group="basket", mesh=_block(((x0 + x1) / 2.0, dy, z_wall), (x1 - x0 - 2 * t, t, wall_h))))
+    # arch carry handle over the y-centerline (posts at the two end walls, bar along y)
+    hd = b["handle"]
+    z_top = z0 + h
+    z_bar = z_top + hd["clearance"]
+    parts.append(RackPart("basket_handle_post_0", "basket_handle", group="basket", mesh=_rod((cx, y0 + t / 2.0, z_top - 0.010), (cx, y0 + t / 2.0, z_bar), hd["post_dia"], n)))
+    parts.append(RackPart("basket_handle_post_1", "basket_handle", group="basket", mesh=_rod((cx, y1 - t / 2.0, z_top - 0.010), (cx, y1 - t / 2.0, z_bar), hd["post_dia"], n)))
+    parts.append(RackPart("basket_handle_bar", "basket_handle", group="basket", mesh=_rod((cx, y0 + t / 2.0, z_bar), (cx, y1 - t / 2.0, z_bar), hd["bar_dia"], n)))
+
+
+def basket_bays(params: dict) -> list[tuple[float, float, float, float]]:
+    """Interior (x0, x1, y0, y1) of each basket compartment (design frame)."""
+    b = params["basket"]
+    t = b["wall_t"]
+    x0, x1 = b["x"][0] + t, b["x"][1] - t
+    lo_edges = [b["y"][0] + t] + [d + t / 2.0 for d in b["dividers_y"]]
+    hi_edges = [d - t / 2.0 for d in b["dividers_y"]] + [b["y"][1] - t]
+    return [(x0, x1, lo, hi) for lo, hi in zip(lo_edges, hi_edges)]
+
+
+def basket_probes(params: dict) -> list[tuple[tuple[float, float, float], tuple[float, float, float]]]:
+    """A cutlery-sized box inside each basket bay (must be FCL-free), inset 4 mm from the
+    bay walls and spanning from just above the basket floor to just under the handle bar."""
+    b = params["basket"]
+    zl = _z_levels(params)
+    z0 = zl["floor_top"] + b["floor_t"] + 0.003
+    z1 = zl["floor_top"] + b["h"] - 0.003
+    probes = []
+    for x0, x1, y0, y1 in basket_bays(params):
+        ext = (x1 - x0 - 0.008, y1 - y0 - 0.008, z1 - z0)
+        probes.append((ext, ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (z0 + z1) / 2.0)))
+    return probes
+
+
+def basket_divider_negative_probe(params: dict) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    """A box straddling the first divider — MUST collide (piece-transform sanity control)."""
+    b = params["basket"]
+    zl = _z_levels(params)
+    z_c = zl["floor_top"] + b["h"] / 2.0
+    cx = (b["x"][0] + b["x"][1]) / 2.0
+    return (0.030, 0.020, 0.030), (cx, float(b["dividers_y"][0]), z_c)
+
+
+def open_zones_effective(params: dict) -> list[tuple[float, float, float, float]]:
+    """Open zones clipped against the basket footprint (standing-slot feasibility space)."""
+    zones = list(params["open_zones"])
+    b = params.get("basket")
+    if not b:
+        return zones
+    bx0 = b["x"][0] - 0.002
+    out = []
+    for x0, x1, y0, y1 in zones:
+        if x1 > bx0 >= x0:
+            x1 = bx0
+        if x1 - x0 > 0.02:
+            out.append((x0, x1, y0, y1))
+    return out
+
+
 def _upper_features(parts: list[RackPart], p: dict) -> None:
     """Upper-rack signatures: fold-down cup shelves with stemware scallops over the slope
     zones, and RackMatic lever end-cap blocks on the side rails."""
@@ -653,6 +741,10 @@ def build_rack(params: dict) -> list[RackPart]:
     # -- rear plate bank (lower rack) -----------------------------------------------------------
     if "plate_rows_y" in p:
         _plate_bank(parts, p)
+
+    # -- cutlery basket (lower rack, v3) ---------------------------------------------------------
+    if "basket" in p:
+        _cutlery_basket(parts, p)
 
     # -- bowl tines (sparser, shorter) -----------------------------------------------------------
     if "bowl_tine_xs" in p:
@@ -747,7 +839,7 @@ def mug_probes(params: dict) -> list[tuple[tuple[float, float, float], tuple[flo
     h = config.OBJECT_HEIGHT_M + 2.0 * margin
     z_c = floor_top_z(params) + config.RELEASE_HOVER_M + config.OBJECT_HEIGHT_M / 2.0
     probes = []
-    for x0, x1, y0, y1 in params["open_zones"]:
+    for x0, x1, y0, y1 in open_zones_effective(params):  # v3: clipped against the basket
         ext = (long_e, short_e, h) if (x1 - x0) >= (y1 - y0) else (short_e, long_e, h)
         probes.append((ext, ((x0 + x1) / 2.0, (y0 + y1) / 2.0, z_c)))
     return probes

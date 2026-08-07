@@ -23,6 +23,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 parser = argparse.ArgumentParser(description="Dump collision-world cache from the v0 scene.")
 parser.add_argument("--settle_steps", type=int, default=200)
+parser.add_argument("--object", type=str, default="mug", help="Carried object class (see config.OBJECTS).")
 parser.add_argument("--scenario", type=str, default="both_out",
                     help="Rack-state scenario (see config.SCENARIOS).")
 AppLauncher.add_app_launcher_args(parser)
@@ -45,6 +46,7 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 from dishsim import config  # noqa: E402
 
 # scenario BEFORE scene/robots imports — they bind rack targets + the derived USD at import
+config.set_active_object(args_cli.object)
 config.apply_scenario(args_cli.scenario)
 
 from dishsim import geometry as dgeom  # noqa: E402
@@ -72,9 +74,12 @@ def main() -> None:
     rack_err = max(sr["rack_lower_err_m"], sr["rack_upper_err_m"])
     assert rack_err < 5e-3, f"racks off scenario targets by {rack_err * 1e3:.1f} mm: {sr}"
     # never bake a bad grasp into the cache: the settled state must hold the calibrated
-    # pad-force band with everything else silent
-    ok, detail = dscene.grip_gate(scene)
-    assert ok, f"grip gate failed before cache dump: {detail}"
+    # pad-force band with everything else silent. Weld-carried families (edge_pinch on thin
+    # discs, rim_edge on thin walls) close to first-contact only — the pinch band does not
+    # apply; the weld error is the load-bearing gate for them (checked in dump_cache).
+    if config.active_object_spec().grasp.family not in ("edge_pinch", "rim_edge", "handle_pinch"):
+        ok, detail = dscene.grip_gate(scene)
+        assert ok, f"grip gate failed before cache dump: {detail}"
 
     manifest_path = dgeom.dump_cache(scene, sim, cache_dir=config.scenario_cache_dir())
     print(f"[INFO] scenario {config.SCENARIO_NAME}: rack_lower {sr['rack_lower_m']:+.3f} m, "

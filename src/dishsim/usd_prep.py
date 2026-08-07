@@ -101,6 +101,25 @@ def _ensure_insert_material(stage):
     return mat
 
 
+def _ensure_basket_material(stage):
+    """Light-gray plastic for the v3 cutlery basket (real baskets are molded polypropylene,
+    visually distinct from both the wire rack and the dark insert row)."""
+    from pxr import Sdf, UsdShade  # noqa: PLC0415
+
+    path = "/root/materials/mat_rackgen_basket"
+    prim = stage.GetPrimAtPath(path)
+    if prim.IsValid():
+        return UsdShade.Material(prim)
+    mat = UsdShade.Material.Define(stage, path)
+    shader = UsdShade.Shader.Define(stage, path + "/Shader")
+    shader.CreateIdAttr("UsdPreviewSurface")
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set((0.62, 0.64, 0.66))
+    shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.55)
+    mat.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+    return mat
+
+
 def _author_countertop(stage) -> None:
     """Author the freestanding-machine worktop slab as a child Mesh of the shell body.
 
@@ -166,7 +185,7 @@ def _author_rack_meshes(stage) -> None:
 
     from . import config, rack_gen  # noqa: PLC0415
 
-    group_prims = {"frame": "RackGen", "insert": "RackGenInsert"}
+    group_prims = {"frame": "RackGen", "insert": "RackGenInsert", "basket": "RackGenBasket"}
     for body, params in config.RACK_GEN.items():
         xf_prim = stage.GetPrimAtPath(f"/root/{body}")
         assert xf_prim.IsValid(), f"rack body prim /root/{body} not found"
@@ -210,6 +229,9 @@ def _author_rack_meshes(stage) -> None:
             if group == "insert":
                 mesh.CreateDisplayColorAttr([Gf.Vec3f(0.28, 0.28, 0.30)])  # fallback if unbound
                 UsdShade.MaterialBindingAPI.Apply(prim).Bind(_ensure_insert_material(stage))
+            elif group == "basket":
+                mesh.CreateDisplayColorAttr([Gf.Vec3f(0.62, 0.64, 0.66)])  # fallback if unbound
+                UsdShade.MaterialBindingAPI.Apply(prim).Bind(_ensure_basket_material(stage))
             else:
                 mat_prim = stage.GetPrimAtPath("/root/materials/mat_1029771")  # original rack material
                 if mat_prim.IsValid():
