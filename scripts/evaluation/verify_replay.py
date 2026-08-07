@@ -62,7 +62,7 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from dishsim import config  # noqa: E402
 
-config.set_active_object(META["object"])
+config.set_active_object(META.get("object") or META["classes"][0])
 config.apply_scenario(META["scenario"])
 
 from dishsim import replay as dreplay  # noqa: E402
@@ -86,7 +86,9 @@ def main() -> None:
     )
     # no weld is authored and no contact sensors are needed: nothing is simulated, every body
     # is written from the recording each frame
-    scene = InteractiveScene(dscene.make_scene_cfg(with_object=True, with_robot_contacts=False))
+    objs = dreplay.scene_objects_for(rec)
+    scene = InteractiveScene(dscene.make_scene_cfg(
+        with_object=not objs, with_robot_contacts=False, objects=objs))
     sim.reset()
     # root poses + dishwasher defaults must reach the physics view before playback
     dscene.write_default_states(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)

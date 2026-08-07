@@ -108,19 +108,34 @@ class TrajectoryRecorder:
     def __len__(self) -> int:
         return self._n
 
-    def begin(self, scene, sim, meta: dict) -> None:
-        """Start recording from the current scene state (call after the trial reset settles)."""
+    def begin(self, scene, sim, meta: dict, object_keys: list | None = None) -> None:
+        """Start recording from the current scene state (call after the trial reset settles).
+
+        Args:
+            scene: Live interactive scene.
+            sim: Simulation context.
+            meta: Provenance embedded in the recording.
+            object_keys: Scene keys of the manipulable objects to track. Defaults to the
+                single ``"carried_object"``, which keeps every existing recording and every
+                Phase 3 consumer byte-identical. A multi-object episode passes one key per
+                item; ``object_root_pose_w`` then widens to ``[N, 7 * n_objects]`` and the
+                names land in ``meta["object_keys"]`` so a reader can slice it without
+                guessing.
+        """
         import torch  # noqa: PLC0415
 
         self._scene, self._sim, self._meta = scene, sim, dict(meta)
-        robot, dw, obj = scene["robot"], scene["dishwasher"], scene["carried_object"]
-        self._robot, self._dw, self._obj = robot, dw, obj
+        robot, dw = scene["robot"], scene["dishwasher"]
+        self._object_keys = list(object_keys) if object_keys else ["carried_object"]
+        self._objs = [scene[k] for k in self._object_keys]
+        self._obj = self._objs[0]
+        self._robot, self._dw = robot, dw
         device = robot.data.joint_pos.torch.device
         self._n_rq = int(robot.data.joint_pos.torch.shape[1])
         self._n_dq = int(dw.data.joint_pos.torch.shape[1])
         self._n_body = int(robot.data.body_link_pos_w.torch.shape[1])
 
-        width = self._n_rq + self._n_dq + 7
+        width = self._n_rq + self._n_dq + 7 * len(self._objs)
         self._buf = torch.empty((self.max_steps, width), dtype=torch.float32, device=device)
         self._check = torch.empty(
             (self.max_steps // self.check_stride + 2, self._n_body, 7), dtype=torch.float32, device=device
@@ -143,6 +158,7 @@ class TrajectoryRecorder:
                 "frame": "world",
                 "phase_legend": {str(k): v for k, v in PHASE_LEGEND.items()},
                 "check_stride": int(self.check_stride),
+                "object_keys": list(self._object_keys),
             }
         )
 
@@ -164,8 +180,10 @@ class TrajectoryRecorder:
         a, b = self._n_rq, self._n_rq + self._n_dq
         self._buf[k, :a] = self._robot.data.joint_pos.torch[0]
         self._buf[k, a:b] = self._dw.data.joint_pos.torch[0]
-        self._buf[k, b : b + 3] = self._obj.data.root_pos_w.torch[0]
-        self._buf[k, b + 3 : b + 7] = self._obj.data.root_quat_w.torch[0]
+        for i, obj in enumerate(self._objs):
+            o = b + 7 * i
+            self._buf[k, o : o + 3] = obj.data.root_pos_w.torch[0]
+            self._buf[k, o + 3 : o + 7] = obj.data.root_quat_w.torch[0]
         self._phase[k] = self.phase
         self._weld[k] = self.weld
         if k % self.check_stride == 0:
@@ -192,7 +210,7 @@ class TrajectoryRecorder:
         arrays = {
             "robot_joint_pos": flat[:, :a],
             "dishwasher_joint_pos": flat[:, a:b],
-            "object_root_pose_w": flat[:, b : b + 7],
+            "object_root_pose_w": flat[:, b : b + 7 * len(self._object_keys)],
             "phase": self._phase[:n],
             "weld": self._weld[:n],
             "captured": self._captured[:n],

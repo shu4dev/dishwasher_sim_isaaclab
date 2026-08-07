@@ -24,12 +24,32 @@ class CameraRig:
     """
 
     def __init__(self, cam_specs: dict[str, tuple], hw: tuple[int, int] = (720, 1280)):
+        """Args:
+            cam_specs: ``{name: (eye, target)}`` or ``{name: (eye, target, lens)}``. A carried
+                lens wins over :data:`dishsim.config.CAMERA_LENS`, which is what lets a replay
+                re-render through the same optics the experiment was shot with instead of
+                whatever the config happens to say now.
+            hw: (height, width) in pixels.
+        """
         import isaaclab.sim as sim_utils  # noqa: PLC0415  (Kit-only)
         from isaaclab.sensors import Camera, CameraCfg  # noqa: PLC0415
 
-        self._specs = cam_specs
+        # COPY, never alias. Callers pass config.CAMERAS itself, and set_view writes into
+        # _specs — so aliasing let a temporary close-up permanently overwrite the module-level
+        # pose. run_trials.py re-aims "iso" for a final still and then "restores" it from
+        # config.CAMERAS["iso"], which by then held the close-up: the restore was a no-op from
+        # the second trial onward, and every later recording stored the wrong camera.
+        from . import config  # noqa: PLC0415
+
+        self._specs = {k: (tuple(v[0]), tuple(v[1])) for k, v in cam_specs.items()}
+        #: Lens actually used per camera — a spec may carry its own (replay), otherwise config.
+        self.lenses = {
+            k: dict(v[2]) if len(v) > 2 and v[2] else config.camera_lens(k)
+            for k, v in cam_specs.items()
+        }
         self.cams: dict[str, object] = {}
         for name in cam_specs:
+            lens = self.lenses[name]
             self.cams[name] = Camera(
                 CameraCfg(
                     prim_path=f"/World/Cam_{name}",
@@ -38,9 +58,9 @@ class CameraRig:
                     width=hw[1],
                     data_types=["rgb"],
                     spawn=sim_utils.PinholeCameraCfg(
-                        focal_length=24.0,
+                        focal_length=float(lens["focal_length"]),
                         focus_distance=400.0,
-                        horizontal_aperture=20.955,
+                        horizontal_aperture=float(lens["horizontal_aperture"]),
                         clipping_range=(0.05, 100.0),
                     ),
                 )
@@ -66,9 +86,27 @@ class CameraRig:
             targets=torch.tensor([tuple(target)], dtype=torch.float32, device=device),
         )
 
+    def restore_view(self, name: str, device: str) -> None:
+        """Re-aim a camera back to its configured pose after a temporary close-up."""
+        from . import config  # noqa: PLC0415
+
+        eye, target = config.CAMERAS[name]
+        self.set_view(name, eye, target, device)
+
     def update(self, dt: float) -> None:
         for cam in self.cams.values():
             cam.update(dt)
+
+    def grab_one(self, name: str) -> np.ndarray:
+        """Latest RGB frame from ONE camera (call :meth:`update` first).
+
+        :meth:`grab` copies every camera off the device; a caller writing a single-camera video
+        then discards all but one. At 720x1280 that is ~3.7 MB of wasted transfer per captured
+        frame, per extra camera — which is what makes adding a wide episode view look expensive
+        when it is not.
+        """
+        frame = self.cams[name].data.output["rgb"].torch[0].detach().cpu().numpy()
+        return frame[..., :3].astype(np.uint8)
 
     def grab(self) -> dict[str, np.ndarray]:
         """Latest RGB frame per camera as HxWx3 uint8 (call :meth:`update` first)."""

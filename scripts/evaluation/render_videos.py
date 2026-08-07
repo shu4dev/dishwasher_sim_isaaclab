@@ -110,7 +110,13 @@ def main() -> None:
     # order matters and mirrors the experiment runner: scene first, then the rig, then
     # reset, then poses (cameras created before the scene end up mis-posed)
     # no weld, no contact sensors: playback writes every body, nothing is simulated
-    scene = InteractiveScene(dscene.make_scene_cfg(with_object=True, with_robot_contacts=False))
+    # The scene is built ONCE, before the per-trial loop, so it must be shaped by the first
+    # recording — not by `rec`, which does not exist until the loop below binds it. Reading it
+    # here raised NameError at startup and made this script unrunnable.
+    rec0 = dtraj.TrajectoryRecording.load(TRIALS[0])
+    objs = dreplay.scene_objects_for(rec0)
+    scene = InteractiveScene(dscene.make_scene_cfg(
+        with_object=not objs, with_robot_contacts=False, objects=objs))
     rig = CameraRig(cameras, hw=hw)
     sim.reset()
     rig.apply_poses(sim.device)

@@ -13,6 +13,7 @@ with identity rotation, asserted at scene build).
 This module must stay importable without Kit *and* without the planning venv (numpy only).
 """
 
+import contextlib
 import math
 import os
 
@@ -62,6 +63,9 @@ RACK_JOINT_TARGETS = {
     "PrismaticJoint_dishwasher_2_down": RACK_LOWER_EXT_M,
     "PrismaticJoint_dishwasher_2_up": RACK_UPPER_EXT_M,
 }
+#: Prismatic travel limits shared by both rack joints [m] (from the USD; docs/joint_report.md).
+#: 0 = stowed, -0.20 = fully extended. The racks are independently articulated.
+RACK_TRAVEL_LIMITS_M = (-0.20, 0.0)
 
 # Rack-state scenarios — exactly the two real robot-facing INITIAL states (user-mandated).
 # The dishwasher itself is unmodified (no rack raise): instead the robot does what a human
@@ -137,23 +141,108 @@ def apply_scenario(name: str) -> None:
     SCENARIO_NAME = name
 
 
+def resolve_rack_state(spec=None, *, tol_m: float = 1e-6) -> str:
+    """Resolve a rack-state spec to a NAMED state, or fail with how to create one.
+
+    Accepts either a state name or explicit per-rack extensions::
+
+        resolve_rack_state("placement")
+        resolve_rack_state({"lower_m": -0.20, "upper_m": 0.0})
+
+    Extensions cannot be free-form. :func:`dishsim.geometry.config_hash` includes the rack
+    drive targets, and :func:`scenario_cache_dir` keys the collision cache by state *name* — so
+    an unnamed combination has no cache directory, and pointing it at someone else's directory
+    fails the staleness check. Rather than let that surface later as a confusing
+    "cache is stale", this resolves up front and, when there is no match, says exactly what to
+    add and which commands bake it.
+
+    Args:
+        spec: State name, or ``{"lower_m": float, "upper_m": float}``. Defaults to
+            ``TASK["rack_state"]``.
+        tol_m: Tolerance when matching extensions against a named state [m].
+
+    Returns:
+        The matching state name.
+
+    Raises:
+        ValueError: On an unknown name, a malformed spec, or an extension outside the joint
+            limits.
+        RuntimeError: When the extensions are valid but no named state carries them.
+    """
+    spec = TASK["rack_state"] if spec is None else spec
+    states = {**SCENARIOS, **INTERNAL_STATES}
+    if isinstance(spec, str):
+        if spec not in states:
+            raise ValueError(f"unknown rack state {spec!r} (choices: {sorted(states)})")
+        return spec
+    if not isinstance(spec, dict) or {"lower_m", "upper_m"} - set(spec):
+        raise ValueError(
+            f"rack_state must be a state name or {{'lower_m': float, 'upper_m': float}}, got {spec!r}"
+        )
+    lower, upper = float(spec["lower_m"]), float(spec["upper_m"])
+    for label, value in (("lower_m", lower), ("upper_m", upper)):
+        if not (RACK_TRAVEL_LIMITS_M[0] - tol_m <= value <= RACK_TRAVEL_LIMITS_M[1] + tol_m):
+            raise ValueError(
+                f"rack_state {label}={value} is outside the prismatic joint limits "
+                f"{RACK_TRAVEL_LIMITS_M} (0 = stowed, -0.20 = fully out)"
+            )
+    # Match INTERNAL_STATES first. Extensions do not identify a state uniquely — `both_out` and
+    # `placement_open` are both (-0.20, -0.20) and even share a config_hash, since the hash
+    # covers the rack TARGETS and only the directory name separates them. The internal states
+    # are the ones a multi-object episode can actually use (the scenarios carry a rack_action,
+    # which the runner rejects), so they win; an ambiguity *within* a tier is a genuine
+    # config problem and is reported rather than silently resolved.
+    for tier, tier_states in (("INTERNAL_STATES", INTERNAL_STATES), ("SCENARIOS", SCENARIOS)):
+        hits = [n for n, sc in tier_states.items()
+                if abs(sc["rack_lower_m"] - lower) <= tol_m
+                and abs(sc["rack_upper_m"] - upper) <= tol_m]
+        if len(hits) > 1:
+            raise RuntimeError(
+                f"lower_m={lower}, upper_m={upper} matches several {tier} entries {sorted(hits)} "
+                f"— name the one you mean instead of giving extensions"
+            )
+        if hits:
+            return hits[0]
+    known = ", ".join(f"{n} (lower {s['rack_lower_m']}, upper {s['rack_upper_m']})"
+                      for n, s in sorted(states.items()))
+    raise RuntimeError(
+        f"no named machine state has lower_m={lower}, upper_m={upper}. Rack extensions are part "
+        f"of the collision-cache hash, so a new combination needs its caches baked before it can "
+        f"be used.\n"
+        f"  known states: {known}\n"
+        f"  to add one:   add an INTERNAL_STATES entry to src/dishsim/config.py, e.g.\n"
+        f'                  "my_state": {{"rack_lower_m": {lower}, "rack_upper_m": {upper}, '
+        f'"min_feasible_slots": 2}},\n'
+        f"                then bake it for the classes you need:\n"
+        f"                  scripts/setup/build_state.py --state my_state --classes mug,cup,tumbler"
+    )
+
+
 def state_params(name: str | None = None) -> dict:
     """Parameters of a scenario or internal machine state (e.g. Phase-E gates)."""
     name = name or SCENARIO_NAME
     return {**SCENARIOS, **INTERNAL_STATES}[name]
 
 
-def scenario_cache_dir(name: str | None = None) -> str:
-    """Collision-cache root for a scenario + the active carried object.
+def scenario_cache_dir(name: str | None = None, object_name: str | None = None) -> str:
+    """Collision-cache root for a scenario + a carried object.
 
     The mug keeps the legacy layout (baseline ``assets/cache/``, other states under
     ``assets/cache/scenarios/<state>``) so the validated v0 caches stay byte-stable; every
     other object gets ``assets/cache/objects/<object>/<state>``. CoACD piece dirs are
     content-addressed under the baseline root, so rack/shell decompositions are shared.
+
+    Args:
+        name: Scenario/state name; defaults to the active scenario.
+        object_name: Object class; defaults to the active object. Passing it explicitly lets a
+            multi-object episode read several classes' caches without calling
+            :func:`set_active_object` — which rewrites module globals and would make the
+            grasp/geometry view depend on call order.
     """
     name = name or SCENARIO_NAME
-    if ACTIVE_OBJECT != "mug":
-        return os.path.join(ASSETS_DIR, "cache", "objects", ACTIVE_OBJECT, name)
+    obj = object_name or ACTIVE_OBJECT
+    if obj != "mug":
+        return os.path.join(ASSETS_DIR, "cache", "objects", obj, name)
     if name == "both_out":
         return CACHE_DIR
     return os.path.join(ASSETS_DIR, "cache", "scenarios", name)
@@ -171,6 +260,13 @@ def scenario_media_dir(phase: str, name: str | None = None) -> str:
 # ---------------------------------------------------------------------------------------------
 GRIPPER_JOINT = "finger_joint"  # 0 = open (85 mm), ~0.8 = closed (inverted vs Franka)
 GRIPPER_APERTURE_OPEN_RAD = 0.0  # fully open — trial start and release
+
+#: Grasp families with no calibrated countertop pick. Measured, not stylistic: these contact the
+#: pads one-sided, and closing on a free-lying object drags it (a 30 g fork travels ~21 mm during
+#: the close, against a 5 mm weld gate). The single-object runner spawns them already welded at
+#: the carry pose; an episode acquires them by snapping to the carry transform mid-run. Either
+#: way it is NOT a pick, and the records label it so.
+WELD_ACQUIRE_FAMILIES = ("edge_pinch", "rim_edge", "handle_pinch")
 # Grasp aperture = theta_touch + delta, measured by `scripts/setup/calibrate_grasp.py` (staircase
 # ramp onto the welded mug: theta_touch is the first sustained pad contact, delta a small
 # over-command chosen so the steady pad force lands mid-band; the finger drive's
@@ -273,6 +369,56 @@ CAMERAS = {
     "front": ((-0.40, -0.80, 0.60), (0.60, 0.00, 0.15)),  # looking into the dishwasher opening
     "top": ((0.50, 0.01, 1.70), (0.50, 0.00, 0.10)),  # straight down over the extended rack
     "iso": ((-0.50, 1.10, 0.90), (0.50, 0.05, 0.22)),  # 3/4 view onto the opening, robot at right
+}
+
+# Per-camera lens. These used to be hardcoded in media.CameraRig, which is why no view could be
+# widened without moving the eye — and why the episode video cropped the countertop out.
+#
+# The VERTICAL field of view is the binding constraint, not the horizontal one: the frame is
+# 16:9 and `vertical_aperture` defaults to `horizontal_aperture * height/width`, so
+#
+#     focal 24 mm -> hFOV 47.2 deg, vFOV 27.6 deg
+#
+# Fitting the whole scene (a 1.01 m bounding sphere over robot + counter + machine + open door +
+# extended racks) then needs the eye 4.24 m out at 24 mm — far enough that a 63 mm cup is
+# unreadable. Widening the lens instead keeps the shot close: at 15 mm (vFOV 42.9 deg) the same
+# sphere fits from 2.76 m.
+CAMERA_LENS_DEFAULT = {"focal_length": 24.0, "horizontal_aperture": 20.955}
+CAMERA_LENS: dict[str, dict] = {}  # per-camera overrides; missing names use the default
+
+
+def camera_lens(name: str) -> dict:
+    """Lens parameters for a camera, falling back to :data:`CAMERA_LENS_DEFAULT`."""
+    return {**CAMERA_LENS_DEFAULT, **CAMERA_LENS.get(name, {})}
+
+
+# The episode camera: a single wide view that holds the countertop AND the machine for the whole
+# episode, so the counter's state is visible while the robot works. Merged into the rig only by
+# the multi-object runner — adding it to CAMERAS would put a fourth render tile in every other
+# script's rig (capacity_fill at 1080p, goal_configs' sheets, parity_check, check_scene) for no
+# benefit there.
+#
+# Aimed at the centre of the measured must-see box, from the robot's front-left and above so the
+# counter surface and the rack interior are both oblique rather than edge-on. Eye distance and
+# lens are chosen together from the arithmetic above; VERIFY by rendering, not by trusting it.
+EPISODE_CAMERA = {
+    # Eye solved by projecting the must-frame box's CORNERS through the lens and binary-searching
+    # the closest distance that still contains them with 5% margin — not from a bounding sphere,
+    # which is orientation-agnostic and lands ~15% further out for no benefit.
+    #
+    # The box is the robot's working volume, the whole spawn rectangle, the machine, its open
+    # door and the extended racks. It is bound by the HORIZONTAL footprint (~1.26 x 1.12 m), not
+    # by the arm's height — capping the arm envelope anywhere from 0.75 to 1.05 m does not move
+    # the answer.
+    #
+    # Worth knowing before retuning: once a fixed scene fills the frame, object pixel size is
+    # set by the scene-to-object ratio, not the lens. A 63 mm cup is ~24 px at 1280 wide at ANY
+    # focal length here (15/20/24 mm all give 23-25 px); a longer lens only pushes the eye
+    # further back. Enough to read counter state, not to inspect a grasp — use the `front`
+    # camera, or re-render offline with render_videos.py, for that.
+    "eye": (-1.25, -1.65, 1.46),
+    "target": (0.42, -0.06, 0.42),
+    "lens": {"focal_length": 15.0, "horizontal_aperture": 20.955},
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -454,15 +600,92 @@ SLOT_GRID_PITCH_M = 0.06  # candidate-center spacing (overlap allowed)
 RELEASE_HOVER_M = 0.012  # goal poses hover the object above the wire floor (> collision margin,
 #                          small enough that the release drop is a non-event)
 
+# Per-placement-mode geometry and success tolerances. These used to be literals scattered
+# through placement.py (bowl slot positions, the plate seating bar, the basket drop offset, the
+# basket's hover override, and every non-floor_stand success tolerance), which made "where does
+# a goal come from" unanswerable without reading the derivation code. They are values MEASURED
+# against the rack geometry — see docs/success_criteria.md — and relocating them here changed
+# none of them, so existing caches and the frozen mug baseline stay bit-identical.
+#
+# Keys per mode:
+#   release_hover_m  goal poses hover the object this far above the seating datum
+#   tol_*            success tolerances (docs/success_criteria.md); floor_stand aliases the
+#                    SLOT_TOL_* constants above so the v0 criteria have a single source
+PLACEMENT_MODES: dict[str, dict] = {
+    "floor_stand": {
+        "release_hover_m": RELEASE_HOVER_M,
+        "tol_lateral_m": SLOT_TOL_LATERAL_M,
+        "tol_tilt_deg": SLOT_TOL_TILT_DEG,
+        "tol_bottom_m": 0.02,
+    },
+    "plate_slot": {
+        # dinner plates seat forward, bottom edge on the y 0.197 bank bar (rack frame); the
+        # disc spans the full diameter, so smaller discs may seat deeper via spec params
+        "seat_y_m": 0.197,
+        "release_hover_m": RELEASE_HOVER_M,
+        "default_lean_deg": 7.0,  # fallback when the slot carries no measured tine lean
+        "tol_lateral_m": 0.012,  # off-gap drift along the tine pitch direction
+        "tol_tilt_deg": 12.0,  # face-normal deviation, flip-insensitive
+        "tol_bottom_m": 0.02,
+    },
+    "bowl_lean": {
+        # lean positions over the drinkware slope, against the bowl tines
+        "slot_x_m": 0.070,
+        "slot_ys_m": (0.060, 0.105, 0.150),
+        "slot_width_m": 0.110,
+        "default_lean_deg": 48.0,  # opening down-slope
+        "release_hover_m": RELEASE_HOVER_M,
+        "tol_lateral_m": 0.04,
+        "tol_tilt_deg": 20.0,
+        "tol_bottom_m": 0.06,
+    },
+    "basket_drop": {
+        # the arch carry-handle bar runs along y directly over every bay center, so a centered
+        # descent always hits it — the drop point is offset in x
+        "drop_x_offset_m": -0.020,
+        # gravity does the insertion: release from a genuine hover, not the 12 mm used elsewhere
+        "release_hover_m": 0.060,
+        "tol_lateral_pad_m": 0.005,  # slack added to the bay half-width in y
+        "tol_bottom_min_m": -0.005,  # settled center may not sink below the bay floor
+        "default_top_z_m": 0.092,
+    },
+}
+
+
+def placement_mode_params(mode: str) -> dict:
+    """Geometry and tolerances for a placement mode.
+
+    Args:
+        mode: Placement-mode name (a key of :data:`PLACEMENT_MODES`).
+
+    Returns:
+        The mode's parameter dict.
+    """
+    if mode not in PLACEMENT_MODES:
+        raise ValueError(f"no placement-mode parameters for {mode!r} (have {sorted(PLACEMENT_MODES)})")
+    return PLACEMENT_MODES[mode]
+
 # ---------------------------------------------------------------------------------------------
 # rack manipulation + countertop pick (the both_in / both_out trial choreography)
 # ---------------------------------------------------------------------------------------------
 # Countertop: the ArtVIP tub is open-topped in collision; freestanding dishwashers have a
-# worktop. usd_prep authors this slab onto E_body_5 in the derived USDs — it is also the mug's
-# initial resting surface. Shell top measured at world z 0.47, footprint x [0.65, 1.045],
-# y [-0.24, 0.242].
-COUNTERTOP_SIZE = (0.395, 0.482, 0.020)  # world-aligned box extents [m]
-COUNTERTOP_CENTER_W = (0.8475, 0.001, 0.48)  # world center; top surface at z 0.49
+# worktop. usd_prep authors this slab onto E_body_5 in the derived USDs — it is also the
+# objects' initial resting surface. Shell top measured at world z 0.47.
+#
+# Sized from a MEASURED reachability map, not chosen (scripts/setup/reach_map.py, which grids
+# the countertop plane and runs the runner's own pick-feasibility idiom — IK at the pre-grasp
+# hover AND at the grasp pose, both collision-filtered — per demo class). Two facts came out of
+# that map and fix the geometry:
+#   - Nothing beyond world x ~0.80 is reachable for any class, so the slab's far half is
+#     decorative. It is kept (a worktop that stops at the machine's mid-depth looks wrong and
+#     costs nothing) but never spawned on — see TASK["spawn_rect_w"].
+#   - The counter must NOT grow toward the robot past x 0.65: the door opens to a tip at
+#     x 0.271 and the robot loads the racks through that space, so an overhang there would
+#     block the task it exists to serve.
+# Growth therefore goes sideways along the counter run: y [-0.240, 0.242] -> [-0.600, 0.440].
+# Surface 0.190 -> 0.411 m^2, against 0.20 m^2 for the entire 15-class library laid flat.
+COUNTERTOP_SIZE = (0.395, 1.040, 0.020)  # world-aligned box extents [m]
+COUNTERTOP_CENTER_W = (0.8475, -0.080, 0.48)  # world center; top surface at z 0.49
 # Object staging poses: upright on the countertop at the robot-nearest corner (the wrist
 # IK target lands at ~0.81 of the 0.85 m reach — verified with the analytic IK offline). Yaw
 # orients the handle so the fixed calibrated grasp transform stays IK-reachable. This is the
@@ -515,6 +738,125 @@ PLANNER_PARAMS: dict[str, dict] = {
     "bit_star": {"budget_s": 10.0},
     # roadmap rebuilt per query; single-goal only in this OMPL build (see planners/prm.py)
     "prm": {"budget_s": 10.0},
+}
+
+# ---------------------------------------------------------------------------------------------
+# multi-object task (the dishsim.task layer)
+# ---------------------------------------------------------------------------------------------
+# Everything the task sequencer is allowed to decide from. The sequencer chooses WHICH object to
+# pick next; it never invents geometry — spawn bounds, goal slot pools and every tolerance come
+# from here. The motion layer below it never reads this block at all.
+TASK: dict = {
+    # Episode composition. A multi-object PICK task may only draw from classes the robot can
+    # actually pick off the countertop, which is a stricter bar than robot_demo:
+    #
+    #   grasp family   classes                 real countertop pick?
+    #   rim_diam       mug, cup, tumbler       yes — approach, close, weld, lift
+    #   edge_pinch     plate                   no  — START_WELDED in run_trials.py:135
+    #   rim_edge       bowl                    no  — START_WELDED
+    #   handle_pinch   fork                    no  — START_WELDED
+    #
+    # The three START_WELDED families are teleported into the gripper at the carry pose so
+    # their PLACEMENT can be exercised; their pick has never been calibrated or demonstrated.
+    # Including them here would make an episode that reports "picked" for objects it teleported,
+    # so the default pool is the three families that survive a genuine pick. Widening it is a
+    # grasp-calibration job (setup/calibrate_grasp.py per class), not a task-layer one.
+    "classes": ("mug", "cup", "tumbler"),
+    # Which classes cannot be picked is NOT listed here: it is derived from the grasp FAMILY via
+    # WELD_ACQUIRE_FAMILIES, so a class calibrated later stops being weld-acquired automatically
+    # instead of leaving a hand-maintained list to drift out of date.
+    # Bounded by DESTINATION capacity, not by countertop room — the counter comfortably holds
+    # far more than the machine can accept from the robot. Two measured limits stack:
+    #
+    #   reachability  only 4 of the 15 lower-rack grid slots have any goal configurations
+    #                 (ids 1, 2, 6, 7); the rest sit where the carried object cannot be brought
+    #                 in. Empty goal sets there are expected signal, not a bug.
+    #   overlap       those 4 form a 2x2 block at the 60 mm SLOT_GRID_PITCH_M. The grid is an
+    #                 *overlapping candidate* grid built for one-object-per-trial coverage, so
+    #                 only the ~85 mm diagonals are simultaneously occupiable.
+    #
+    # Net simultaneous capacity is therefore 2. Raising this without widening the slot pool
+    # just produces items the assigner honestly reports it cannot place.
+    "n_objects": 2,
+    # EXPLICIT composition: object type -> exact count, or an inclusive (lo, hi) range whose
+    # value is drawn per episode from the layout seed. Set this and it fully determines what
+    # spawns, replacing the uniform draw over "classes"/"n_objects" above (which stays as the
+    # fallback when this is None, so existing runs are unaffected).
+    #
+    #     "spawn_counts": {"cup": (2, 4), "tumbler": 1},
+    #
+    # The expanded list is SHUFFLED with the same seeded generator before layout. Placement
+    # order is draw order, so an unshuffled list would always let the first-listed type claim
+    # the best countertop space — composition should be yours to fix, position should not be.
+    "spawn_counts": None,
+    # Clear gap required between two occupied slot centres, on top of both objects' body radii.
+    "slot_separation_margin_m": 0.010,
+    # Countertop spawn bounds [m, world]. MEASURED by scripts/setup/reach_map.py as the largest
+    # rectangle on the worktop where at least one demo class is pickable; per-class acceptance
+    # inside it ranges 50% (plate, whose edge_pinch has a mid-y hole) to 89% (bowl), which is
+    # why every item is reach-checked individually and rejects are resampled rather than
+    # trusting the rectangle wholesale.
+    "spawn_rect_w": {"x_min": 0.680, "x_max": 0.800, "y_min": -0.580, "y_max": 0.420},
+    "min_separation_m": 0.015,  # clear gap between object footprint circles at spawn
+    "spawn_hover_m": 0.004,  # objects spawn just above the surface and settle onto it
+    "settle_steps": 120,  # physics steps after spawning, before the episode begins
+    "max_spawn_resamples": 400,  # per-item rejection budget inside one layout attempt
+    "max_layout_retries": 10,  # whole-layout resamples (Stage B: settling can break reach)
+    # Stage B stacking. Uniform sampling almost never lands one footprint on another, so with
+    # --allow_stacking this fraction of objects is aimed at an already-placed one instead; the
+    # jitter (as a fraction of the base object's radius) keeps the stack imperfect, which is
+    # what makes settling non-trivial.
+    "stack_fraction": 0.5,
+    "stack_jitter_frac": 0.25,
+    # Goal slots inside the machine, per placement mode. None = every derived slot, in
+    # derivation order; a tuple restricts and orders the pool (front-to-back, say). The
+    # sequencer allocates an unused slot from the pool for each item.
+    "slot_pools": {
+        "floor_stand": None,
+        "plate_slot": None,
+        "bowl_lean": None,
+        "basket_drop": None,
+    },
+    # Goal slots per object TYPE, as an ORDERED list of slot NAMES (see
+    # dishsim.placement.slot_names, which derives them from the rack geometry rather than
+    # hardcoding ids — ids are positional and silently re-point if SLOT_GRID_PITCH_M changes).
+    # Objects of a type consume the list in order; a slot already taken, overlapping an assigned
+    # one, or with no reachable goal configurations for that class is SKIPPED rather than
+    # failing, and an object whose list runs out is reported unplaced. Falls back to
+    # slot_pools[mode], then to every derived slot, when a type has no entry here.
+    #
+    #     "type_slots": {"plate": ("gap_04", "gap_05"), "mug": ("mid_centre",)},
+    "type_slots": None,
+    # Machine rack state. Either a named state (a key of SCENARIOS / INTERNAL_STATES) or
+    # explicit per-rack extensions in metres, which resolve to the matching named state:
+    #
+    #     "rack_state": "placement"
+    #     "rack_state": {"lower_m": -0.20, "upper_m": 0.0}
+    #
+    # The two racks are independently articulated (limits [-0.20, 0.00] m each; 0 = stowed).
+    # Extensions are part of geometry.config_hash(), and caches are keyed by state NAME, so an
+    # unbaked combination cannot be run — resolve_rack_state() fails with the commands to bake
+    # it rather than planning against a stale world.
+    "rack_state": "placement",
+    # Which camera the episode MP4 is written from (see config.CAMERAS + EPISODE_CAMERA).
+    "video_camera": "episode",
+    "cost_fn": "nearest_first",  # pick-order heuristic; see dishsim.task.cost.available()
+    # Stage B — support graph
+    "support_backend": "both",  # "contact" | "geometric" | "both" (both cross-checks and logs)
+    "support_gap_m": 0.008,  # max vertical gap still counted as resting-on
+    "support_overlap_frac": 0.10,  # min footprint-circle overlap counted as resting-on
+    "support_force_thresh_n": 0.05,  # object-object contact above this counts as touching  # min footprint-circle overlap counted as resting-on
+    # Stage C — blocked grasps and recovery
+    "grasp_yaw_samples": 12,  # candidate grasp yaws probed against the CURRENT world
+    "grasp_yaw_samples_wide": 36,  # recovery step 1 widens the sweep to this
+    "max_recovery_attempts": 2,
+    "recovery_settle_steps": 90,  # recovery step 2 lets a leaning pile relax
+    "pose_stale_tol_m": 0.010,  # beyond this the cached grasp is stale -> recompute + replan
+    "pose_stale_tol_deg": 10.0,
+    # Home anchoring — every episode starts and ends at HOME_Q. This is the per-joint deviation
+    # treated as "already home"; below it the retreat is skipped rather than replanned. It is
+    # NOT a placement tolerance: it only decides whether the arm has to move.
+    "home_tol_rad": 0.05,
 }
 
 # =============================================================================================
@@ -949,6 +1291,31 @@ def grasp_transform(spec: ObjectSpec) -> tuple[tuple, tuple]:
         # pointed the head into the wrist — measured 116 N at the scripts/setup/calibrate_grasp.py open gate)
         return (-spec.grasp.grasp_point_m + 0.0, 0.0, z), (1.0, 0.0, 0.0, 0.0)
     raise ValueError(f"unknown grasp family {fam!r}")
+
+
+@contextlib.contextmanager
+def active_object(name: str):
+    """Temporarily activate an object class, restoring the previous one on exit.
+
+    :func:`config_hash` — and therefore every cache-staleness check — is a function of the
+    ACTIVE object, so reading a second class's collision cache requires activating it first. A
+    multi-object episode has to touch several classes' caches during setup, and leaving the wrong
+    one active afterwards would silently give the next grasp computation another object's
+    geometry. Scoping the switch makes the read safe *and* keeps the staleness check honest,
+    which a ``validate=False`` shortcut would not.
+
+    Only valid after :mod:`dishsim.scene`/:mod:`dishsim.robots` are imported — those bind the
+    object USD path at import time, so the pre-import activation rule still applies.
+
+    Args:
+        name: Object class to activate for the duration of the block.
+    """
+    previous = ACTIVE_OBJECT
+    set_active_object(name)
+    try:
+        yield
+    finally:
+        set_active_object(previous)
 
 
 def set_active_object(name: str) -> None:

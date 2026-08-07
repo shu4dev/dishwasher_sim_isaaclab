@@ -242,7 +242,7 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m 
 ```
 
 `kit_smoke.py` proves the planning stack imports *inside* the Kit process and that headless
-camera capture produces non-black frames. The suite is **183 test cases across 14 files**, all
+camera capture produces non-black frames. The suite is **449 test cases across 26 files**, all
 Kit-free.
 
 > **Note:** `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is required — the system site-packages carry
@@ -327,6 +327,97 @@ done
 > Phase 2 and only *aggregated* in Phase 3. Placement geometry is recomputable from a recorded
 > pose, and evaluation cross-checks it against the trial record.
 
+#### Multi-object episodes
+
+`run_task.py` spawns N objects at seeded random countertop poses, settles them, and clears them
+one at a time in an order it decides:
+
+```bash
+# reproducible from the seed alone
+scripts/run_kit.sh scripts/experiment/run_task.py --headless --seed 0
+
+# swap the ordering heuristic; the planner and the scene are untouched
+scripts/run_kit.sh scripts/experiment/run_task.py --headless --seed 0 --cost_fn shortest_ik
+```
+
+- `--seed`: layout seed — with the composition this reproduces the scene exactly
+- `--spawn "cup=2-4,mug=1"`: **explicit composition** — a count or an inclusive range per object
+  type. A range is drawn per episode from the seed, so the number varies while staying
+  reproducible. Term order does not matter (`a=1,b=2` == `b=2,a=1`), and the expanded list is
+  shuffled so no type always gets first claim on countertop space. Config equivalent:
+  `TASK["spawn_counts"]`
+- `--n_objects` / `--classes`: the uniform-draw fallback when no explicit composition is given
+- `--rack_lower_m` / `--rack_upper_m`: rack extensions in metres (0 = stowed, −0.20 = fully out;
+  the racks are independently articulated). Resolved to a named machine state — extensions are
+  part of the collision-cache hash, so a combination that has not been baked fails at startup
+  with the command that bakes it. `--scenario NAME` selects one directly. Config equivalent:
+  `TASK["rack_state"]`
+- `--video_camera`: which camera the episode MP4 is written from (default `episode`)
+- `--cost_fn`: pick-order heuristic — `nearest_first` (default) · `shortest_ik` · `farthest_first`
+- `--allow_stacking`: spawn objects stacked on each other. Because settling then decides the
+  final poses, reachability is re-checked *after* physics and the whole layout is resampled if
+  any object ends up unreachable (capped by `TASK["max_layout_retries"]`, then a loud failure)
+- `--planner` / `--planner_param`: as for `run_trials.py` — the task layer never names a planner
+
+Per-pick records use the **existing trial schema**, so Phase 3 consumes an episode unchanged;
+`episodes/<ep>.json` adds what a per-trial record cannot express (pick order, the cost each
+choice scored, why anything was blocked, the support graph).
+
+**Goal slots by object type.** `TASK["type_slots"]` maps an object type to an ORDERED list of
+slot **names**, e.g. `{"mug": ("mid_centre", "near_centre")}`. Names are derived from the rack
+geometry (`placement.slot_names`) rather than hardcoded ids, because ids are positional and would
+silently re-point to different cells if the grid pitch were retuned. Each type consumes its list
+in order; a slot already taken, overlapping an assigned one, or with no reachable goal
+configurations for that class is skipped, and an object whose list runs out is reported unplaced.
+The vocabulary follows each mode's actual grid — `near_centre`/`mid_left1` for the `floor_stand`
+3×5, `gap_centre` for the plate tine gaps, `bay_near` for the cutlery bays.
+
+**Starting from a stowed machine.** `--scenario both_in` begins with both racks pushed in, where
+**no slot is reachable at all** (0 of 15, measured). The episode opens with a rack action — the
+gripper engages the lower rack's handle and pulls it out to −0.20 m while the tool tracks the
+moving handle — and then loads the machine in the resulting `placement` state. The episode spans
+two collision-cache states; the post-action state is derived from the action, and a rack that
+settles beyond `RACK_SLIDE_TOL_M` ends the episode rather than letting later picks plan against a
+world the machine no longer matches.
+
+```bash
+scripts/run_kit.sh scripts/experiment/run_task.py --headless --enable_cameras \
+    --scenario both_in --spawn "cup=1,tumbler=1,fork=2" --seed 1 --run_id bothin_load
+```
+
+> Measured: pulling the *upper* rack out as well (`placement_open`) does not open the rear rows —
+> it drops cup, tumbler and fork to **0** reachable slots. The lower rack is already at its
+> mechanical limit, and 87 mm of its 287 mm depth never leaves the machine mouth.
+
+**Home-anchored trajectories.** Every episode's recording begins and ends at `config.HOME_Q`.
+The start is measured, corrected if it drifted during layout settling, and then asserted; the
+closing retreat plans back to home and holds for `SETTLE_STEPS`, and runs on the failure and
+exception paths too. It happens *before* the recording and media are finalised (so the retreat is
+in the `.npz`, the MP4 and the final stills) and *after* the sequencer (so placement verdicts are
+already decided and parking the arm can never revise a pass/fail). The record carries
+`start_home_err_rad`, `end_home_err_rad`, `home_return_status` and — because the fallback retreat
+is a straight interpolation that is not collision-checked — `post_home_displacement_mm` for each
+placed object.
+
+**Camera framing.** `config.CAMERA_LENS` makes focal length and aperture configurable (they were
+hardcoded), and `config.EPISODE_CAMERA` is a wide view that keeps the countertop and the machine
+in frame for the whole episode — the previous `front` view sat 2.4× too close and cropped the
+counter out entirely. Vertical FOV is the binding constraint on a 16:9 frame, not horizontal.
+
+> **Note:** episode size is capped by DESTINATION capacity, not countertop room — the counter
+> holds far more than the robot can put away. Measured ceiling, per rack structure:
+>
+> | destination | reachable | simultaneous | why |
+> |---|---|---|---|
+> | rack floor (`floor_stand`) | 4 of 15 slots | **2** | the 4 form a 2×2 block at 60 mm pitch; a cup needs 73.4 mm between centres, so only the 84.9 mm diagonals fit |
+> | cutlery basket (`basket_drop`) | 2 of 3 bays | **2** | fork/knife/spoon — but weld-acquired, not picked |
+> | plate tines, bowl slope | **0** | 0 | 87 mm of the rack's 287 mm depth never clears the mouth; extending the upper rack does not help, it makes every count 0 |
+>
+> So a full robot-loaded lower rack is **4 items** — 2 standing plus 2 in the basket — of which
+> 2 are genuine picks. For contrast, `capacity_fill.py` *teleports* 34 items in and 31 settle
+> stably: the rack's own capacity is far larger than what this arm can reach into it.
+> See [docs/success_criteria.md](docs/success_criteria.md#multi-object-episodes-scriptsexperimentrun_taskpy).
+
 ### 3.3 Phase 3 — Evaluation: read the artifacts
 
 None of these re-plan or re-simulate; the first and last need no Kit at all.
@@ -394,11 +485,14 @@ dishwasher_sim_isaaclab/
 │   │   ├── decompose_meshes.py       [convex FCL pieces (CoACD / analytic parts)]
 │   │   ├── parity_check.py           [FCL vs PhysX agreement gate]
 │   │   ├── goal_configs.py           [slot frames + IK goal sets]
+│   │   ├── build_state.py            [bake one machine state's caches for N classes]
+│   │   ├── reach_map.py              [measure where on the counter a class can be picked]
 │   │   ├── preview_rack.py           [rack geometry preview PNGs]
 │   │   └── capacity_fill.py          [fully-loaded scene generator + closability check]
 │   │
 │   ├── experiment/                   [PHASE 2 — run algorithms, write artifacts]
-│   │   └── run_trials.py             [rack reconfigure -> pick -> plan -> place -> evaluate]
+│   │   ├── run_trials.py             [ONE object: rack reconfigure -> pick -> plan -> place]
+│   │   └── run_task.py               [N objects: spawn -> settle -> sequence -> clear]
 │   │
 │   ├── evaluation/                   [PHASE 3 — reads artifacts only]
 │   │   ├── compute_metrics.py        [trial JSONs -> metrics.json + figures + comparison]
@@ -431,6 +525,17 @@ dishwasher_sim_isaaclab/
 │   ├── metrics.py                    [Kit-free aggregation over trial records]
 │   ├── media.py                      [camera rig, video writer, contact sheets]
 │   ├── transforms.py                 [pose helpers (XYZW throughout)]
+│   ├── task/                         [the task layer — decides WHAT, never HOW to move]
+│   │   ├── sequencer.py              [which object next, in what order; support + grasp gates]
+│   │   ├── primitives.py             [one object's pick-and-place choreography]
+│   │   ├── motion.py                 [object-agnostic "move A to B" over the planner]
+│   │   ├── layout.py                 [seeded random countertop layouts, with stacking]
+│   │   ├── support.py                [which object rests on which (contact + geometric)]
+│   │   ├── grasp.py                  [state-dependent grasp availability + yaw sweep]
+│   │   ├── recovery.py               [bounded recovery ladder (a registry)]
+│   │   ├── rack.py                   [open the machine: engage a handle, slide a rack]
+│   │   ├── cost.py                   [swappable pick-order heuristics (a registry)]
+│   │   └── episode.py                [episode record + aggregation]
 │   └── planners/                     [the pluggable planner layer]
 │       ├── base.py                   [PlanResult, PlanDebug, the Planner ABC]
 │       ├── ompl_base.py              [shared OMPL query: space, validity, goals, solve]
@@ -440,7 +545,7 @@ dishwasher_sim_isaaclab/
 │       ├── prm.py                    [probabilistic roadmap (single-goal here)]
 │       └── registry.py               [name -> class; make_planner(); available()]
 │
-├── tests/                            [183 cases across 14 files; venv pytest, no Kit]
+├── tests/                            [449 cases across 26 files; venv pytest, no Kit]
 ├── docs/                             [environment, success criteria, measured reports]
 ├── assets/  media/  results/         [generated, gitignored]
 └── pyproject.toml

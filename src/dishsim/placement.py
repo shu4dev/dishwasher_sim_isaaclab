@@ -49,6 +49,10 @@ class SlotFrame:
     mode: str = "floor_stand"
     rack: str = "lower"
     params: dict = field(default_factory=dict)
+    #: Geometry-derived label (see :func:`slot_names`). Carried so a record can report WHICH
+    #: slot an object went to in the terms config uses, while ``slot_id`` stays the int that
+    #: metrics aggregation sorts on.
+    name: str | None = None
 
     def to_json(self) -> dict:
         return {
@@ -59,6 +63,7 @@ class SlotFrame:
             "mode": self.mode,
             "rack": self.rack,
             "params": self.params,
+            "name": self.name,
         }
 
     @staticmethod
@@ -71,6 +76,7 @@ class SlotFrame:
             mode=d.get("mode", "floor_stand"),
             rack=d.get("rack", "lower"),
             params=d.get("params", {}),
+            name=d.get("name"),
         )
 
 
@@ -225,9 +231,8 @@ def derive_plate_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
     gaps = (xs[:-1] + xs[1:]) / 2.0
     z_floor = rack_gen.floor_top_z(p)
     lean = float(p["plate_tine_lean_deg"])
-    # dinner plates seat forward (bottom on the ~y 0.197 bank bar) — see fill_plan for the
-    # disc-spans-full-diameter geometry note; smaller discs may sit deeper via params
-    y_bottom = 0.197
+    mp = config.placement_mode_params("plate_slot")
+    y_bottom = float(config.active_object_spec().placement.params.get("seat_y_m", mp["seat_y_m"]))
     slots = []
     for gi, gx in enumerate(gaps):
         T_rack_slot = np.eye(4)
@@ -253,16 +258,17 @@ def derive_bowl_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
     p = config.RACK_GEN["E_shelf_1_04"]
     T_base_rack = _rack_T(cache_dir)
     z_floor = rack_gen.floor_top_z(p)
-    lean = float(config.active_object_spec().placement.params.get("lean_deg", 48.0))
+    mp = config.placement_mode_params("bowl_lean")
+    lean = float(config.active_object_spec().placement.params.get("lean_deg", mp["default_lean_deg"]))
     slots = []
-    for si, y in enumerate((0.060, 0.105, 0.150)):
+    for si, y in enumerate(mp["slot_ys_m"]):
         T_rack_slot = np.eye(4)
-        T_rack_slot[:3, 3] = (0.070, float(y), z_floor)
+        T_rack_slot[:3, 3] = (float(mp["slot_x_m"]), float(y), z_floor)
         slots.append(
             SlotFrame(
                 slot_id=si,
                 T_base_slot=T_base_rack @ T_rack_slot,
-                width_m=0.110,
+                width_m=float(mp["slot_width_m"]),
                 source="derived",
                 mode="bowl_lean",
                 rack="lower",
@@ -280,12 +286,12 @@ def derive_basket_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
     T_base_rack = _rack_T(cache_dir)
     b = p["basket"]
     z_bfloor = rack_gen.floor_top_z(p) + b["floor_t"]
+    mp = config.placement_mode_params("basket_drop")
+    dx = float(mp["drop_x_offset_m"])
     slots = []
     for bi, (x0, x1, y0, y1) in enumerate(rack_gen.basket_bays(p)):
         T_rack_slot = np.eye(4)
-        # drop point offset -20 mm in x from the bay center: the arch carry-handle bar runs
-        # along y directly over every bay center — a centered descent always hits it
-        T_rack_slot[:3, 3] = ((x0 + x1) / 2.0 - 0.020, (y0 + y1) / 2.0, z_bfloor)
+        T_rack_slot[:3, 3] = ((x0 + x1) / 2.0 + dx, (y0 + y1) / 2.0, z_bfloor)
         slots.append(
             SlotFrame(
                 slot_id=bi,
@@ -332,8 +338,9 @@ def object_pose_for_mode(slot: SlotFrame, spin: float, lateral: np.ndarray, tilt
 
     R_slot = slot.T_base_slot[:3, :3]
     spec = config.active_object_spec()
+    mp = config.placement_mode_params(slot.mode)
     if slot.mode == "plate_slot":
-        lean = np.radians(slot.params.get("lean_deg", 7.0))
+        lean = np.radians(slot.params.get("lean_deg", mp["default_lean_deg"]))
         r = spec.rim_radius_m
         # disc face normal along slot x, leaned toward slot +y like the tines; spin about the
         # disc normal is free; tiny lateral x inside the gap
@@ -346,7 +353,7 @@ def object_pose_for_mode(slot: SlotFrame, spin: float, lateral: np.ndarray, tilt
             [lateral[0] * 0.25, np.sin(lean) * r + lateral[1] * 0.25, hover + np.cos(lean) * r]
         )
     elif slot.mode == "bowl_lean":
-        lean = np.radians(slot.params.get("lean_deg", 48.0))
+        lean = np.radians(slot.params.get("lean_deg", mp["default_lean_deg"]))
         # opening faces down-interior (+x), leaning back onto the tines; spin free
         R_local = (
             Rotation.from_euler("y", lean + tilt[0]).as_matrix()
@@ -410,7 +417,7 @@ def sample_goal_poses(slot: SlotFrame, n: int, rng: np.random.Generator) -> list
     in a +-0.5 rad window around the top-grasp spin (see :func:`_top_grasp_spin`).
     """
     poses = []
-    hover = config.RELEASE_HOVER_M if slot.mode != "basket_drop" else 0.060
+    hover = float(config.placement_mode_params(slot.mode)["release_hover_m"])
     spin0 = _top_grasp_spin(slot)
     for _ in range(n):
         if spin0 is None:
@@ -499,6 +506,7 @@ def evaluate_placement(slot: SlotFrame, T_base_obj: np.ndarray) -> dict:
     axis_base = T_base_obj[:3, :3] @ axis_obj
     R_slot = slot.T_base_slot[:3, :3]
     p_slot = slot.T_base_slot[:3, 3]
+    mp = config.placement_mode_params(slot.mode)
 
     if slot.mode == "floor_stand":
         # v0 criteria: bottom axis point near the slot center, axis near slot z
@@ -512,43 +520,146 @@ def evaluate_placement(slot: SlotFrame, T_base_obj: np.ndarray) -> dict:
         d = R_slot.T @ (p_bottom - p_slot)
         lateral = float(np.hypot(d[0], d[1]))
         tilt = float(np.degrees(np.arccos(np.clip(axis_base @ R_slot[:, 2], -1.0, 1.0))))
-        ok = lateral <= config.SLOT_TOL_LATERAL_M and tilt <= config.SLOT_TOL_TILT_DEG and abs(d[2]) <= 0.02
+        ok = (lateral <= mp["tol_lateral_m"] and tilt <= mp["tol_tilt_deg"]
+               and abs(d[2]) <= mp["tol_bottom_m"])
         return {"lateral_m": round(lateral, 4), "tilt_deg": round(tilt, 2), "bottom_height_m": round(float(d[2]), 4), "ok": bool(ok)}
 
     d = R_slot.T @ (T_base_obj[:3, 3] - p_slot)
     if slot.mode == "plate_slot":
-        lean = np.radians(slot.params.get("lean_deg", 7.0))
+        lean = np.radians(slot.params.get("lean_deg", mp["default_lean_deg"]))
         # target disc normal (slot frame): x leaned by the tine angle; flip-insensitive
         n_target = R_slot @ np.array([np.cos(0.0), 0.0, 0.0])
         cosang = abs(float(axis_base @ n_target))
         tilt = float(np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0))))
         lateral = abs(float(d[0]))  # off-gap drift along the pitch direction
         bottom = float(d[2] - spec.rim_radius_m * np.cos(lean))  # center height above nominal
-        ok = lateral <= 0.012 and tilt <= 12.0 and abs(bottom) <= 0.02
+        ok = (lateral <= mp["tol_lateral_m"] and tilt <= mp["tol_tilt_deg"]
+               and abs(bottom) <= mp["tol_bottom_m"])
         return {"lateral_m": round(lateral, 4), "tilt_deg": round(tilt, 2), "bottom_height_m": round(bottom, 4), "ok": bool(ok)}
 
     if slot.mode == "bowl_lean":
-        lean = np.radians(slot.params.get("lean_deg", 48.0))
+        lean = np.radians(slot.params.get("lean_deg", mp["default_lean_deg"]))
         a_target = R_slot @ np.array([-np.sin(lean), 0.0, -np.cos(lean)])  # opening down-wall
         cosang = abs(float(axis_base @ a_target))
         tilt = float(np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0))))
         lateral = float(np.hypot(d[0], d[1]))
-        ok = tilt <= 20.0 and lateral <= 0.04 and abs(d[2]) <= 0.06
+        ok = (tilt <= mp["tol_tilt_deg"] and lateral <= mp["tol_lateral_m"]
+               and abs(d[2]) <= mp["tol_bottom_m"])
         return {"lateral_m": round(lateral, 4), "tilt_deg": round(tilt, 2), "bottom_height_m": round(float(d[2]), 4), "ok": bool(ok)}
 
     if slot.mode == "basket_drop":
         bay = slot.params.get("bay")
-        top_z = slot.params.get("top_z", 0.092)
+        top_z = slot.params.get("top_z", mp["default_top_z_m"])
         # success = the settled bbox CENTER is inside the bay volume, below the basket top
         inside_xy = abs(d[0]) <= slot.width_m / 2.0 and abs(d[1]) <= 0.035
         if bay is not None:
             half_x = (bay[1] - bay[0]) / 2.0
             half_y = (bay[3] - bay[2]) / 2.0
-            inside_xy = abs(d[0]) <= half_x and abs(d[1]) <= half_y + 0.005
-        inside_z = -0.005 <= d[2] <= top_z + spec.height_m / 2.0
+            inside_xy = abs(d[0]) <= half_x and abs(d[1]) <= half_y + mp["tol_lateral_pad_m"]
+        inside_z = mp["tol_bottom_min_m"] <= d[2] <= top_z + spec.height_m / 2.0
         lateral = float(np.hypot(d[0], d[1]))
         tilt = float(np.degrees(np.arccos(np.clip(abs(axis_base[2]), -1.0, 1.0))))
         ok = bool(inside_xy and inside_z)
         return {"lateral_m": round(lateral, 4), "tilt_deg": round(tilt, 2), "bottom_height_m": round(float(d[2]), 4), "ok": ok}
 
     raise ValueError(f"no evaluation for mode {slot.mode!r}")
+
+
+# ---------------------------------------------------------------------------------------------
+# slot names (stable labels for config, derived from geometry)
+# ---------------------------------------------------------------------------------------------
+
+#: Quantisation applied before grouping slots into rows/columns [m]. Slot coordinates carry
+#: float noise — measured, adjacent cells in one row differ in the last ulp — so an exact sort
+#: interleaves rows and mislabels them. 0.1 mm is far below the 60 mm grid pitch and far above
+#: the noise.
+_SLOT_QUANT_M = 1e-4
+
+_DEPTH_TOKENS = {1: ("near",), 2: ("near", "far"), 3: ("near", "mid", "far"),
+                 4: ("near", "mid1", "mid2", "far")}
+
+
+def _rack_xy(slots) -> dict:
+    """Rack-frame (lateral, depth) per slot id, quantised.
+
+    Sorting raw base-frame coordinates would bake in the rack's orientation; every slot inherits
+    the same rack rotation, so mapping back through it recovers the grid axes without needing the
+    manifest. Only the ORDERING matters, so the constant offset is irrelevant.
+    """
+    R0 = np.asarray(slots[0].T_base_slot)[:3, :3]
+    out = {}
+    for s in slots:
+        v = R0.T @ np.asarray(s.T_base_slot)[:3, 3]
+        out[s.slot_id] = (round(float(v[0]) / _SLOT_QUANT_M) * _SLOT_QUANT_M,
+                          round(float(v[1]) / _SLOT_QUANT_M) * _SLOT_QUANT_M)
+    return out
+
+
+def _lateral_tokens(n: int) -> list:
+    """Left-to-right labels for ``n`` columns: centre only when ``n`` is odd."""
+    if n == 1:
+        return ["centre"]
+    half = n // 2
+    left = [f"left{k}" for k in range(half, 0, -1)]
+    right = [f"right{k}" for k in range(1, half + 1)]
+    return left + (["centre"] if n % 2 else []) + right
+
+
+def _depth_tokens(n: int) -> list:
+    return list(_DEPTH_TOKENS.get(n, tuple(f"row{k}" for k in range(n))))
+
+
+def slot_names(slots) -> dict:
+    """Stable ``{name: slot_id}`` derived from the slots' own geometry.
+
+    Config refers to goal slots by name so that a mapping survives the grid changing. Slot ids
+    are positional (``slot_id = len(slots)`` in derivation order) and would silently re-point to
+    different physical cells if ``SLOT_GRID_PITCH_M`` or ``SLOT_RIM_INSET_M`` were retuned — a
+    config that named ids would then be wrong without anything failing.
+
+    The vocabulary follows what each mode's grid actually *is*, rather than forcing one shape on
+    all four:
+
+    ==============  =====================  ==============================
+    mode            grid                   names
+    ==============  =====================  ==============================
+    ``floor_stand`` depth x lateral        ``near_centre``, ``mid_left1``
+    ``plate_slot``  lateral only (gaps)    ``gap_left5`` … ``gap_right5``
+    ``bowl_lean``   depth only             ``near``, ``mid``, ``far``
+    ``basket_drop`` depth only (bays)      ``bay_near``, ``bay_mid`` …
+    ==============  =====================  ==============================
+
+    Names are ordinal within the RACK, so they are invariant to how far the rack is pulled out —
+    ``near_centre`` keeps meaning the same cell. Which slots are *feasible* is not invariant:
+    that depends on the extension and is measured per state.
+
+    Args:
+        slots: Slots from one :func:`derive_slots` call (one mode, ids mode-local).
+
+    Returns:
+        ``{name: slot_id}``; empty when ``slots`` is empty.
+    """
+    if not slots:
+        return {}
+    xy = _rack_xy(slots)
+    laterals = sorted({v[0] for v in xy.values()})
+    depths = sorted({v[1] for v in xy.values()})
+    lat_tok, dep_tok = _lateral_tokens(len(laterals)), _depth_tokens(len(depths))
+    mode = slots[0].mode
+
+    out = {}
+    for s in slots:
+        lat, dep = xy[s.slot_id]
+        li, di = laterals.index(lat), depths.index(dep)
+        if len(laterals) > 1 and len(depths) > 1:
+            name = f"{dep_tok[di]}_{lat_tok[li]}"
+        elif len(laterals) > 1:  # 1-D along the rack's lateral axis (plate tine gaps)
+            name = f"gap_{lat_tok[li]}"
+        else:  # 1-D along depth (bowl leans, cutlery bays)
+            name = f"bay_{dep_tok[di]}" if mode == "basket_drop" else dep_tok[di]
+        out[name] = s.slot_id
+    assert len(out) == len(slots), f"slot names collided for mode {mode!r}: {sorted(out)}"
+    by_id = {i: n for n, i in out.items()}
+    for s in slots:  # stamp the label on, so a record can report it without a lookup table
+        s.name = by_id[s.slot_id]
+    return out

@@ -16,6 +16,12 @@ placement stability is verified per mode. `scripts/setup/capacity_fill.py` physi
 a full 34-item load — initial states for rearrangement/IL/RL. The old RL door-opening
 pipeline lives on the `archive/rl-door-opening` branch.
 
+Two runners, deliberately separate. `run_trials.py` is the frozen single-object baseline (one
+object, one slot, per trial) and is held at **zero diff** — it anchors the v0 mug result.
+`run_task.py` runs multi-object EPISODES over the layered task stack in `src/dishsim/task/`
+(sequencer → pick-and-place → motion → planner). An episode can start from a stowed machine
+(`--scenario both_in`), in which case the robot pulls the lower rack out before loading it.
+
 Runs on Isaac Sim **6.0.1-rc.7** + Isaac Lab **3.0.0** at `/workspace/isaaclab` (this repo is
 nested inside that tree, but is an independent git repo). Never upgrade or downgrade Isaac Sim /
 Isaac Lab. Everything runs `--headless` on a single NVIDIA L4 / 8 vCPU / 30 GiB; media capture
@@ -46,12 +52,20 @@ scripts/run_kit.sh scripts/setup/make_prop_physics_usd.py --object 029_plate
 # planning-stack tests (venv, no Kit; plugin autoload off — hydra's plugin breaks outside Kit)
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m pytest tests/
 
+# one multi-object episode from a stowed machine (robot pulls the lower rack out first)
+scripts/run_kit.sh scripts/experiment/run_task.py --headless --enable_cameras \
+    --scenario both_in --spawn "cup=1,tumbler=1,fork=2" --seed 1 --run_id bothin_load
+
+# bake a machine state's collision caches (what run_task.py prints when a cache is missing)
+scripts/setup/build_state.py --state placement --classes mug,cup,tumbler
+
 # entry points: scripts/ is split by phase (see README Usage)
 #   setup/      kit_smoke, inspect_scene, prepare_dishwasher_usd, make_prop_physics_usd,
 #               build_object_assets, check_scene, calibrate_grasp, freeze_calibration,
 #               extract_geometry, decompose_meshes, parity_check, goal_configs,
-#               preview_rack, capacity_fill
-#   experiment/ run_trials            (--planner selects the algorithm)
+#               preview_rack, capacity_fill, build_state, reach_map
+#   experiment/ run_trials (single object, FROZEN), run_task (episodes)
+#               --planner selects the algorithm for both
 #   evaluation/ compute_metrics, render_videos, verify_replay, compare_videos, plan_visual
 #   tools/      archive_assets, restore_assets
 ```
@@ -115,6 +129,30 @@ it editable):
   against three different collision worlds. Registered: rrt_connect (default), rrt_star,
   bit_star, prm. `prm` sets `supports_multi_goal = False` — measured: the roadmap planners in
   this OMPL build never terminate on a multi-state `ob.GoalStates`.
+- `task/` — the multi-object task layer, and the one boundary this repo enforces mechanically
+  (`tests/test_layer_boundary.py`, AST-based): `sequencer.py` decides WHICH object next,
+  `primitives.py` runs one object's choreography, `motion.py` is object-agnostic "move A to B",
+  and only then the planner. **No task concept may reach `planners/`.** `motion.ExecContext` is
+  a Protocol the runner implements after Kit boots — a conformance test compares it to `_Ctx`
+  signature-for-signature, which is how a protocol method added without its implementation gets
+  caught. Also here: `rack.py` (open the machine — engage a handle, slide a rack, using
+  `rack_ops.py` geometry), `layout.py`, `support.py`, `grasp.py`, `recovery.py`, `cost.py`,
+  `episode.py`. Four traps encoded in their docstrings:
+  1. **Episodes are home-anchored** — every recording starts and ends at `config.HOME_Q`. The
+     start is measured, corrected and asserted; the closing retreat runs before `rec.end` and
+     the media finish (so it lands in the artifacts) and after the sequencer (so it can never
+     revise a placement verdict).
+  2. **A rack drive override stays latched** after a successful action and accumulates across a
+     sequence. The scene's standing targets come from the PRE-action scenario, so releasing it
+     drives the rack back in; replacing rather than merging the dict lets an earlier rack shut.
+  3. **An episode with a rack action spans two states** — the rack phase plans in the start
+     state (scenario-level mug cache), every pick in the derived `POST_STATE` (per-class
+     caches). A rack that settles beyond `RACK_SLIDE_TOL_M` ends the episode: every later plan
+     assumes it arrived.
+  4. **Weld-acquire ≠ pick.** `config.WELD_ACQUIRE_FAMILIES` classes are snapped to the carry
+     transform at the hover, never descended to; records label them `acquired: "weld"` and the
+     two success rates must never be summed. Their reachability and grasp gates stop at the
+     hover to match — gating on the descent rejected 344 of 400 fork layout draws.
 - `trajectory.py` / `replay.py` — the Phase 2 → Phase 3 handoff. Experiments record measured
   state every physics step; evaluation replays it kinematically. Three traps are encoded in
   `replay.py`'s docstring and must not be "simplified" away: (1) `sim.forward()` updates

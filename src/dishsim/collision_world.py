@@ -64,6 +64,32 @@ def _tf(T: np.ndarray) -> fcl.Transform:
     return fcl.Transform(T[:3, :3], T[:3, 3])
 
 
+def load_object_pieces(cache_dir: str) -> list:
+    """Convex pieces of a cache's carried object, without building a whole world.
+
+    A multi-object episode carries a different class on each pick but plans against ONE world,
+    so it needs each class's geometry cheaply. Constructing a :class:`CollisionWorld` per class
+    would re-load every static's decomposition to get at one object.
+
+    Args:
+        cache_dir: Collision-cache root (see :func:`dishsim.config.scenario_cache_dir`).
+
+    Returns:
+        Convex pieces in the object's body frame.
+    """
+    manifest = load_manifest(cache_dir)
+    entry = manifest["object"]
+    if not entry.get("coacd"):
+        return [trimesh.load(os.path.join(cache_dir, entry["mesh"]), force="mesh")]
+    out_dir = coacd_dir_for("object", entry["mesh"], cache_dir)
+    if not os.path.isdir(out_dir) or not os.listdir(out_dir):
+        raise RuntimeError(
+            f"missing CoACD pieces for the object in {cache_dir} — "
+            "run scripts/setup/decompose_meshes.py first"
+        )
+    return [trimesh.load(os.path.join(out_dir, f), force="mesh") for f in sorted(os.listdir(out_dir))]
+
+
 class CollisionWorld:
     """FCL world over the cached v0 scene; hot path is :meth:`in_collision`."""
 
@@ -113,7 +139,9 @@ class CollisionWorld:
             self._arm[name] = fcl.CollisionObject(_fcl_convex(hull))
 
         # ---- movables: gripper cluster (+ optionally the carried object) ---------------------
+        self._merged_cluster = bool(merged_cluster)
         self._cluster: list[tuple[str, np.ndarray, fcl.CollisionObject]] = []  # (name, T_wrist3_geom, obj)
+        self._cluster_geom_meshes: dict[str, trimesh.Trimesh] = {}
         cluster_meshes_w3: list[trimesh.Trimesh] = []
         gripper_meshes_w3: list[trimesh.Trimesh] = []
         for name, entry in self.manifest["gripper_links"].items():
@@ -124,10 +152,12 @@ class CollisionWorld:
                 gripper_meshes_w3.append(hull.copy().apply_transform(T))
             else:
                 self._cluster.append((name, T, fcl.CollisionObject(_fcl_convex(hull))))
+                self._cluster_geom_meshes[name] = hull
                 cluster_meshes_w3.append(hull.copy().apply_transform(T))
         if merged_cluster and gripper_meshes_w3:
             gripper_hull = trimesh.util.concatenate(gripper_meshes_w3).convex_hull
             self._cluster.append(("gripper", np.eye(4), fcl.CollisionObject(_fcl_convex(gripper_hull))))
+            self._cluster_geom_meshes["gripper"] = gripper_hull
             cluster_meshes_w3.append(gripper_hull)
         self.object_attached = object_attached
         self._object_objs: list[fcl.CollisionObject] = []
@@ -139,6 +169,7 @@ class CollisionWorld:
                 hull = _inflated_hull(whole, margin)
                 obj = fcl.CollisionObject(_fcl_convex(hull))
                 self._cluster.append(("object_0", T_obj, obj))
+                self._cluster_geom_meshes["object_0"] = hull
                 self._object_objs.append(obj)
                 cluster_meshes_w3.append(hull.copy().apply_transform(T_obj))
             else:
@@ -146,12 +177,14 @@ class CollisionWorld:
                     hull = _inflated_hull(piece, margin)
                     obj = fcl.CollisionObject(_fcl_convex(hull))
                     self._cluster.append((f"object_{i}", T_obj, obj))
+                    self._cluster_geom_meshes[f"object_{i}"] = hull
                     self._object_objs.append(obj)
                     cluster_meshes_w3.append(hull.copy().apply_transform(T_obj))
         # coarse single-hull envelope of the whole cluster for the self-collision test
         cluster_all = trimesh.util.concatenate(cluster_meshes_w3)
         self._cluster_hull_w3 = cluster_all.convex_hull
         self._cluster_hull_obj = fcl.CollisionObject(_fcl_convex(self._cluster_hull_w3))
+        self._cluster_hull_dirty = False
 
         # ---- extra world objects (MCTS mutation API) -----------------------------------------
         self._extra: dict[str, list[fcl.CollisionObject]] = {}
@@ -312,6 +345,14 @@ class CollisionWorld:
             objs.append(obj)
         self._extra[name] = objs
 
+    def has_object(self, name: str) -> bool:
+        """Is a free-standing obstacle registered under ``name``?"""
+        return name in self._extra
+
+    def object_names(self) -> list:
+        """Names of the currently registered free-standing obstacles."""
+        return sorted(self._extra)
+
     def set_object_pose(self, name: str, T_base_obj: np.ndarray) -> None:
         for obj in self._extra[name]:
             obj.setTransform(_tf(np.asarray(T_base_obj)))
@@ -368,3 +409,66 @@ class CollisionWorld:
         self._cluster = [(n, T, o) for n, T, o in self._cluster if not n.startswith("object_")]
         self._object_objs = []
         self.object_attached = False
+        # The coarse cluster envelope must be refreshed here too, not just on attach. Leaving it
+        # stale means every empty-handed query after a release runs its self-collision test
+        # against the silhouette of the object that is no longer in the hand — measured at 26 of
+        # 4000 sampled configurations flipping from free to blocked.
+        self._rebuild_cluster_hull()
+
+    def attach_object(self, pieces: list, T_wrist3_obj: np.ndarray) -> None:
+        """Attach a payload to the moving cluster — the inverse of :meth:`detach_carried_object`.
+
+        A multi-object task picks, places and picks again, so the cluster has to gain and lose
+        payloads repeatedly. Without this the only way to carry a second object would be to
+        rebuild the whole world (re-loading every static's convex pieces) between picks.
+
+        The payload's geometry comes from the caller rather than the manifest, so successive
+        picks may carry *different* object classes against one world. Merging follows the
+        world's ``merged_cluster`` setting, matching how the manifest object would have been
+        attached at construction.
+
+        Args:
+            pieces: Convex pieces in the object's body frame.
+            T_wrist3_obj: Payload pose in the ``wrist_3_link`` frame, shape [4, 4].
+        """
+        if self.object_attached:
+            self.detach_carried_object()
+        if not pieces:
+            raise ValueError("attach_object needs at least one convex piece")
+        self._object_pieces = [p.copy() for p in pieces]
+        T_obj = np.asarray(T_wrist3_obj, dtype=float)
+        self._object_objs = []
+        if self._merged_cluster:
+            whole = trimesh.util.concatenate(self._object_pieces)
+            hull = _inflated_hull(whole, self.margin)
+            obj = fcl.CollisionObject(_fcl_convex(hull))
+            self._cluster.append(("object_0", T_obj, obj))
+            self._cluster_geom_meshes["object_0"] = hull
+            self._object_objs.append(obj)
+        else:
+            for i, piece in enumerate(self._object_pieces):
+                hull = _inflated_hull(piece, self.margin)
+                obj = fcl.CollisionObject(_fcl_convex(hull))
+                self._cluster.append((f"object_{i}", T_obj, obj))
+                self._cluster_geom_meshes[f"object_{i}"] = hull
+                self._object_objs.append(obj)
+        self.object_attached = True
+        self._rebuild_cluster_hull()
+
+    def _rebuild_cluster_hull(self) -> None:
+        """Refresh the coarse cluster envelope used by the self-collision test.
+
+        The envelope is a single convex hull over every cluster member. Leaving it stale after a
+        payload change would test self-collision against the *previous* payload's silhouette —
+        a false verdict in both directions.
+        """
+        meshes = []
+        for name, T, _ in self._cluster:
+            mesh = self._cluster_geom_meshes.get(name)
+            if mesh is not None:
+                meshes.append(mesh.copy().apply_transform(T))
+        if not meshes:
+            return
+        self._cluster_hull_w3 = trimesh.util.concatenate(meshes).convex_hull
+        self._cluster_hull_obj = fcl.CollisionObject(_fcl_convex(self._cluster_hull_w3))
+        self._cluster_hull_dirty = False

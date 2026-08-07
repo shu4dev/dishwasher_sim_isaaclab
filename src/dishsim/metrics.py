@@ -68,6 +68,20 @@ def _stats(values: list[float]) -> dict:
     return out
 
 
+def _slot_sort_key(key) -> int:
+    """Sort key for a slot histogram bucket.
+
+    A pick can legitimately end with no slot at all — the allocator reports an object it could
+    not place rather than inventing a destination — so the histogram carries a ``"None"`` bucket
+    that ``int()`` cannot parse. Sorting must survive that instead of crashing the whole
+    aggregation.
+    """
+    try:
+        return int(key)
+    except (TypeError, ValueError):
+        return 1 << 30
+
+
 def summarize(trials: list[dict], manifest: dict | None = None) -> dict:
     """Aggregate trial records into a metrics dict.
 
@@ -115,7 +129,7 @@ def summarize(trials: list[dict], manifest: dict | None = None) -> dict:
         "by_object": group("object"),
         "by_scenario": group("scenario"),
         "by_slot": {k: {**v, "rate": round(v["success"] / v["trials"], 4)}
-                    for k, v in sorted(by_slot.items(), key=lambda kv: int(kv[0]))},
+                    for k, v in sorted(by_slot.items(), key=lambda kv: (kv[0] in (None, "None"), _slot_sort_key(kv[0])))},
         "plan_time_s": _stats([t.get("plan_time_s") for t in trials]),
         "path_len_rad": _stats([t.get("path_len_rad") for t in trials]),
         "exec_steps": _stats([t.get("exec_steps") for t in trials]),

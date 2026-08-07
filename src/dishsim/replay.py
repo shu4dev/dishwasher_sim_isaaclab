@@ -30,6 +30,48 @@ import numpy as np
 from . import config
 
 
+def scene_objects_for(recording) -> list:
+    """``objects=`` spec for :func:`dishsim.scene.make_scene_cfg` reproducing a recording's items.
+
+    A single-object recording returns ``[]`` — the caller keeps ``with_object=True`` and the
+    legacy ``carried_object`` prim, so every existing recording replays exactly as before. A
+    multi-object episode returns one spec per item, named after its ``item_id`` so the scene
+    keys match what :class:`TrajectoryPlayer` expects to write.
+
+    Spawn poses come from the recording's FIRST frame, so nothing has to be re-derived from a
+    layout seed and playback starts where the episode did.
+
+    Args:
+        recording: A loaded :class:`dishsim.trajectory.TrajectoryRecording`.
+
+    Returns:
+        Object specs, empty for single-object recordings.
+    """
+    from . import config  # noqa: PLC0415
+
+    keys = list(recording.meta.get("object_keys") or [])
+    if not keys or keys == ["carried_object"]:
+        return []
+    classes = recording.meta.get("object_classes") or {}
+    missing = [k for k in keys if k not in classes]
+    if missing:
+        raise RuntimeError(
+            f"recording lists object keys {missing} with no class mapping in "
+            f"meta['object_classes'] — re-record with the current runner"
+        )
+    poses = np.asarray(recording.object_root_pose_w)
+    out = []
+    for i, key in enumerate(keys):
+        block = poses[0, 7 * i : 7 * (i + 1)]
+        out.append({
+            "name": key,
+            "usd_path": config.OBJECTS[classes[key]].usd_path,
+            "pos": tuple(float(v) for v in block[:3]),
+            "quat": tuple(float(v) for v in block[3:]),
+        })
+    return out
+
+
 class TrajectoryPlayer:
     """Drives a live scene from a :class:`~dishsim.trajectory.TrajectoryRecording`."""
 
@@ -45,7 +87,13 @@ class TrajectoryPlayer:
         import torch  # noqa: PLC0415
 
         self.scene, self.sim, self.rec = scene, sim, recording
-        self.robot, self.dw, self.obj = scene["robot"], scene["dishwasher"], scene["carried_object"]
+        self.robot, self.dw = scene["robot"], scene["dishwasher"]
+        # One recording may hold several manipulable objects (a multi-object episode). The key
+        # list lives in the recording's meta; single-object recordings omit it and fall back to
+        # the legacy name, so every existing recording replays byte-identically.
+        self._obj_keys = list(recording.meta.get("object_keys") or ["carried_object"])
+        self.objs = [scene[k] for k in self._obj_keys]
+        self.obj = self.objs[0]
         self.device = self.robot.data.joint_pos.torch.device
         self._torch = torch
 
@@ -59,7 +107,12 @@ class TrajectoryPlayer:
         self._dw_cols = recording.joint_order(list(self.dw.joint_names), kind="dishwasher")
         self._robot_q = self._to_device(recording.robot_joint_pos[:, self._robot_cols])
         self._dw_q = self._to_device(recording.dishwasher_joint_pos[:, self._dw_cols])
-        self._obj_pose = self._to_device(recording.object_root_pose_w)
+        poses = np.asarray(recording.object_root_pose_w)
+        assert poses.shape[1] == 7 * len(self.objs), (
+            f"recording holds {poses.shape[1] // 7} object pose block(s) but the scene was given "
+            f"{len(self.objs)} object key(s): {self._obj_keys}"
+        )
+        self._obj_pose = [self._to_device(poses[:, 7 * i : 7 * (i + 1)]) for i in range(len(self.objs))]
         self._zero_rq = torch.zeros((1, self._robot_q.shape[1]), dtype=torch.float32, device=self.device)
         self._zero_dq = torch.zeros((1, self._dw_q.shape[1]), dtype=torch.float32, device=self.device)
         self._zero_v6 = torch.zeros((1, 6), dtype=torch.float32, device=self.device)
@@ -89,8 +142,9 @@ class TrajectoryPlayer:
         self.dw.write_joint_position_to_sim_index(position=self._dw_q[step : step + 1])
         self.dw.write_joint_velocity_to_sim_index(velocity=self._zero_dq)
         self.dw.set_joint_position_target(self._dw_q[step : step + 1])
-        self.obj.write_root_pose_to_sim_index(root_pose=self._obj_pose[step : step + 1])
-        self.obj.write_root_velocity_to_sim_index(root_velocity=self._zero_v6)
+        for obj, pose in zip(self.objs, self._obj_pose):
+            obj.write_root_pose_to_sim_index(root_pose=pose[step : step + 1])
+            obj.write_root_velocity_to_sim_index(root_velocity=self._zero_v6)
 
     def read_body_poses(self) -> tuple[np.ndarray, np.ndarray]:
         """Read-back robot link poses, ordered like the recording's ``robot_body_names``."""
