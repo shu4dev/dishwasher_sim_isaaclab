@@ -434,6 +434,12 @@ COLLISION_MARGIN_M = 0.005  # hull inflation: the conservative-bias knob for FCL
 COACD = {
     "default": {"threshold": 0.05, "max_convex_hull": 32},
     "object": {"threshold": 0.03, "max_convex_hull": 32},  # keep the mug cavity open
+    # The shell+countertop body needs a tight decomposition: at the default threshold CoACD
+    # bridges the counter slab down to the shell, filling the open notch under the slab's
+    # front overhang with phantom volume (measured 2026-08-09 after the slab widening: the
+    # bridge piece spanned world z 0.35-0.46 over the machine mouth and blocked the both_out
+    # upper-rack push at its final waypoint for every IK branch).
+    "E_body_5": {"threshold": 0.02, "max_convex_hull": 64},
 }
 CONTACT_FORCE_THRESH_N = 0.1  # Isaac ground-truth contact threshold for the parity check
 # The robot base sits ON the pedestal by construction (permanent touching contact) and is
@@ -452,14 +458,25 @@ WORLD_CHECK_EXCLUDE = ["base_link"]
 # (floor_top = crossbar top = the slot datum the Phase-E percentile must land on — everything
 # floor-level therefore stays inside placement.py's 15 mm bottom-slab band).
 # ---------------------------------------------------------------------------------------------
-RACK_GEN_VERSION = 3  # v2: reference-appliance realism (Whirlpool WDTA50SAKZ / Bosch 800 /
+RACK_GEN_VERSION = 4  # v2: reference-appliance realism (Whirlpool WDTA50SAKZ / Bosch 800 /
 #                       Frigidaire FDPC4314AS) — 3-gauge wires, 30 mm Whirlpool tine rows with
 #                       candy-cane ends, fillets/ties/beads, fold-down insert row, wheels,
 #                       front loading dip + handle, cup shelves, RackMatic blocks
 #                       v3: cutlery basket in the lower rack's open zone (multi-object v1) —
 #                       3-compartment plastic basket riding the rack, own mesh + material
+#                       v4: robot-loadable quadrant layout, MEASURED against the goal funnel
+#                       (docs/success_criteria.md): the robot plate bank moves into the front
+#                       band (the rear ~90 mm never clears the mouth and sits under the stowed
+#                       upper rack), tie-less because the tie wire crosses every gap through
+#                       the disc plane; the basket rotates to x-split bays at the measured
+#                       outboard position, handleless (an arch bar over x-split bays leaves no
+#                       collision-free drop window); the bowl lean fixture + slope go away
+#                       (bowls stand upright — a leaned release is unplaceable inside the
+#                       collision margin); the v3 bank survives verbatim as the fill-only rear
+#                       bank (plate_bank2). Robot destinations 6 -> 13.
 RACK_GEN = {
-    "E_shelf_1_04": {  # lower rack: rear plate bank + open zone (robot side) + bowl/slope side
+    "E_shelf_1_04": {  # lower rack: quadrant layout — bowls/floor left, basket right-front,
+        #                robot plate bank right-rear (front band), fill-only bank at the rear
         "usd_scale_x": 0.9191,  # authored x-scale on the body Xform (asserted at authoring)
         "footprint": (0.3663, 0.2868),  # world-space extents; == original basket footprint
         # 3-gauge hierarchy (real racks: frame >> runners > tines; real tine dia/pitch ~ 0.07)
@@ -486,55 +503,64 @@ RACK_GEN = {
         "runner_xs": (0.029, 0.0725, 0.1160, 0.1595, 0.2065, 0.2501, 0.2937, 0.3373),
         "channel": {"x": (0.169, 0.197), "runner_xs": (0.176, 0.190), "drop": 0.004},
         "crossbar_ys": (0.025, 0.070, 0.115, 0.160),
-        "slope_zones": ((0.004, 0.048),),  # drinkware ramp along the x=0 side wall
+        "slope_zones": (),  # v4: no drinkware ramp (it fed the removed bowl-lean fixture)
         "slope_deg": 6.0,
-        "slope_sign": -1.0,  # floor descends toward the wall (mug leans into the wall)
-        # rear plate bank: 12 tines/row at 30 mm pitch (11 slots — the Whirlpool W10728160
-        # row pattern), rows 52 mm apart (true two-point plate support), +7 deg lean into the
-        # guard; row ends are candy-cane hooks; straight tines get capped bead tips
-        "plate_zone_y": (0.205, 0.285),
-        "plate_rows_y": (0.220, 0.272),  # 0.212 would block the y=0.1434 slot columns (-6 mm)
-        "plate_tine_pitch": 0.030,
-        "plate_tine_xspan": (0.022, 0.352),
+        "slope_sign": -1.0,  # kept: _bar_segments reads these unconditionally
+        # ROBOT plate bank (v4): right-rear of the FRONT band — clears the machine mouth after
+        # the rack pull and the stowed upper rack's roof (design y >= 0.200). 40 mm pitch (a
+        # 5 mm-inflated 14.4 mm disc + tolerances cannot thread the 30 mm Whirlpool pitch),
+        # rows 52 mm apart, no tie wire (it crosses every gap through the disc plane —
+        # measured sole blocker), no insert hardware. 2 of 3 gaps have goal configs (the
+        # center-most sits behind the measured arm-access boundary ~x 0.28).
+        "plate_zone_y": (0.088, 0.176),
+        "plate_rows_y": (0.108, 0.160),
+        "plate_tine_pitch": 0.040,
+        "plate_tine_xspan": (0.225, 0.345),
         "plate_tine_h": 0.070,
         "plate_tine_lean_deg": 7.0,
         "candy_cane": {"r": 0.012, "sweep_deg": 120.0, "segments": 4},
         "tine_fillet": {"r": 0.006, "segments": 3},  # U-bend fillet at every tine base
-        "tine_tie_frac": 0.6,  # mid-height tie wire per row at 0.6 * tine height
+        "tine_tie_frac": None,  # NO tie on the robot bank (see v4 note above)
         "tine_bead": {"dia_factor": 1.6, "len": 0.004},  # push-on tip caps (Frigidaire kit)
-        # fold-down insert row (Bosch "flip tine, dark gray" / Whirlpool gray tine row): the
-        # REAR row is a visually distinct second mesh — thicker spine, hinge bosses, stop clip
-        "insert": {
-            "row": 1,
-            "spine_dia": 0.0055,
-            "boss_dia": 0.009,
-            "boss_len": 0.010,
-            "clip_size": (0.012, 0.008, 0.008),
-        },
-        "bank_bar_ys": (0.197, 0.242, 0.280),
+        "insert": None,  # fold-down hardware lives on the fill-only rear bank only
+        "bank_bar_ys": (0.088, 0.134, 0.173),
         # corrugated cradle ribs: V-profile under both tine rows, wavelength = tine pitch
         "rib_amplitude": 0.0025,
-        # bowl tines: 42 mm high, 45 mm pitch, on the slope side
-        "bowl_tine_xs": (0.055, 0.100),
-        "bowl_tine_ys": (0.025, 0.070, 0.115, 0.160),
-        "bowl_tine_h": 0.042,
+        # fill-only REAR bank (the v3 bank verbatim): behind the mouth line, robot-unreachable
+        # by measurement, kept for capacity realism — teleported fill discs rest on its ties
+        "plate_bank2": {
+            "plate_zone_y": (0.205, 0.285),
+            "plate_rows_y": (0.220, 0.272),
+            "plate_tine_pitch": 0.030,
+            "plate_tine_xspan": (0.022, 0.352),
+            "tine_tie_frac": 0.6,
+            "candy_cane": {"r": 0.012, "sweep_deg": 120.0, "segments": 4},
+            "insert": {
+                "row": 1,
+                "spine_dia": 0.0055,
+                "boss_dia": 0.009,
+                "boss_len": 0.010,
+                "clip_size": (0.012, 0.008, 0.008),
+            },
+            "bank_bar_ys": (0.197, 0.242, 0.280),
+        },
         # roller wheels: 4, outer face exactly on the footprint plane, bottoms exactly z=0
         "wheels": {"dia": 0.022, "width": 0.008, "y_inset": 0.030},
-        # open zone (flat floor, mug slots; drives the Phase-D probes + the Phase-E guarantee).
-        # v3: the cutlery basket occupies the x-high end, killing the x=0.2432 slot columns —
-        # the guarantee drops to the x=0.1832 columns x y={0.0834, 0.1434} (min_feasible_slots
-        # 3 -> 2 in the scenario tables, encoded honestly)
-        "open_zones": ((0.115, 0.360, 0.010, 0.190),),
-        # cutlery basket (v3): 3-compartment plastic basket against the x-high open-zone end;
-        # dividers split y into 3 bays; arch carry handle over the x-center line
+        # open floor (v4): the left half — standing items + bowls; drives the Phase-D probes
+        # + the Phase-E guarantee. (The 75 mm strip right of the basket is too small for the
+        # object-sized probe box — the fill mug stands there under the physics stability gate
+        # instead of a zone guarantee.)
+        "open_zones": ((0.022, 0.155, 0.010, 0.185),),
+        # cutlery basket (v4): rotated to X-SPLIT bays at the measured-good outboard
+        # position; handleless (side-grip) — an arch bar over x-split bays leaves no
+        # collision-free drop window for cutlery
         "basket": {
-            "x": (0.264, 0.352),
-            "y": (0.012, 0.180),
+            "x": (0.160, 0.280),
+            "y": (0.012, 0.078),
             "h": 0.095,
             "wall_t": 0.004,
             "floor_t": 0.003,
-            "dividers_y": (0.068, 0.124),
-            "handle": {"clearance": 0.022, "bar_dia": 0.008, "post_dia": 0.006},
+            "dividers_x": (0.200, 0.240),
         },
         "mass_kg": 0.9,  # authored explicitly (deterministic vs auto-mass); horizontal joint
         "sdf_resolution": 768,  # 0.48 mm voxel -> ~4.6 across a 2.2 mm wire
@@ -619,9 +645,10 @@ PLACEMENT_MODES: dict[str, dict] = {
         "tol_bottom_m": 0.02,
     },
     "plate_slot": {
-        # dinner plates seat forward, bottom edge on the y 0.197 bank bar (rack frame); the
-        # disc spans the full diameter, so smaller discs may seat deeper via spec params
-        "seat_y_m": 0.197,
+        # v4: robot plates seat on the ROBOT bank's middle bar — the corridor midpoint
+        # between its two tine rows (0.108/0.160), where the disc hovers with measured
+        # clearance on both sides before settling into the 7 deg lean
+        "seat_y_m": 0.134,
         "release_hover_m": RELEASE_HOVER_M,
         "default_lean_deg": 7.0,  # fallback when the slot carries no measured tine lean
         "tol_lateral_m": 0.012,  # off-gap drift along the tine pitch direction
@@ -640,9 +667,9 @@ PLACEMENT_MODES: dict[str, dict] = {
         "tol_bottom_m": 0.06,
     },
     "basket_drop": {
-        # the arch carry-handle bar runs along y directly over every bay center, so a centered
-        # descent always hits it — the drop point is offset in x
-        "drop_x_offset_m": -0.020,
+        # v4: the basket is handleless (no arch bar over the bays), so cutlery drops
+        # dead-center — the old -0.020 offset existed only to dodge the bar
+        "drop_x_offset_m": 0.0,
         # gravity does the insertion: release from a genuine hover, not the 12 mm used elsewhere
         "release_hover_m": 0.060,
         "tol_lateral_pad_m": 0.005,  # slack added to the bay half-width in y
@@ -1045,7 +1072,12 @@ OBJECTS: dict[str, ObjectSpec] = {
         ),
         # rim_z +0.030: at -0.016 the fingertips reached ~34 mm below the rim and crushed
         # the bowl interior at full open (measured 88 N in the scripts/setup/calibrate_grasp.py open gate)
-        placement=PlacementSpec(mode="bowl_lean", rack="lower", params={"lean_deg": 48.0}),
+        # v4: bowls STAND upright on open floor cells. The lean fixture was removed after the
+        # goal-funnel decomposition proved a leaned release unplaceable: at any hover the
+        # rim_edge-carried gripper points down into the rack (0 of 3 slots at every hover
+        # tested up to 60 mm), while the standing bowl accepts on 3 cells. Drainage realism
+        # is traded for placeability; capacity_fill stands its bowls too.
+        placement=PlacementSpec(mode="floor_stand", rack="lower"),
         coacd={"threshold": 0.03, "max_convex_hull": 32},
         countertop_poses_w=(((0.665, -0.185, 0.5087), 0.0), ((0.665, -0.10, 0.5087), 0.0)),
         robot_demo=True,

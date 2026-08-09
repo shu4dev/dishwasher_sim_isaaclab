@@ -124,17 +124,17 @@ def _lower_items() -> list[tuple[str, int, np.ndarray, str]]:
     z_floor = rack_gen.floor_top_z(p)
     items: list[tuple[str, int, np.ndarray, str]] = []
 
-    # -- plate bank: 11 gaps; 7 dinner plates mid-bank, 3 saucers outer, spatula in the last ---
-    # A leaning disc always spans its full diameter in rack depth (the disc plane contains y),
-    # so dinner plates seat FORWARD: bottom edge on the y~0.197 bank bar, disc reaching
-    # through both tine rows without crossing the rear wall. Saucers sit deeper (center
-    # y 0.222) so their smaller disc still reaches the rear tine row.
-    xs = np.asarray(rack_gen._plate_tine_xs(p))
+    # -- REAR fill bank (v4: plate_bank2 — the robot bank's 3 gaps are the robot's): 11 gaps;
+    # 7 dinner plates mid-bank, 3 saucers outer, spatula in the last. A leaning disc always
+    # spans its full diameter in rack depth (the disc plane contains y), so dinner plates seat
+    # FORWARD: bottom edge on the y~0.197 bank bar, disc reaching through both tine rows
+    # without crossing the rear wall. Saucers sit deeper (center y 0.222). Some discs' forward
+    # overhang now interleaves with the robot bank's rear tine row — teleported fill items may
+    # rest against those tines, exactly as they rest on the rear bank's tie wires.
+    p2 = {**p, **p["plate_bank2"]}
+    xs = np.asarray(rack_gen._plate_tine_xs(p2))
     gaps = (xs[:-1] + xs[1:]) / 2.0
-    lean = float(p["plate_tine_lean_deg"])
-    # dinner plates stay OUT of the basket's x-range (their forward overhang at low z dips
-    # into the cutlery bays); saucers sit deep enough to clear the bay tops, so they take the
-    # outer gaps over the basket
+    lean = float(p2["plate_tine_lean_deg"])
     saucer_gaps, plate_gaps, spatula_gap = [0, 8, 9], [1, 2, 3, 4, 5, 6, 7], 10
     # vertical disc between adjacent tines: face NORMAL along rack +x (the 30 mm pitch
     # direction), disc plane in yz, leaned +7 deg toward the rear guard like the tines
@@ -171,41 +171,42 @@ def _lower_items() -> list[tuple[str, int, np.ndarray, str]]:
     ]
     items.append(("spatula", 0, T_sp, "plate_bank"))
 
-    # -- one bowl leaning on the bowl tines over the drinkware slope ---------------------------
-    # (plates overhang forward to y~0.134, so only the front bowl position stays clear; the
-    # second bowl goes upside-down to the upper rack's rear strip)
+    # -- one bowl standing upright front-left (v4: the lean fixture is gone — a leaned
+    # release was measured unplaceable, so the robot AND the fill both stand bowls). The
+    # rear-bank discs' hulls reach forward to design y 0.127 (measured), so the bowl keeps
+    # its whole footprint in front of that line.
     bowl = config.OBJECTS["bowl"]
-    lean_bowl = float(bowl.placement.params.get("lean_deg", 48.0))
-    R = _rot("y", lean_bowl) @ _rot("x", 180.0)  # opening down-slope (-x), back on the tines
-    T = np.eye(4)
-    T[:3, :3] = R
-    T[:3, 3] = [0.070, 0.060, z_floor + 0.004 + bowl.rim_radius_m * np.sin(np.radians(lean_bowl))]
-    items.append(("bowl", 0, T, "bowl_tines"))
+    items.append(("bowl", 0, _place(bowl, _stand_R(bowl, yaw_deg=0.0), (0.070, 0.062), z_floor), "open_zone"))
 
-    # -- open zone: pitcher + one standing mug (the front strip clears the plate overhang) -----
-    pitcher = config.OBJECTS["pitcher"]
-    items.append(("pitcher", 0, _place(pitcher, _stand_R(pitcher, yaw_deg=90.0), (0.130, 0.095), z_floor), "open_zone"))
+    # -- open zone: one standing mug on the right strip (v4: the old mug spot sits inside the
+    # relocated basket; the PITCHER and the second lower mug left the fill — the left patch
+    # holds exactly one large round footprint in front of the disc line; two fill items
+    # traded for the 7 new robot destinations) ------------------------------------------------
     mug = config.OBJECTS["mug"]
-    items.append(("mug", 1, _place(mug, _stand_R(mug, yaw_deg=90.0), (0.212, 0.055), z_floor), "open_zone"))
+    items.append(("mug", 1, _place(mug, _stand_R(mug, yaw_deg=90.0), (0.3225, 0.045), z_floor), "open_zone"))
 
     # -- cutlery basket: forks / spoons / knives per bay, leaning +-8 deg ----------------------
+    # v4: the bays split along X (rotated basket), so the lattice runs along the bay's LONG
+    # axis (y) with each item's head width along the bay's x — the narrow bay axis holds one
+    # head width, the long axis holds the line of items
     bays = rack_gen.basket_bays(p)
     b = p["basket"]
     z_bfloor = z_floor + b["floor_t"]
-    # parallel +8 deg lean per bay (alternating leans converge at the top and clash); spoon
-    # heads are 25 mm wide, so spoons cap at 3 per bay
+    # parallel +8 deg lean per bay (alternating leans converge at the top and clash)
     per_bay = [("fork", 4, bays[0]), ("spoon", 3, bays[1]), ("knife", 3, bays[2])]
     for name, count, (bx0, bx1, by0, by1) in per_bay:
         spec = config.OBJECTS[name]
-        xs_c = np.linspace(bx0 + 0.012, bx1 - 0.012, count)
-        y_bay = (by0 + by1) / 2.0
-        for k, x in enumerate(xs_c):
+        ys_c = np.linspace(by0 + 0.010, by1 - 0.010, count)
+        x_bay = (bx0 + bx1) / 2.0
+        for k, y in enumerate(ys_c):
             tilt = 8.0
-            R = _rot("y", tilt) @ _stand_R(spec, yaw_deg=90.0)  # blades/tines up, thin side along x
+            # yaw 90: head width along the bay's x (36 mm interior), thin side along the
+            # y lattice; the parallel lean also runs along y so spacing is preserved
+            R = _rot("x", tilt) @ _stand_R(spec, yaw_deg=90.0)
             T = np.eye(4)
             T[:3, :3] = R
             half_len = spec.height_m / 2.0
-            T[:3, 3] = [float(x), y_bay, z_bfloor + 0.003 + half_len * np.cos(np.radians(tilt))]
+            T[:3, 3] = [x_bay, float(y), z_bfloor + 0.003 + half_len * np.cos(np.radians(tilt))]
             items.append((name, k, T, "basket"))
     return items
 

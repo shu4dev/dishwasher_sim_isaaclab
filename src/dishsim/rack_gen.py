@@ -450,7 +450,7 @@ def _plate_bank(parts: list[RackPart], p: dict) -> None:
     shear = math.tan(math.radians(lean))
     h = p["plate_tine_h"]
     base_z = zl["tine_base"]
-    insert_row = p.get("insert", {}).get("row", -1)
+    insert_row = (p.get("insert") or {}).get("row", -1)
 
     # dense short runners (one per load-runner span)
     for di, x in enumerate(_dense_runner_xs(p)):
@@ -479,8 +479,11 @@ def _plate_bank(parts: list[RackPart], p: dict) -> None:
             (xa, za), (xb, zb) = pts[k], pts[k + 1]
             parts.append(RackPart(f"rib_{r_i}_{k:02d}", "ribs", _rod((xa, y, za), (xb, y, zb), d_light, n)))
 
-    # tine rows: ends are candy canes, middles straight shafts + bead caps; every base filleted
-    cane = p["candy_cane"]
+    # Tine rows: ends are candy canes, middles straight shafts + bead caps; every base
+    # filleted. The cane is optional (None -> straight end tines): its inboard-curling hook
+    # arcs INTO the adjacent gap and rejects every disc goal pose there (measured 2026-08-09
+    # — the robot-facing bank runs straight ends; the fill-only rear bank keeps the canes).
+    cane = p.get("candy_cane")
     bead = p["tine_bead"]
     fil = p["tine_fillet"]
     ux, uz = np.array([1.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0])
@@ -488,7 +491,7 @@ def _plate_bank(parts: list[RackPart], p: dict) -> None:
         group = "insert" if r_i == insert_row else "frame"
         for k, x in enumerate(tine_xs):
             x = float(x)
-            is_cane = k in (0, len(tine_xs) - 1)
+            is_cane = cane is not None and k in (0, len(tine_xs) - 1)
             base = (x, y, base_z)
             if is_cane:
                 r_c = cane["r"]
@@ -531,17 +534,21 @@ def _plate_bank(parts: list[RackPart], p: dict) -> None:
                 parts.append(
                     RackPart(f"fillet_r{r_i}_c{k:02d}_{s}", "plate_tines", _rod(fpts[s], fpts[s + 1], d_light, n), group)
                 )
-        # mid-height tie wire threaded through the row
-        tz = base_z + p["tine_tie_frac"] * h
-        ty = y + shear * p["tine_tie_frac"] * h
-        parts.append(
-            RackPart(
-                f"tine_tie_{r_i}",
-                "tie",
-                _rod((float(tine_xs[0]), ty, tz), (float(tine_xs[-1]), ty, tz), d_light, n),
-                group,
+        # Mid-height tie wire threaded through the row. Optional (None skips): the tie crosses
+        # every gap THROUGH the standing disc's plane, so a robot-loaded bank cannot have one —
+        # measured 2026-08-09: it single-handedly rejected 100% of plate goal poses. Fill-only
+        # rear banks keep it for realism (teleported discs simply rest on it).
+        if p.get("tine_tie_frac") is not None:
+            tz = base_z + p["tine_tie_frac"] * h
+            ty = y + shear * p["tine_tie_frac"] * h
+            parts.append(
+                RackPart(
+                    f"tine_tie_{r_i}",
+                    "tie",
+                    _rod((float(tine_xs[0]), ty, tz), (float(tine_xs[-1]), ty, tz), d_light, n),
+                    group,
+                )
             )
-        )
 
     # fold-down insert hardware (dark second mesh): spine rod, hinge bosses, stop clip
     ins = p.get("insert")
@@ -592,12 +599,30 @@ def _cutlery_basket(parts: list[RackPart], p: dict) -> None:
     parts.append(RackPart("basket_wall_x1", "basket", group="basket", mesh=_block((x1 - t / 2.0, (y0 + y1) / 2.0, z_wall), (t, y1 - y0, wall_h))))
     parts.append(RackPart("basket_wall_y0", "basket", group="basket", mesh=_block(((x0 + x1) / 2.0, y0 + t / 2.0, z_wall), (x1 - x0 - 2 * t, t, wall_h))))
     parts.append(RackPart("basket_wall_y1", "basket", group="basket", mesh=_block(((x0 + x1) / 2.0, y1 - t / 2.0, z_wall), (x1 - x0 - 2 * t, t, wall_h))))
+    cy = (y0 + y1) / 2.0
+    # The arch carry handle is optional (side-grip baskets). Measured 2026-08-09: an arch bar
+    # over rotated (x-split) bays runs along every drop column's dodge axis and leaves no
+    # collision-free drop window for cutlery — a rotated robot-loaded basket must go handleless.
+    hd = b.get("handle")
+    z_top = z0 + h
+    if "dividers_x" in b:
+        # rotated variant: bays split along x — keeps every drop column at the basket's
+        # front-band y, where the fork-drop stack clears the machine mouth (measured: bays at
+        # y >= 0.126 are capped by the shell top)
+        for di, dx in enumerate(b["dividers_x"]):
+            parts.append(RackPart(f"basket_divider_{di}", "basket", group="basket", mesh=_block((dx, cy, z_wall), (t, y1 - y0 - 2 * t, wall_h))))
+        if hd is not None:
+            z_bar = z_top + hd["clearance"]
+            parts.append(RackPart("basket_handle_post_0", "basket_handle", group="basket", mesh=_rod((x0 + t / 2.0, cy, z_top - 0.010), (x0 + t / 2.0, cy, z_bar), hd["post_dia"], n)))
+            parts.append(RackPart("basket_handle_post_1", "basket_handle", group="basket", mesh=_rod((x1 - t / 2.0, cy, z_top - 0.010), (x1 - t / 2.0, cy, z_bar), hd["post_dia"], n)))
+            parts.append(RackPart("basket_handle_bar", "basket_handle", group="basket", mesh=_rod((x0 + t / 2.0, cy, z_bar), (x1 - t / 2.0, cy, z_bar), hd["bar_dia"], n)))
+        return
     for di, dy in enumerate(b["dividers_y"]):
         parts.append(RackPart(f"basket_divider_{di}", "basket", group="basket", mesh=_block(((x0 + x1) / 2.0, dy, z_wall), (x1 - x0 - 2 * t, t, wall_h))))
-    # arch carry handle over the y-centerline (posts at the two end walls, bar along y)
-    hd = b["handle"]
-    z_top = z0 + h
+    if hd is None:
+        return
     z_bar = z_top + hd["clearance"]
+    # arch carry handle over the y-centerline (posts at the two end walls, bar along y)
     parts.append(RackPart("basket_handle_post_0", "basket_handle", group="basket", mesh=_rod((cx, y0 + t / 2.0, z_top - 0.010), (cx, y0 + t / 2.0, z_bar), hd["post_dia"], n)))
     parts.append(RackPart("basket_handle_post_1", "basket_handle", group="basket", mesh=_rod((cx, y1 - t / 2.0, z_top - 0.010), (cx, y1 - t / 2.0, z_bar), hd["post_dia"], n)))
     parts.append(RackPart("basket_handle_bar", "basket_handle", group="basket", mesh=_rod((cx, y0 + t / 2.0, z_bar), (cx, y1 - t / 2.0, z_bar), hd["bar_dia"], n)))
@@ -607,6 +632,11 @@ def basket_bays(params: dict) -> list[tuple[float, float, float, float]]:
     """Interior (x0, x1, y0, y1) of each basket compartment (design frame)."""
     b = params["basket"]
     t = b["wall_t"]
+    if "dividers_x" in b:
+        y0, y1 = b["y"][0] + t, b["y"][1] - t
+        lo_edges = [b["x"][0] + t] + [d + t / 2.0 for d in b["dividers_x"]]
+        hi_edges = [d - t / 2.0 for d in b["dividers_x"]] + [b["x"][1] - t]
+        return [(lo, hi, y0, y1) for lo, hi in zip(lo_edges, hi_edges)]
     x0, x1 = b["x"][0] + t, b["x"][1] - t
     lo_edges = [b["y"][0] + t] + [d + t / 2.0 for d in b["dividers_y"]]
     hi_edges = [d - t / 2.0 for d in b["dividers_y"]] + [b["y"][1] - t]
@@ -632,6 +662,9 @@ def basket_divider_negative_probe(params: dict) -> tuple[tuple[float, float, flo
     b = params["basket"]
     zl = _z_levels(params)
     z_c = zl["floor_top"] + b["h"] / 2.0
+    if "dividers_x" in b:
+        cy = (b["y"][0] + b["y"][1]) / 2.0
+        return (0.020, 0.030, 0.030), (float(b["dividers_x"][0]), cy, z_c)
     cx = (b["x"][0] + b["x"][1]) / 2.0
     return (0.030, 0.020, 0.030), (cx, float(b["dividers_y"][0]), z_c)
 
@@ -741,6 +774,11 @@ def build_rack(params: dict) -> list[RackPart]:
     # -- rear plate bank (lower rack) -----------------------------------------------------------
     if "plate_rows_y" in p:
         _plate_bank(parts, p)
+    if p.get("plate_bank2"):
+        # A second, independently-parameterized tine bank (e.g. a fill-only rear bank behind a
+        # robot-facing front bank). Its sub-dict shadows the plate_* keys of the main bank;
+        # set "insert"/"tine_tie_frac" explicitly to control that hardware per bank.
+        _plate_bank(parts, {**p, **p["plate_bank2"]})
 
     # -- cutlery basket (lower rack, v3) ---------------------------------------------------------
     if "basket" in p:

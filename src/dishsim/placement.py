@@ -436,6 +436,7 @@ def goal_configs(
     rng: np.random.Generator,
     n_samples: int = config.GOAL_POSE_SAMPLES_PER_SLOT,
     limit_margin: float = config.PLAN_JOINT_BOUNDS_MARGIN_RAD,
+    early_exit_accepted: int | None = None,
 ) -> GoalSet:
     """All valid IK goal configurations for a slot (pose samples x IK branches x wraps).
 
@@ -443,6 +444,12 @@ def goal_configs(
     IK branches -> +-2pi wrap expansion -> joint-limit filter -> collision filter (attached
     object included, self-check on). Zero surviving configs is signal, not error — the funnel
     counts say which stage killed a slot.
+
+    Args:
+        early_exit_accepted: Stop sampling once this many configurations are accepted (the
+            base-pose sweep asks "is this slot feasible", not "enumerate its goals"). None —
+            the default, used by the goal bake — keeps the full sample budget, so baked
+            funnels are unchanged.
     """
     manifest = world.manifest
     T_w3_obj = np.array(manifest["object"]["T_wrist3_obj"])
@@ -468,6 +475,8 @@ def goal_configs(
                 gs.n_collision_reject += 1
                 continue
             accepted.append(q)
+        if early_exit_accepted is not None and len(accepted) >= early_exit_accepted:
+            break
     if accepted:
         # deduplicate near-identical configs
         keep: list[np.ndarray] = []

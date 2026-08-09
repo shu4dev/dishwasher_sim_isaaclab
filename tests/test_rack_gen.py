@@ -74,15 +74,18 @@ def test_spec_param_ranges():
         assert p["wire_dia_heavy"] / p["wire_dia_light"] >= 2.0
     p = config.RACK_GEN[LOWER]
     assert 0.060 <= p["plate_tine_h"] <= 0.090
-    # 30 mm pitch = the Whirlpool 12-tine/11-slot row; supersedes the original 20-25 mm ask
-    assert 0.028 <= p["plate_tine_pitch"] <= 0.032
-    # real wire slenderness: tine dia / pitch ~ 0.07 (the "not a toy grid" ratio)
-    assert 0.06 <= p["wire_dia_light"] / p["plate_tine_pitch"] <= 0.09
+    # v4 ROBOT bank: 40 mm pitch — the margin-driven minimum (a 5 mm-inflated 14.4 mm disc
+    # plus release tolerances cannot thread the Whirlpool 30 mm pitch, measured)
+    assert 0.036 <= p["plate_tine_pitch"] <= 0.048
     assert 5.0 <= p["plate_tine_lean_deg"] <= 10.0
-    assert 0.040 <= p["bowl_tine_h"] <= 0.050
-    assert 0.040 <= np.diff(p["bowl_tine_ys"]).min() <= 0.050
     # rows split for true two-point plate support
     assert 0.045 <= p["plate_rows_y"][1] - p["plate_rows_y"][0] <= 0.065
+    # the fill-only REAR bank keeps the Whirlpool 12-tine/11-slot row verbatim
+    p2 = p["plate_bank2"]
+    assert 0.028 <= p2["plate_tine_pitch"] <= 0.032
+    assert 0.06 <= p["wire_dia_light"] / p2["plate_tine_pitch"] <= 0.09
+    # v4: the bowl lean fixture is gone (bowls stand upright — see config v4 note)
+    assert "bowl_tine_xs" not in p
 
 
 def test_measured_zone_gaps(racks):
@@ -91,9 +94,9 @@ def test_measured_zone_gaps(racks):
     runner_r = {x: (r_heavy if i in (0, len(p["runner_xs"]) - 1) else r_load) for i, x in enumerate(p["runner_xs"])}
     # dense zone: one light runner per span midpoint, surface gaps 15-20 mm
     dense_xs = sorted(
-        [float(np.mean(part.mesh.vertices[:, 0])) for part in racks[LOWER] if part.name.startswith("dense_runner")]
+        {round(float(np.mean(part.mesh.vertices[:, 0])), 4) for part in racks[LOWER] if part.name.startswith("dense_runner")}
     )
-    assert len(dense_xs) == 6  # 7 spans, one bridged by the channel
+    assert len(dense_xs) == 6  # 7 spans, one bridged by the channel (both banks share the grid)
     combined = sorted([(x, runner_r[x]) for x in p["runner_xs"]] + [(x, r_light) for x in dense_xs])
     for (xa, ra), (xb, rb) in zip(combined[:-1], combined[1:]):
         gap = xb - xa - ra - rb
@@ -109,23 +112,26 @@ def test_measured_zone_gaps(racks):
         assert 0.036 <= (xb - xa - ra - rb) <= 0.044
     cross_gap = float(np.diff(p["crossbar_ys"]).min()) - p["wire_dia_light"]
     assert 0.040 <= cross_gap <= 0.060
-    # plate-tine surface gaps within the 30 mm pitch
-    tine_gap = p["plate_tine_pitch"] - p["wire_dia_light"]
-    assert 0.026 <= tine_gap <= 0.030
+    # plate-tine surface gaps: robot bank at the margin-driven 40 mm pitch, rear fill bank
+    # at the Whirlpool 30 mm
+    assert 0.034 <= p["plate_tine_pitch"] - p["wire_dia_light"] <= 0.046
+    assert 0.026 <= p["plate_bank2"]["plate_tine_pitch"] - p["wire_dia_light"] <= 0.030
 
 
 def test_measured_tine_geometry(racks):
     p = config.RACK_GEN[LOWER]
+    # v4: TWO banks — the robot front bank (main keys) and the fill-only rear bank
     xs = rack_gen._plate_tine_xs(p)
+    xs2 = rack_gen._plate_tine_xs({**p, **p["plate_bank2"]})
     straights = [part for part in racks[LOWER] if part.name.startswith("plate_tine_")]
     canes = [part for part in racks[LOWER] if part.name.startswith("cane_shaft_")]
     arcs = [part for part in racks[LOWER] if part.name.startswith("cane_arc_")]
     beads = [part for part in racks[LOWER] if part.name.startswith("bead_")]
     fillets = [part for part in racks[LOWER] if part.name.startswith("fillet_")]
-    assert len(straights) == 2 * (len(xs) - 2)  # 10 per row
-    assert len(canes) == 4 and len(arcs) == 4 * p["candy_cane"]["segments"]
+    assert len(straights) == 2 * (len(xs) - 2) + 2 * (len(xs2) - 2)
+    assert len(canes) == 8 and len(arcs) == 8 * p["candy_cane"]["segments"]
     assert len(beads) == len(straights)
-    assert len(fillets) == 2 * len(xs) * p["tine_fillet"]["segments"]
+    assert len(fillets) == 2 * (len(xs) + len(xs2)) * p["tine_fillet"]["segments"]
     zl = rack_gen._z_levels(p)
     top_expect = zl["tine_base"] + p["plate_tine_h"]
     # bead caps define the exact tine-top plane (Frigidaire push-on caps)
@@ -143,16 +149,15 @@ def test_measured_tine_geometry(racks):
     base = part.mesh.vertices[part.mesh.vertices[:, 2] < mn[2] + 1e-6]
     dy = float(np.mean(top[:, 1]) - np.mean(base[:, 1]))
     assert abs(dy - math.tan(math.radians(p["plate_tine_lean_deg"])) * (mx[2] - mn[2])) < 1e-4
-    # tie wires threaded mid-height through each row
+    # tie wires: only the fill-only rear bank has them (the robot bank is tie-less — a tie
+    # crosses every gap through the disc plane, measured sole plate blocker)
     ties = [part for part in racks[LOWER] if part.zone == "tie"]
     assert len(ties) == 2
     tz = float(np.mean(ties[0].mesh.vertices[:, 2]))
-    assert abs(tz - (zl["tine_base"] + p["tine_tie_frac"] * p["plate_tine_h"])) < 1e-3
-    # bowl tines unchanged
-    bowls = [part for part in racks[LOWER] if part.zone == "bowl_tines"]
-    assert len(bowls) == len(p["bowl_tine_xs"]) * len(p["bowl_tine_ys"])
-    mn, mx = bowls[0].mesh.bounds
-    assert abs((mx[2] - mn[2]) - p["bowl_tine_h"]) < 1e-9
+    tie_frac = p["plate_bank2"]["tine_tie_frac"]
+    assert abs(tz - (zl["tine_base"] + tie_frac * p["plate_tine_h"])) < 1e-3
+    # v4: no bowl tines (bowls stand upright on the open floor)
+    assert not [part for part in racks[LOWER] if part.zone == "bowl_tines"]
 
 
 def test_feature_presence(racks):
@@ -209,10 +214,10 @@ def test_bounds_and_envelope(racks):
         assert abs(mx[1] - p["footprint"][1]) < 1e-6
     lo_top = rack_gen.merged_mesh(racks[LOWER]).bounds[1][2]
     p = config.RACK_GEN[LOWER]
-    # v3: the basket's arch handle bar is the new bbox top (was the plate-tine tips in v2)
+    # v4: the handleless basket's wall top is the bbox top (the arch bar left with the handle)
     b = p["basket"]
-    bar_top = rack_gen.floor_top_z(p) + b["h"] + b["handle"]["clearance"] + b["handle"]["bar_dia"] / 2.0
-    assert abs(lo_top - bar_top) < 1e-6
+    wall_top = rack_gen.floor_top_z(p) + b["h"]
+    assert abs(lo_top - wall_top) < 1e-6
     assert lo_top <= 0.14
     assert rack_gen.merged_mesh(racks[UPPER]).bounds[1][2] <= 0.10
 
@@ -268,46 +273,26 @@ def test_probes(racks):
 
 
 def test_slot_feasibility_guarantee(racks):
-    """>= 3 slot-grid columns must be mug-feasible, using the exact grid arithmetic of
-    placement.derive_slots_from_rack and a clearance column covering lateral sampling + the
-    carried-hull inflation (0.0585 + 0.010 + 0.005 = 0.0735 m half-extent)."""
+    """The open floor must accept a standing object — the same probe the bake gate runs.
+
+    v4 retired the old 147 mm clearance-cube grid sweep: the quadrant rack is deliberately
+    fixture-dense, and real feasibility is yaw-dependent (the goal funnel measures 5 cup
+    cells where the cube proxy finds none). What this test guards Kit-free is the layout
+    contract the pipeline enforces at bake time: every configured open zone holds an
+    object-sized free column (mirrors scripts/setup/decompose_meshes.py's mug-zone probes;
+    the end guarantee — ``min_feasible_slots`` per state — is asserted by goal_configs).
+    """
     parts = racks[LOWER]
     p = config.RACK_GEN[LOWER]
-    merged = rack_gen.merged_mesh(parts)
-    mn, mx = merged.bounds
-    pitch = config.SLOT_GRID_PITCH_M
-    lo = mn[:2] + config.SLOT_RIM_INSET_M
-    hi = mx[:2] - config.SLOT_RIM_INSET_M
-    nx = max(1, int((hi[0] - lo[0]) // pitch) + 1)
-    ny = max(1, int((hi[1] - lo[1]) // pitch) + 1)
-    xs = lo[0] + (hi[0] - lo[0] - (nx - 1) * pitch) / 2.0 + np.arange(nx) * pitch
-    ys = lo[1] + (hi[1] - lo[1] - (ny - 1) * pitch) / 2.0 + np.arange(ny) * pitch
-
     mgr = _manager(parts)
-    half = 0.0735
-    z0, z1 = rack_gen.floor_top_z(p) + 0.003, 0.105
-    feasible = []
-    for y in ys:
-        for x in xs:
-            if not _hits(mgr, (2 * half, 2 * half, z1 - z0), (float(x), float(y), (z0 + z1) / 2.0)):
-                feasible.append((round(float(x), 4), round(float(y), 4)))
-    # v3: the cutlery basket eats the x=0.2432 columns — >= 2 standing columns remain
-    assert len(feasible) >= 2, f"only {len(feasible)} mug-feasible slot columns: {feasible}"
-    ox0, ox1, oy0, oy1 = p["open_zones"][0]
-    for x, y in feasible:
-        assert ox0 - half <= x <= ox1 + half and oy0 - half <= y <= oy1 + half, (
-            f"feasible slot ({x}, {y}) outside the open zone — layout drifted"
+    for i, (ext, ctr) in enumerate(rack_gen.mug_probes(p)):
+        assert not _hits(mgr, ext, ctr), f"open zone {i} obstructed for a standing object"
+    # and the zones must genuinely sit on the open floor (not over a fixture footprint)
+    b = p["basket"]
+    for x0, x1, y0, y1 in p["open_zones"]:
+        assert x1 <= b["x"][0] or x0 >= b["x"][1] or y0 >= b["y"][1], (
+            "open zone overlaps the basket footprint"
         )
-    # the basket is WHY the count dropped: without it the v2 guarantee (>= 3) must still hold
-    no_basket = {k: v for k, v in p.items() if k != "basket"}
-    mgr_nb = _manager(rack_gen.build_rack(no_basket))
-    feasible_nb = [
-        (float(x), float(y))
-        for y in ys
-        for x in xs
-        if not _hits(mgr_nb, (2 * half, 2 * half, z1 - z0), (float(x), float(y), (z0 + z1) / 2.0))
-    ]
-    assert len(feasible_nb) >= 3, f"basket-free rack lost the v2 guarantee: {feasible_nb}"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -320,7 +305,8 @@ def test_insert_group(racks):
     assert set(groups) == {"frame", "insert", "basket"}
     insert = groups["insert"]
     p = config.RACK_GEN[LOWER]
-    row = p["insert"]["row"]
+    # v4: the fold-down insert hardware lives on the fill-only rear bank (plate_bank2)
+    row = p["plate_bank2"]["insert"]["row"]
     # the insert = the configured row's tine hardware + spine/bosses/clip/tie, nothing else
     for part in insert:
         assert part.zone in ("plate_tines", "insert", "tie"), f"unexpected insert part {part.name}"
@@ -353,18 +339,21 @@ def test_basket_geometry_contracts(racks):
     p = config.RACK_GEN[LOWER]
     b = p["basket"]
     W, D = p["footprint"]
-    # inside the footprint and the open zone, clear of the plate bank
+    # v4: inside the footprint, clear of the open floor zone (its own region now) and IN
+    # FRONT of the robot plate bank's corridor
     ox0, ox1, oy0, oy1 = p["open_zones"][0]
-    assert ox0 <= b["x"][0] < b["x"][1] <= min(ox1, W)
+    assert b["x"][0] >= ox1 and b["x"][1] <= W
     assert 0.0 < b["y"][0] < b["y"][1] <= min(p["plate_zone_y"][0], D)
-    # 3 bays, each long enough for scaled cutlery to lean (>= 44 mm) and wide enough (>= 70 mm)
+    # 3 bays; each must hold the inflated cutlery cross-section in its narrow axis
+    # (>= 34 mm, measured: fork head 16.4 mm + 2x5 mm margin + drop tolerance) and the
+    # item line in its long axis (>= 44 mm)
     bays = rack_gen.basket_bays(p)
     assert len(bays) == 3
     for x0, x1, y0, y1 in bays:
-        assert (y1 - y0) >= 0.044 and (x1 - x0) >= 0.070
+        assert min(x1 - x0, y1 - y0) >= 0.034 and max(x1 - x0, y1 - y0) >= 0.044
     # basket parts stay inside the assembled bounds (exact-bounds test covers the rest)
     basket_parts = [part for part in racks[LOWER] if part.group == "basket"]
-    assert len(basket_parts) == 10  # floor + 4 walls + 2 dividers + 2 posts + bar
+    assert len(basket_parts) == 7  # floor + 4 walls + 2 dividers (handleless in v4)
     merged = rack_gen.merged_mesh(basket_parts)
     assert merged.bounds[0][2] >= rack_gen.floor_top_z(p) - 1e-9
     assert merged.bounds[1][2] <= 0.14  # under the lower-rack height budget

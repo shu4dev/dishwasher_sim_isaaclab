@@ -32,10 +32,12 @@ def rack_T(monkeypatch):
     return T
 
 
-def test_plate_slots_eleven_gaps(rack_T):
+def test_plate_slots_robot_bank_gaps(rack_T):
+    """v4: the ROBOT bank (main plate keys) carries 3 gaps at the 40 mm pitch; robot discs
+    release at the corridor midpoint between the two tine rows (seat_y 0.134)."""
     config.set_active_object("plate")
     slots = placement.derive_plate_slots("unused")
-    assert len(slots) == 11
+    assert len(slots) == 3
     p = config.RACK_GEN[LOWER]
     xs = np.asarray(rack_gen._plate_tine_xs(p))
     gaps = (xs[:-1] + xs[1:]) / 2.0
@@ -44,20 +46,20 @@ def test_plate_slots_eleven_gaps(rack_T):
         assert abs(s.width_m - p["plate_tine_pitch"]) < 1e-9
         d = s.T_base_slot[:3, 3] - rack_T[:3, 3]
         assert abs(d[0] - gx) < 1e-9  # gap centers on the tine-pitch arithmetic
-        assert abs(d[1] - 0.197) < 1e-9  # bottom edge on the bank bar
+        assert abs(d[1] - 0.134) < 1e-9  # corridor midpoint between the rows (0.108/0.160)
 
 
 def test_plate_goal_pose_is_vertical_disc(rack_T):
     config.set_active_object("plate")
     slots = placement.derive_plate_slots("unused")
     rng = np.random.default_rng(0)
-    for T in placement.sample_goal_poses(slots[3], 8, rng):
+    for T in placement.sample_goal_poses(slots[1], 8, rng):
         axis = T[:3, :3] @ np.array([0.0, 0.0, 1.0])  # disc face normal
         # the disc stands on edge: its normal is near-horizontal (~83-90 deg from vertical)
         ang_from_z = np.degrees(np.arccos(abs(axis[2])))
         assert ang_from_z > 75.0, ang_from_z
         # in-rack bounds: the disc bottom stays near the slot origin
-        d = T[:3, 3] - slots[3].T_base_slot[:3, 3]
+        d = T[:3, 3] - slots[1].T_base_slot[:3, 3]
         assert abs(d[0]) < 0.02 and 0.0 < d[2] < 0.12
 
 
@@ -94,9 +96,12 @@ def test_basket_slots_inside_bays(rack_T):
 
 
 def test_derive_slots_dispatch(rack_T, monkeypatch):
-    for name, expect in (("plate", 11), ("bowl", 3), ("fork", 3)):
+    # v4: 3 robot plate gaps; the bowl dispatches to floor_stand (its grid derivation reads
+    # the cached rack mesh, so only the policy is asserted here)
+    for name, expect in (("plate", 3), ("fork", 3)):
         config.set_active_object(name)
         assert len(placement.derive_slots("unused")) == expect
+    assert config.OBJECTS["bowl"].placement.mode == "floor_stand"
 
 
 def test_evaluate_placement_floor_stand_matches_v0():

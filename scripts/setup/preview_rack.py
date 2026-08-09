@@ -40,8 +40,10 @@ def main() -> None:
               f"rear {params['rim_rear_h'] * 1e3:.0f} mm (+{(params['rim_rear_h'] / params['rim_side_h'] - 1) * 100:.0f}% vs sides)")
         print(f"       floor   top z {rack_gen.floor_top_z(params) * 1e3:.1f} mm; slope {params['slope_deg']} deg")
         if "plate_rows_y" in params:
+            bowl_h = params.get("bowl_tine_h")
+            bowl_note = f"; bowl h {bowl_h * 1e3:.0f} mm" if bowl_h is not None else ""
             print(f"       tines   plate h {params['plate_tine_h'] * 1e3:.0f} mm @ {params['plate_tine_pitch'] * 1e3:.0f} mm "
-                  f"pitch, lean {params['plate_tine_lean_deg']} deg; bowl h {params['bowl_tine_h'] * 1e3:.0f} mm")
+                  f"pitch, lean {params['plate_tine_lean_deg']} deg{bowl_note}")
     print("\n[RESULT] PASS (previews rendered)")
 
 
