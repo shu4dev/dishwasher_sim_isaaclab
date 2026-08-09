@@ -42,7 +42,7 @@ def test_plan_class_minimums():
     assert counts["plate"] >= 7
     assert counts["fork"] + counts["spoon"] + counts["knife"] >= 10
     assert counts["mug"] + counts["cup"] + counts["tumbler"] + counts["wine_glass"] >= 6
-    assert counts["bowl"] >= 2 and counts["saucer"] >= 3
+    assert counts["bowl"] >= 2 and counts["saucer"] >= 1
     assert len(items) >= 30
 
 

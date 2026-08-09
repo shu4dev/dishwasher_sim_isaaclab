@@ -481,8 +481,9 @@ def _plate_bank(parts: list[RackPart], p: dict) -> None:
 
     # Tine rows: ends are candy canes, middles straight shafts + bead caps; every base
     # filleted. The cane is optional (None -> straight end tines): its inboard-curling hook
-    # arcs INTO the adjacent gap and rejects every disc goal pose there (measured 2026-08-09
-    # — the robot-facing bank runs straight ends; the fill-only rear bank keeps the canes).
+    # arcs INTO the adjacent gap and rejects disc goal poses there. Both v4 banks keep their
+    # canes — measured on the robot bank: end gap 0 is behind the arm-access boundary
+    # regardless, and end gap 2 still bakes accepted goals with the cane in place.
     cane = p.get("candy_cane")
     bead = p["tine_bead"]
     fil = p["tine_fillet"]

@@ -12,16 +12,17 @@ in each rack's design/body frame, then maps into the robot-base frame via the ca
 FCL (pairwise item overlap + item-vs-rack clearance) and checks the closability z-budget so a
 layout bug fails fast in the venv, not after a Kit boot.
 
-Layout (compact 6-place-setting machine):
+Layout (compact 6-place-setting machine, RACK_GEN v4):
 
-- **Lower rack**: 8 dinner plates + 3 saucers in the 11 tine-bank gaps (vertical, 7 deg lean);
-  2 bowls leaning on the bowl tines over the drinkware slope; pitcher + upside-down food
-  container (lid stacked on top) in the open zone; cutlery basket bays: 4 forks / 4 spoons /
-  3 knives, leaning +-8 deg.
-- **Upper rack**: 2 mugs + cups + tumblers upside-down in the two open zones (greedy lattice
-  packing, FCL-pruned); 2 wine glasses upside-down where the packer finds room (the stemware
-  scallop lie-in is a physics stretch goal scripts/setup/capacity_fill.py attempts first); spatula + serving spoon
-  lying flat along the slope strips under the cup shelves.
+- **Lower rack**: 7 dinner plates + 1 saucer + the spatula in the rear fill bank's 11 gaps
+  (vertical discs, 7 deg lean); one bowl standing upright in the open zone (the v4 lean
+  fixture is gone — the robot and the fill both stand bowls); cutlery basket bays: 4 forks /
+  3 spoons / 3 knives, leaning +8 deg.
+- **Upper rack**: 1 mug + cups + tumblers upside-down in the two open zones (greedy lattice
+  packing, FCL-pruned); 2 wine glasses attempting the stemware lie-in over the right slope
+  strip (a physics stretch goal scripts/setup/capacity_fill.py settles); serving spoon flat
+  along the left slope strip; upside-down food container (lid stacked on top) + the second
+  bowl upside-down on the rear strip.
 
 Every number here is either a registry dim, a RACK_GEN parameter, or derived from them.
 """
@@ -125,17 +126,23 @@ def _lower_items() -> list[tuple[str, int, np.ndarray, str]]:
     items: list[tuple[str, int, np.ndarray, str]] = []
 
     # -- REAR fill bank (v4: plate_bank2 — the robot bank's 3 gaps are the robot's): 11 gaps;
-    # 7 dinner plates mid-bank, 3 saucers outer, spatula in the last. A leaning disc always
-    # spans its full diameter in rack depth (the disc plane contains y), so dinner plates seat
-    # FORWARD: bottom edge on the y~0.197 bank bar, disc reaching through both tine rows
-    # without crossing the rear wall. Saucers sit deeper (center y 0.222). Some discs' forward
-    # overhang now interleaves with the robot bank's rear tine row — teleported fill items may
-    # rest against those tines, exactly as they rest on the rear bank's tie wires.
+    # 1 saucer in the cane-braced end gap, 7 dinner plates right of center, spatula in the
+    # last gap. A leaning disc always spans its full diameter in rack depth (the disc plane
+    # contains y), so dinner plates seat FORWARD: bottom edge on the y~0.197 bank bar, disc
+    # reaching through both tine rows without crossing the rear wall. The saucer sits deeper
+    # (center y 0.222). A plate's 71 mm reach braces across both tine rows (and, over the
+    # robot bank's x-span 0.225-0.345, on its rear tine row too) and survives the stow — a
+    # saucer's 55 mm reach does NOT: v3's outer-gap saucers were braced by the old basket
+    # sitting under the bank, and without it a mid-gap saucer tips when the rack accelerates
+    # (measured over two fills: every mid-gap saucer slipped 21-26 mm / 32-42 deg on stow;
+    # only the end gap, where the candy-cane hook arcs in as a lateral brace, holds one —
+    # and only with no wobbling saucer neighbor during the settle). Two saucers traded for
+    # a closable rack.
     p2 = {**p, **p["plate_bank2"]}
     xs = np.asarray(rack_gen._plate_tine_xs(p2))
     gaps = (xs[:-1] + xs[1:]) / 2.0
     lean = float(p2["plate_tine_lean_deg"])
-    saucer_gaps, plate_gaps, spatula_gap = [0, 8, 9], [1, 2, 3, 4, 5, 6, 7], 10
+    saucer_gaps, plate_gaps, spatula_gap = [0], [3, 4, 5, 6, 7, 8, 9], 10
     # vertical disc between adjacent tines: face NORMAL along rack +x (the 30 mm pitch
     # direction), disc plane in yz, leaned +7 deg toward the rear guard like the tines
     R_disc = _rot("x", -lean) @ _rot("y", 90.0)
@@ -178,12 +185,11 @@ def _lower_items() -> list[tuple[str, int, np.ndarray, str]]:
     bowl = config.OBJECTS["bowl"]
     items.append(("bowl", 0, _place(bowl, _stand_R(bowl, yaw_deg=0.0), (0.070, 0.062), z_floor), "open_zone"))
 
-    # -- open zone: one standing mug on the right strip (v4: the old mug spot sits inside the
-    # relocated basket; the PITCHER and the second lower mug left the fill — the left patch
-    # holds exactly one large round footprint in front of the disc line; two fill items
-    # traded for the 7 new robot destinations) ------------------------------------------------
-    mug = config.OBJECTS["mug"]
-    items.append(("mug", 1, _place(mug, _stand_R(mug, yaw_deg=90.0), (0.3225, 0.045), z_floor), "open_zone"))
+    # -- open zone: nothing else stands here (v4: the strip right of the basket is 86 mm wall-
+    # to-basket — narrower than the mug's 93 mm belly, so the teleported mug rocked on the
+    # frame and slipped 33 mm on stow; the PITCHER's old spot sits inside the relocated
+    # basket. The left patch holds exactly one large round footprint in front of the disc
+    # line; three fill items traded for the 7 new robot destinations) --------------------------
 
     # -- cutlery basket: forks / spoons / knives per bay, leaning +-8 deg ----------------------
     # v4: the bays split along X (rotated basket), so the lattice runs along the bay's LONG

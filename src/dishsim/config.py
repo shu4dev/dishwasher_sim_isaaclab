@@ -78,7 +78,9 @@ SCENARIOS = {
     "both_out": {  # both racks fully extended -> push the UPPER rack in, place into the lower
         "rack_lower_m": -0.20,
         "rack_upper_m": -0.20,
-        "min_feasible_slots": 2,  # v3: the cutlery basket eats the x=0.2432 slot columns
+        # this state's own slots bake 0 by construction (the extended upper rack shadows the
+        # lower floor) — trials place in PLACEMENT_STATE after the push, where the bar applies
+        "min_feasible_slots": 2,
         "rack_action": {
             "joint": "PrismaticJoint_dishwasher_2_up",
             "body": "E_shelf_03",
@@ -89,7 +91,9 @@ SCENARIOS = {
     "both_in": {  # both racks fully retracted -> pull the LOWER rack out, place into it
         "rack_lower_m": 0.0,
         "rack_upper_m": 0.0,
-        "min_feasible_slots": 2,  # v3: the cutlery basket eats the x=0.2432 slot columns
+        # this state's own slots bake 0 by construction (stowed racks are unreachable) —
+        # episodes place in PLACEMENT_STATE after the pull, where the bar applies
+        "min_feasible_slots": 2,
         "rack_action": {
             "joint": "PrismaticJoint_dishwasher_2_down",
             "body": "E_shelf_1_04",
@@ -106,12 +110,14 @@ SCENARIO_NAME = "both_out"  # active scenario; switch via apply_scenario() BEFOR
 PLACEMENT_STATE = "placement"
 INTERNAL_STATES = {
     PLACEMENT_STATE: {"rack_lower_m": -0.20, "rack_upper_m": 0.0, "min_feasible_slots": 2},
-    # Both racks extended, no rack action: the loading state for the REAR plate bank. The
-    # ArtVIP rack travel (0.2 m) is smaller than the rack depth (0.287 m), so the rear
-    # ~90 mm — the entire tine bank — never leaves the machine mouth: with the upper rack
-    # stowed, its front rail sits directly above the bank and no collision-free insertion
-    # exists (measured: 0/11 feasible plate slots in the `placement` state). Pulling the
-    # upper rack out clears the airspace — exactly what a human does.
+    # Both racks extended, no rack action. v3's plate-loading state: the rear bank never left
+    # the machine mouth (rack travel 0.2 m < rack depth 0.287 m), so with the upper rack
+    # stowed no collision-free insertion existed and pulling the upper rack out cleared the
+    # airspace. RACK_GEN v4 INVERTED this: the robot plate bank moved to the lower rack's
+    # front band, which the stowed upper rack no longer shadows (measured: plate 2/3,
+    # bowl 3/15 feasible in `placement`) — while the EXTENDED upper rack now shadows that
+    # same band (measured: 0 feasible for every class here). Kept as a bake-able reference
+    # state; no v4 flow places in it.
     "placement_open": {"rack_lower_m": -0.20, "rack_upper_m": -0.20, "min_feasible_slots": 2},
 }
 

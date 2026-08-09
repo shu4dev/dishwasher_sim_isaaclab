@@ -11,9 +11,9 @@ basket); each object class declares a placement mode in `config.OBJECTS` and
 
 | mode | classes | slot definition | evaluated as |
 |---|---|---|---|
-| `floor_stand` | mug, cup, tumbler, pitcher | v0 standing cell on the wire-floor grid (`derive_slots_from_rack`: footprint cells, `SLOT_RIM_INSET_M` inset, `SLOT_GRID_PITCH_M` pitch) | lateral ≤ `SLOT_TOL_LATERAL_M`, axis-vs-z tilt ≤ `SLOT_TOL_TILT_DEG`, bottom within 2 cm of the floor |
-| `plate_slot` | plate, saucer, lid | one slot per tine-bank gap (11 gaps at 30 mm pitch); disc face normal along the pitch direction, leaned +7° like the tines, bottom edge seated on the bank floor bar | face-normal deviation ≤ 12° (flip-insensitive), off-gap drift ≤ 12 mm, center height within 2 cm of nominal |
-| `bowl_lean` | bowl | lean positions against the bowl tines over the drinkware slope (opening down-slope at ~48°) | axis within 20° of the lean cone, lateral ≤ 4 cm, height within 6 cm |
+| `floor_stand` | mug, cup, tumbler, pitcher, bowl (v4 — bowls stand) | v0 standing cell on the wire-floor grid (`derive_slots_from_rack`: footprint cells, `SLOT_RIM_INSET_M` inset, `SLOT_GRID_PITCH_M` pitch) | lateral ≤ `SLOT_TOL_LATERAL_M`, axis-vs-z tilt ≤ `SLOT_TOL_TILT_DEG`, bottom within 2 cm of the floor |
+| `plate_slot` | plate, saucer, lid | one slot per robot-bank gap (v4: 3 gaps at 40 mm pitch, no tie wire; the 11-gap rear bank is fill-only); disc face normal along the pitch direction, leaned +7° like the tines, bottom edge seated on the bank floor bar | face-normal deviation ≤ 12° (flip-insensitive), off-gap drift ≤ 12 mm, center height within 2 cm of nominal |
+| `bowl_lean` | — (unused since RACK_GEN v4: the lean fixture is gone — a gripper carrying a rim-edge bowl stabs the rack at every hover of the 48° lean, so bowls stand via `floor_stand`) | lean positions against the bowl tines over the drinkware slope (opening down-slope at ~48°) | axis within 20° of the lean cone, lateral ≤ 4 cm, height within 6 cm |
 | `basket_drop` | fork, spoon, knife, serving_spoon | one slot per basket bay; the goal is a release hover 60 mm above the bay, head-down — gravity inserts | settled bbox center inside the bay volume, below the basket top |
 
 Fill-only modes (`upside_down`, `stem_scallop`, `flat_lay`) are exercised by the capacity
@@ -94,9 +94,15 @@ than merging it would let the first rack slide shut behind the arm.
 
 | class | `placement` (lower out, upper stowed) | `placement_open` (both out) |
 |---|---|---|
-| cup | 4 of 15 | **0 of 15** |
-| tumbler | 4 of 15 | **0 of 15** |
-| fork | 2 of 3 bays | **0 of 3** |
+| cup | 5 of 15 | **0 of 15** |
+| tumbler | 6 of 15 | **0 of 15** |
+| fork | 3 of 3 bays | **0 of 3** |
+| plate | 2 of 3 gaps | **0 of 3** |
+| bowl | 3 of 15 | **0 of 15** |
+
+(RACK_GEN v4, 64-sample funnels. In v4 the extended upper rack shadows the lower rack's
+*front* band — exactly where the robot plate bank and every feasible floor cell now live —
+so `placement_open` zeroes every class.)
 
 The lower rack is already at its mechanical limit at −0.20 m (both prismatic joints are limited to
 `[-0.20, 0.00]`), and the rack is 0.287 m deep, so ~87 mm never leaves the mouth whatever you do.
@@ -241,13 +247,15 @@ its grid actually has:
 | mode | grid | names |
 |---|---|---|
 | `floor_stand` | 3 depth × 5 lateral | `near_centre`, `mid_left1`, `far_right2` |
-| `plate_slot` | 11 tine gaps (lateral) | `gap_left5` … `gap_centre` … `gap_right5` |
-| `bowl_lean` | 3 lean positions (depth) | `near`, `mid`, `far` |
-| `basket_drop` | 3 bays (depth) | `bay_near`, `bay_mid`, `bay_far` |
+| `plate_slot` | 3 robot-bank gaps (lateral) | `gap_left1`, `gap_centre`, `gap_right1` |
+| `bowl_lean` | (unused in v4 — bowls use the `floor_stand` grid) | — |
+| `basket_drop` | 3 bays (lateral — the v4 basket splits along x) | `gap_left1`, `gap_centre`, `gap_right1` |
 
 Names are ordinal within the RACK, so they are invariant to how far it is pulled out; which
-slots are *feasible* is not, and is measured per state. The four feasible `floor_stand` slots are
-`near_left1`, `near_centre`, `mid_left1`, `mid_centre`.
+slots are *feasible* is not, and is measured per state. The five feasible cup∩tumbler
+`floor_stand` slots in v4 are `near_left2`, `near_left1`, `mid_left2`, `mid_left1`,
+`mid_centre` (mug reaches 4 of them — all but `near_left1`; bowls stand in `near_left2`,
+`mid_left2`, `mid_left1`).
 
 ### Measured capacity ceilings
 
@@ -256,11 +264,31 @@ These bound what an episode can be asked to do, and are measured rather than ass
 | ceiling | value | why |
 |---|---|---|
 | pickable classes | 3 of 15 — `mug`, `cup`, `tumbler` | only the `rim_diam` grasp family has a calibrated countertop pick; `plate`/`bowl`/`fork` are `START_WELDED` and skip the pick entirely |
-| usable lower-rack slots | 4 of 15 — ids 1, 2, 6, 7 | the other 11 funnel to zero goal configs on collision |
-| simultaneous placements | **2** | those 4 form a 2×2 block at the 60 mm `SLOT_GRID_PITCH_M`; the grid deliberately *overlaps* (one object per trial), so only the ~85 mm diagonals are jointly occupiable |
+| robot destinations | **13** (v3: 6) | floor 5 of 15 cells (ids 0, 1, 5, 6, 7) + plate gaps 2 of 3 (ids 1, 2) + bowl cells 3 of 15 (ids 0, 5, 6) + basket 3 of 3 bays; every other slot funnels to zero goal configs on collision |
+| simultaneous placements | mode-dependent | plate gaps and basket bays are disjoint fixtures; bowl cells ARE floor cells and the 60 mm `SLOT_GRID_PITCH_M` grid deliberately *overlaps*, so a mixed load shares the 5 floor cells — the sequencer's occupancy check, not a fixed count, bounds an episode |
 
 The destination, not the countertop, is the bottleneck — the extended worktop holds far more
 than the machine can accept from the robot.
+
+### Reachability success bar (met by RACK_GEN v4 at the front base pose)
+
+The reachability program's acceptance bar, and the measured v4 values (64-sample goal
+funnels, front base placement):
+
+| criterion | bar | measured (v4, front) |
+|---|---|---|
+| plate gaps | > 0 | **2** of 3 (`gap_centre`, `gap_right1`) |
+| bowl cells | > 0 | **3** (`near_left2`, `mid_left2`, `mid_left1`) |
+| floor slots (cup∩tumbler) | > 4 | **5** |
+| basket bays | 3 of 3 | **3 of 3** |
+| countertop pick band | > 0.12 m deep | **0.20 m** (86 cells, 4 yaws, 0.05 m grid) |
+
+A 420-candidate base-pose sweep (`scripts/setup/base_pose_sweep.py`, scorecards under
+`results/base_sweep/`) confirmed the v4 rack, not the base pose, was the binding constraint:
+the sweep's best pose (`x +0.3375, y −0.375, yaw −18.75°`) matches the front placement on
+every slot criterion and differs only in pick-band depth (0.40 m vs 0.20 m — both above the
+bar), so the front placement was kept and the runner-up scorecards are retained as data for a
+possible future multi-station mode.
 
 ### Known: `floor_stand` tilt is not met by every class
 

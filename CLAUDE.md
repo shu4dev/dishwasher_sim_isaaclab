@@ -13,7 +13,7 @@ plans against a standalone Kit-free FCL collision world
 (`src/dishsim/collision_world.py`, built for thousands of external-planner queries); the
 carried object rides a calibrated contact pinch with a hidden wrist weld bearing the load;
 placement stability is verified per mode. `scripts/setup/capacity_fill.py` physically settles
-a full 34-item load — initial states for rearrangement/IL/RL. The old RL door-opening
+a full 30-item load — initial states for rearrangement/IL/RL. The old RL door-opening
 pipeline lives on the `archive/rl-door-opening` branch.
 
 Two runners, deliberately separate. `run_trials.py` is the frozen single-object baseline (one

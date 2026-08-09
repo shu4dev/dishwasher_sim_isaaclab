@@ -103,16 +103,25 @@ class GraspProfile:
                 f"{object_class!r} has no calibrated grasp aperture — run "
                 f"scripts/setup/calibrate_grasp.py --object {object_class} and freeze it first"
             )
+        weld = g.family in config.WELD_ACQUIRE_FAMILIES
+        if not weld and None in (g.force_min_n, g.force_max_n, g.force_exec_max_n):
+            raise RuntimeError(
+                f"{object_class!r} has no calibrated pad-force band — run "
+                f"scripts/setup/calibrate_grasp.py --object {object_class} and freeze it first"
+            )
+        # A weld-acquire class may have no calibrated pinch band (the jaws never close on the
+        # object, so there is nothing to calibrate): the pinch gate is vacuous for it and the
+        # carry is protected by the external-load gate alone.
         return GraspProfile(
             object_class=object_class,
             T_tcp_obj=make_T(*config.grasp_transform(spec)),
             aperture_grasp_rad=float(g.aperture_rad),
             aperture_open_rad=float(config.GRIPPER_APERTURE_OPEN_RAD),
-            force_min_n=float(g.force_min_n),
-            force_max_n=float(g.force_max_n),
-            force_exec_max_n=float(g.force_exec_max_n),
+            force_min_n=0.0 if g.force_min_n is None else float(g.force_min_n),
+            force_max_n=float("inf") if g.force_max_n is None else float(g.force_max_n),
+            force_exec_max_n=float("inf") if g.force_exec_max_n is None else float(g.force_exec_max_n),
             pieces=_pieces_for(object_class, scenario),
-            acquire="weld" if g.family in config.WELD_ACQUIRE_FAMILIES else "pick",
+            acquire="weld" if weld else "pick",
         )
 
 

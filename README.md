@@ -17,7 +17,7 @@
     <td align="center">
       <img src="docs/figures/loaded_iso.png" width="720" alt="fully loaded dishwasher"/>
       <br/>
-      <code>scripts/setup/capacity_fill.py</code> — 34 items placed, 31 settle stably, racks still close
+      <code>scripts/setup/capacity_fill.py</code> — 30 items placed, 27 settle stably, racks still close
     </td>
   </tr>
 </table>
@@ -152,7 +152,7 @@ disagrees with the registry.
 | `mug` | Isaac YCB `025_mug` | 1.00 | `floor_stand` | lower |
 | `plate` | YCB `029_plate` | 0.54 | `plate_slot` | lower |
 | `saucer` | YCB `029_plate` | 0.42 | `plate_slot` | lower |
-| `bowl` | YCB `024_bowl` | 0.68 | `bowl_lean` | lower |
+| `bowl` | YCB `024_bowl` | 0.68 | `floor_stand` | lower |
 | `cup` | YCB `065-a_cups` | 1.10 | `floor_stand` | lower |
 | `fork` | YCB `030_fork` | 0.60 | `basket_drop` | basket |
 | `spoon` | YCB `031_spoon` | 0.60 | `basket_drop` | basket |
@@ -264,7 +264,7 @@ scripts/run_kit.sh scripts/setup/parity_check.py --headless --scenario placement
 # placement slots + IK goal sets that experiments plan to
 scripts/run_kit.sh scripts/setup/goal_configs.py --headless --enable_cameras --object mug
 
-# a fully-loaded machine: 34-item deterministic fill + rack-closability check
+# a fully-loaded machine: 30-item deterministic fill + rack-closability check
 scripts/run_kit.sh scripts/setup/capacity_fill.py --headless --enable_cameras
 ```
 
@@ -386,8 +386,10 @@ scripts/run_kit.sh scripts/experiment/run_task.py --headless --enable_cameras \
 ```
 
 > Measured: pulling the *upper* rack out as well (`placement_open`) does not open the rear rows —
-> it drops cup, tumbler and fork to **0** reachable slots. The lower rack is already at its
-> mechanical limit, and 87 mm of its 287 mm depth never leaves the machine mouth.
+> it drops every class (cup, tumbler, fork, plate and bowl) to **0** reachable slots, because the
+> extended upper rack shadows the lower rack's front band where all v4 destinations live. The
+> lower rack is already at its mechanical limit, and 87 mm of its 287 mm depth never leaves the
+> machine mouth.
 
 **Home-anchored trajectories.** Every episode's recording begins and ends at `config.HOME_Q`.
 The start is measured, corrected if it drifted during layout settling, and then asserted; the
@@ -405,17 +407,20 @@ in frame for the whole episode — the previous `front` view sat 2.4× too close
 counter out entirely. Vertical FOV is the binding constraint on a 16:9 frame, not horizontal.
 
 > **Note:** episode size is capped by DESTINATION capacity, not countertop room — the counter
-> holds far more than the robot can put away. Measured ceiling, per rack structure:
+> holds far more than the robot can put away. Measured ceiling, per rack structure (RACK_GEN v4,
+> 64-sample goal funnels):
 >
-> | destination | reachable | simultaneous | why |
-> |---|---|---|---|
-> | rack floor (`floor_stand`) | 4 of 15 slots | **2** | the 4 form a 2×2 block at 60 mm pitch; a cup needs 73.4 mm between centres, so only the 84.9 mm diagonals fit |
-> | cutlery basket (`basket_drop`) | 2 of 3 bays | **2** | fork/knife/spoon — but weld-acquired, not picked |
-> | plate tines, bowl slope | **0** | 0 | 87 mm of the rack's 287 mm depth never clears the mouth; extending the upper rack does not help, it makes every count 0 |
+> | destination | reachable | why |
+> |---|---|---|
+> | rack floor (`floor_stand`) | 5 of 15 cells (cup∩tumbler; mug 4, bowl 3) | the left/centre-front block clears the machine mouth; the far column and right edge funnel to zero on collision |
+> | plate bank (`plate_slot`) | 2 of 3 robot gaps | the centre-most gap sits behind the measured arm-access boundary (~rack x ≥ 0.28 alive) |
+> | cutlery basket (`basket_drop`) | 3 of 3 bays | fork/knife/spoon — weld-acquired, not picked |
 >
-> So a full robot-loaded lower rack is **4 items** — 2 standing plus 2 in the basket — of which
-> 2 are genuine picks. For contrast, `capacity_fill.py` *teleports* 34 items in and 31 settle
-> stably: the rack's own capacity is far larger than what this arm can reach into it.
+> So the v4 rack offers **13 robot destinations** (v3: 6) — 2 plate gaps + 3 bowl cells + 3
+> basket bays + 5 floor cells, with bowl cells drawn from the floor cells, so a mixed load
+> shares them. The floor placements are genuine countertop picks. For contrast,
+> `capacity_fill.py` *teleports* 30 items in and 27 settle stably: the rack's own capacity is
+> still larger than what this arm can reach into it.
 > See [docs/success_criteria.md](docs/success_criteria.md#multi-object-episodes-scriptsexperimentrun_taskpy).
 
 ### 3.3 Phase 3 — Evaluation: read the artifacts
