@@ -27,6 +27,7 @@ from typing import Callable
 import numpy as np
 
 from .. import config
+from ..transforms import T_inv, make_T
 
 #: ``(object_class, T_base_obj) -> bool``: can the robot actually pick this object here?
 #: Supplied by the caller (the runner closes over a collision world and the IK). Layout
@@ -198,12 +199,13 @@ def surface_pose(spec, xy_w, yaw_deg: float, surface_z_w: float, hover: float = 
     Returns:
         T_base_obj, shape [4, 4].
     """
-    R = stand_rotation(spec, yaw_deg)
-    T = np.eye(4)
-    T[:3, :3] = R
-    pos_w = np.array([float(xy_w[0]), float(xy_w[1]), surface_z_w + hover + bottom_offset(spec, R)])
-    T[:3, 3] = pos_w - np.asarray(config.ROBOT_BASE_POS_W, dtype=float)
-    return T
+    R = stand_rotation(spec, yaw_deg)  # world-frame rotation (yaw is about world z)
+    T_w_obj = np.eye(4)
+    T_w_obj[:3, :3] = R
+    T_w_obj[:3, 3] = (float(xy_w[0]), float(xy_w[1]), surface_z_w + hover + bottom_offset(spec, R))
+    # full-transform re-expression: a yawed base must rotate the world pose into the base
+    # frame, not just shift it (exact subtraction at the identity base quaternion)
+    return T_inv(make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W)) @ T_w_obj
 
 
 def countertop_top_z_w() -> float:
@@ -364,11 +366,13 @@ def _stack_support(items, xy: np.ndarray, r: float) -> str | None:
 def _top_z_w(item: LayoutItem) -> float:
     """World z of an item's highest bbox point [m]."""
     spec = config.OBJECTS[item.object_class]
-    R = item.T_base_obj[:3, :3]
+    # lift the base-frame pose to the world through the full base transform (identical z-only
+    # math at the identity base quaternion)
+    T_w_obj = make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W) @ item.T_base_obj
     h = np.array(spec.bbox_half)
     corners = np.array([[sx * h[0], sy * h[1], sz * h[2]] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
-    top_local = float((R @ corners.T).T[:, 2].max())
-    return float(item.T_base_obj[2, 3] + config.ROBOT_BASE_POS_W[2] + top_local)
+    top_local = float((T_w_obj[:3, :3] @ corners.T).T[:, 2].max())
+    return float(T_w_obj[2, 3] + top_local)
 
 
 def resolve_spawn_counts(spec: dict, rng: np.random.Generator) -> list:

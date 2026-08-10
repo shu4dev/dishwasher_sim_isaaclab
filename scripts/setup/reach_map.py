@@ -94,7 +94,8 @@ def main() -> int:
     xs = np.arange(0.50, 1.10 + 1e-9, args.step)
     ys = np.arange(-0.60, 0.45 + 1e-9, args.step)
     yaws = np.linspace(0.0, 360.0, args.yaws, endpoint=False)
-    base_off = np.asarray(config.ROBOT_BASE_POS_W)
+    # full world -> base re-expression (the base may be yawed), as in base_sweep.pick_coverage
+    T_base_w = T_inv(make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W))
     q_seed = np.array(config.HOME_Q)
 
     masks: dict[str, np.ndarray] = {}
@@ -107,10 +108,11 @@ def main() -> int:
             for j, y in enumerate(ys):
                 n_ok = 0
                 for yaw in yaws:
-                    R = _stand_R(spec, float(yaw))
-                    T_base_obj = np.eye(4)
-                    T_base_obj[:3, :3] = R
-                    T_base_obj[:3, 3] = np.array([x, y, top_z_w + _bottom_offset(spec, R)]) - base_off
+                    R = _stand_R(spec, float(yaw))  # world-frame stand rotation + yaw
+                    T_w_obj = np.eye(4)
+                    T_w_obj[:3, :3] = R
+                    T_w_obj[:3, 3] = (x, y, top_z_w + _bottom_offset(spec, R))
+                    T_base_obj = T_base_w @ T_w_obj  # rotation AND translation re-expressed
                     T_grasp = T_base_obj @ T_obj_tcp
                     T_hover = T_grasp.copy()
                     T_hover[2, 3] += config.PICK_HOVER_M

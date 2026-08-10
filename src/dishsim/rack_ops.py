@@ -121,9 +121,23 @@ def slide_arm_path(
             T_tcp = T_engage.copy()
             T_tcp[:3, 3] = T_engage[:3, 3] + axis * delta
             sols = ik_wrist3_all(T_tcp @ T_w3_tcp_inv, q_seed=q_prev)
+            # the DRIVE lags its ramp: the real rack rides anywhere between the target
+            # extension and RACK_LAG_BAND_M behind it (toward the start) — the arm must
+            # clear the moved rack across that whole band, not at the nominal pose only
+            lag = math.copysign(min(config.RACK_LAG_BAND_M, abs(delta)), -(e1 - e0))
             best = None
             for q in sorted(sols, key=lambda q: float(np.abs(q - q_prev).max())):
-                if not world.in_collision(q):
+                if i > 0 and float(np.abs(q - q_prev).max()) > config.SLIDE_MAX_STEP_RAD:
+                    break  # sorted by closeness: everything after is farther still
+                if world.in_collision(q):
+                    continue
+                clear = True
+                for d_chk in (delta, delta + lag):
+                    world.set_static_offset(body, d_chk)
+                    if _arm_hits_moved_rack(world, body):
+                        clear = False
+                        break
+                if clear:
                     best = q
                     break
             if best is None:
@@ -131,5 +145,35 @@ def slide_arm_path(
             path.append(best)
             q_prev = best
     finally:
+        world.set_static_offset(body, 0.0)
         world.set_static_enabled(body, True)
     return np.array(path)
+
+
+#: arm links that must clear the MOVED rack during the slide (the gripper cluster is exempt
+#: by design — it wraps the handle; the pads press it)
+_SLIDE_ARM_LINKS = ("forearm_link", "wrist_1_link", "wrist_2_link", "wrist_3_link")
+
+
+def _arm_hits_moved_rack(world, body: str) -> bool:
+    """Distal arm links vs the manager-disabled moving rack, at the arm's LAST-POSED config.
+
+    ``slide_arm_path`` drops the moved rack from the manager because the wrapping gripper
+    contacts its handle by design — but the forearm/wrist links get no such license. v1's
+    200 mm pull never swept the rack's raised rear rim under the wrist; the Bosch 560 mm
+    pull does (measured: 103.8 N on ``wrist_2_link`` in the first live episode), so the
+    slide gate checks these pairs explicitly against the per-waypoint rack pose.
+    """
+    import fcl  # noqa: PLC0415
+
+    rack_objs = world._static_objs.get(body, ())
+    margin = float(config.SLIDE_ARM_CLEARANCE_M)
+    for link in _SLIDE_ARM_LINKS:
+        arm_obj = world._arm.get(link)
+        if arm_obj is None:
+            continue
+        for so in rack_objs:
+            d = fcl.distance(arm_obj, so, fcl.DistanceRequest(), fcl.DistanceResult())
+            if d < margin:  # touching OR within the tracking-error margin
+                return True
+    return False

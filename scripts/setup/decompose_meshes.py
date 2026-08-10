@@ -41,13 +41,21 @@ from dishsim.geometry import coacd_dir_for, load_manifest  # noqa: E402
 
 parser = argparse.ArgumentParser(description="CoACD decomposition of the collision cache.")
 parser.add_argument("--force", action="store_true", help="Re-decompose even if outputs exist.")
+parser.add_argument("--placement", type=str, default=None,
+                    help="Named base placement (see config.BASE_PLACEMENTS); default: the machine's.")
+parser.add_argument("--machine", type=str, default=None,
+                    help="Machine name (see config.MACHINES); default: the v1 baseline.")
 parser.add_argument("--object", type=str, default="mug", help="Carried object class (see config.OBJECTS).")
 parser.add_argument("--scenario", type=str, default="both_out",
                     help="Rack-state scenario (see config.SCENARIOS).")
 args = parser.parse_args()
 
+if args.machine:
+    config.apply_machine(args.machine)  # first: it resets scenario + base placement
 config.set_active_object(args.object)
 config.apply_scenario(args.scenario)
+if args.placement:
+    config.apply_base_placement(args.placement)  # after machine/scenario — they reset it
 CACHE = config.scenario_cache_dir()
 
 FAILURES: list[str] = []
@@ -76,7 +84,7 @@ def decompose(name: str, mesh_rel: str) -> str | None:
 
         # The alignment gate runs on EVERY invocation (it is cheap): a failed run must never
         # self-heal into a "cached" PASS, and a partially written dir must never be accepted.
-        parts = rack_gen.build_rack(config.RACK_GEN[name])
+        parts = rack_gen.build(config.RACK_GEN[name])  # dispatcher: tray or wire rack
         mesh = trimesh.load(os.path.join(CACHE, mesh_rel), force="mesh")
         ref = rack_gen.merged_mesh(parts)
         dev = float(np.abs(np.asarray(mesh.bounds) - np.asarray(ref.bounds)).max())
@@ -275,7 +283,13 @@ def main() -> None:
             if out is None:  # alignment gate failed — already recorded, skip dependent steps
                 continue
             if name in config.RACK_GEN:
-                rack_probes(name, out)
+                if config.RACK_GEN[name].get("builder") == "tray":
+                    # the wire-rack probes (mug zones, tine gaps) are meaningless on the
+                    # flat-lay cutlery tray; its geometry is covered by the flat_lay slot
+                    # derivation tests and the goal funnel
+                    print(f"[INFO] {name}: tray builder — wire-rack probes skipped")
+                else:
+                    rack_probes(name, out)
             render_overlay(name, entry["mesh"], out, os.path.join(media_dir, f"overlay_{name}.png"))
     out = decompose("object", manifest["object"]["mesh"])
     render_overlay("object", manifest["object"]["mesh"], out, os.path.join(media_dir, "overlay_object.png"))

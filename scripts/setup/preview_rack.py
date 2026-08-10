@@ -25,7 +25,7 @@ from dishsim import config, rack_gen  # noqa: E402
 def main() -> None:
     media_dir = os.path.join(PROJECT_ROOT, "media", "collision_world")
     for body, params in config.RACK_GEN.items():
-        parts = rack_gen.build_rack(params)
+        parts = rack_gen.build(params)  # dispatcher: tray or wire rack
         merged = rack_gen.merged_mesh(parts)
         mn, mx = merged.bounds
         out = os.path.join(media_dir, f"rack_gen_preview_{body}.png")

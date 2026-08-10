@@ -40,12 +40,19 @@ from dishsim import base_sweep, config  # noqa: E402
 from dishsim.base_sweep import FRONT, Candidate  # noqa: E402
 
 parser = argparse.ArgumentParser(description="Sweep robot base poses against the cached scene.")
-parser.add_argument("--x_range", type=float, nargs=2, default=(-0.15, 0.30),
+parser.add_argument("--machine", type=str, default=None,
+                    help="Machine name (see config.MACHINES); default: the v1 baseline. "
+                         "Selecting bosch800 also switches the default ranges to its "
+                         "elevated/side-mount region and adds the height axis.")
+parser.add_argument("--x_range", type=float, nargs=2, default=None,
                     help="World-x range of the base origin [m].")
-parser.add_argument("--y_range", type=float, nargs=2, default=(-0.75, 0.10),
+parser.add_argument("--y_range", type=float, nargs=2, default=None,
                     help="World-y range of the base origin [m].")
-parser.add_argument("--yaw_range", type=float, nargs=2, default=(-30.0, 75.0),
+parser.add_argument("--yaw_range", type=float, nargs=2, default=None,
                     help="Base z-yaw range [deg] (positive turns +x toward the counter side).")
+parser.add_argument("--z_range", type=float, nargs=2, default=None,
+                    help="Base HEIGHT range [m] (pedestal-top). Omit for the v1 fixed height.")
+parser.add_argument("--z_step", type=float, default=0.15, help="Height pitch [m].")
 parser.add_argument("--xy_step", type=float, default=0.075, help="Coarse grid pitch [m].")
 parser.add_argument("--yaw_step", type=float, default=22.5, help="Coarse yaw pitch [deg].")
 parser.add_argument("--stage2_top", type=int, default=48,
@@ -55,11 +62,33 @@ parser.add_argument("--final_top", type=int, default=6,
 parser.add_argument("--no_refine", action="store_true",
                     help="Skip the half-step neighborhood refinement around the leader.")
 parser.add_argument("--procs", type=int, default=8, help="Worker processes.")
-parser.add_argument("--out_dir", type=str,
-                    default=os.path.join(PROJECT_ROOT, "results", "base_sweep"))
-parser.add_argument("--media_dir", type=str,
-                    default=os.path.join(PROJECT_ROOT, "media", "base_sweep"))
+parser.add_argument("--out_dir", type=str, default=None)
+parser.add_argument("--media_dir", type=str, default=None)
 args = parser.parse_args()
+
+if args.machine:
+    config.apply_machine(args.machine)
+
+# Per-machine default sweep regions. v1: the measured 420-candidate study's region around
+# the front placement. Bosch: the human-loader region — beside and behind the open door
+# (door runway x 0.13-0.87 at y ±0.30), base up to counter height, yawed toward the machine.
+if config.MACHINE == "bosch800":
+    _DEFAULTS = {"x_range": (-0.20, 0.70), "y_range": (-0.90, -0.35),
+                 "yaw_range": (0.0, 90.0), "z_range": (0.25, 1.00)}
+    _SUBDIR = "bosch800"
+else:
+    _DEFAULTS = {"x_range": (-0.15, 0.30), "y_range": (-0.75, 0.10),
+                 "yaw_range": (-30.0, 75.0), "z_range": None}
+    _SUBDIR = None
+for _k, _v in _DEFAULTS.items():
+    if getattr(args, _k) is None:
+        setattr(args, _k, _v)
+if args.out_dir is None:
+    args.out_dir = os.path.join(PROJECT_ROOT, "results", "base_sweep",
+                                *([_SUBDIR] if _SUBDIR else []))
+if args.media_dir is None:
+    args.media_dir = os.path.join(PROJECT_ROOT, "media", "base_sweep",
+                                  *([_SUBDIR] if _SUBDIR else []))
 
 _CTX = None
 
@@ -86,19 +115,27 @@ def _grid() -> list[Candidate]:
     xs = np.arange(args.x_range[0], args.x_range[1] + 1e-9, args.xy_step)
     ys = np.arange(args.y_range[0], args.y_range[1] + 1e-9, args.xy_step)
     yaws = np.arange(args.yaw_range[0], args.yaw_range[1] + 1e-9, args.yaw_step)
-    return [Candidate(round(float(x), 4), round(float(y), 4), round(float(w), 2))
-            for x in xs for y in ys for w in yaws]
+    if args.z_range is None:
+        zs: list[float | None] = [None]  # v1: height pinned to the placement's
+    else:
+        zs = [round(float(z), 3)
+              for z in np.arange(args.z_range[0], args.z_range[1] + 1e-9, args.z_step)]
+    return [Candidate(round(float(x), 4), round(float(y), 4), round(float(w), 2), z)
+            for x in xs for y in ys for w in yaws for z in zs]
 
 
 def _neighborhood(cand: Candidate) -> list[Candidate]:
-    """Half-step neighborhood around a candidate (refinement grid)."""
+    """Half-step neighborhood around a candidate (refinement grid; z refines too when swept)."""
     dxy, dyaw = args.xy_step / 2.0, args.yaw_step / 2.0
+    dzs = (0.0,) if cand.z is None else (-args.z_step / 2.0, 0.0, args.z_step / 2.0)
     out = []
     for dx in (-dxy, 0.0, dxy):
         for dy in (-dxy, 0.0, dxy):
             for dw in (-dyaw, 0.0, dyaw):
-                out.append(Candidate(round(cand.x + dx, 4), round(cand.y + dy, 4),
-                                     round(cand.yaw_deg + dw, 2)))
+                for dz in dzs:
+                    z = None if cand.z is None else round(cand.z + dz, 3)
+                    out.append(Candidate(round(cand.x + dx, 4), round(cand.y + dy, 4),
+                                         round(cand.yaw_deg + dw, 2), z))
     return out
 
 

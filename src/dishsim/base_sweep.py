@@ -62,7 +62,7 @@ import trimesh
 
 from . import config, rack_ops
 from .collision_world import CollisionWorld, _fcl_convex, _tf
-from .geometry import DISHWASHER_BODIES
+from .geometry import dishwasher_bodies
 from .placement import SlotFrame, derive_slots, goal_configs
 from .transforms import T_inv, make_T
 from .ur5e_kin import ik_wrist3_all
@@ -90,24 +90,34 @@ def _yaw_quat(yaw_deg: float) -> tuple[float, float, float, float]:
 
 @dataclass(frozen=True)
 class Candidate:
-    """A candidate base placement: world x/y of the base origin plus a pure z-yaw [deg].
+    """A candidate base placement: world x/y of the base origin, a pure z-yaw [deg], and an
+    optional base height z [m].
 
-    Base height is pinned to the front placement's (``ROBOT_BASE_POS_W[2]``): a height axis
-    would change the pedestal box geometry, which re-expression cannot model.
+    ``z=None`` pins the height to the active placement's (``ROBOT_BASE_POS_W[2]``) — the v1
+    behavior, byte-stable. A non-None z changes the pedestal COLUMN geometry, which pure
+    re-expression cannot model; :meth:`SweepContext.rebase_all` therefore additionally
+    re-expresses the ground static and swaps the baked pedestal for a candidate-height
+    column (v2, for the elevated/side mounts of the Bosch study).
     """
 
     x: float
     y: float
     yaw_deg: float
+    z: float | None = None
+
+    @property
+    def z_eff(self) -> float:
+        """Effective base height [m] (the active placement's when ``z`` is None)."""
+        return float(config.ROBOT_BASE_POS_W[2] if self.z is None else self.z)
 
     @property
     def key(self) -> str:
-        return f"x{self.x:+.4f}_y{self.y:+.4f}_yaw{self.yaw_deg:+.2f}"
+        suffix = "" if self.z is None else f"_z{self.z:+.3f}"
+        return f"x{self.x:+.4f}_y{self.y:+.4f}_yaw{self.yaw_deg:+.2f}{suffix}"
 
     def T_w_base(self) -> np.ndarray:
         """World pose of the candidate base frame, shape [4, 4]."""
-        z = config.ROBOT_BASE_POS_W[2]
-        return make_T((self.x, self.y, z), _yaw_quat(self.yaw_deg))
+        return make_T((self.x, self.y, self.z_eff), _yaw_quat(self.yaw_deg))
 
     def T_delta(self) -> np.ndarray:
         """Re-expression transform new-base <- old-base, shape [4, 4]."""
@@ -115,21 +125,44 @@ class Candidate:
         return T_inv(self.T_w_base()) @ T_w_b0
 
     def to_json(self) -> dict:
-        return {"x": self.x, "y": self.y, "yaw_deg": self.yaw_deg}
+        d = {"x": self.x, "y": self.y, "yaw_deg": self.yaw_deg}
+        if self.z is not None:
+            d["z"] = self.z
+        return d
 
     @staticmethod
     def from_json(d: dict) -> "Candidate":
-        return Candidate(float(d["x"]), float(d["y"]), float(d["yaw_deg"]))
+        z = d.get("z")
+        return Candidate(float(d["x"]), float(d["y"]), float(d["yaw_deg"]),
+                         None if z is None else float(z))
 
 
 #: The front placement expressed as a candidate (identity re-expression).
 FRONT = Candidate(0.0, 0.0, 0.0)
 
 
+def _reference_class() -> str:
+    """Class carried by the pick/rack-gate worlds (hand empty — only the cache identity).
+
+    v1: the frozen mug. Bosch: the cup — the legacy Y-up mug's pinch gate fails extraction
+    at any base reference except the frozen v1 spot (measured 2026-08-10: pad force 0.81 N
+    at two different shifted references, in-band at (0, 0, 0.25); cup/tumbler seat
+    correctly everywhere). Known limitation to root-cause before the mug joins v2 studies.
+    """
+    return "cup" if config.MACHINE == "bosch800" else "mug"
+
+
 def funnel_combos() -> list[tuple[str, str]]:
     """The (state, class) pairs the sweep scores — exactly the baked combos that carry the
-    success-bar counts."""
+    active machine's success-bar counts."""
     demo = [k for k, s in config.OBJECTS.items() if s.robot_demo]
+    if config.MACHINE == "bosch800":
+        # Bosch bar: lower-extended (placement), middle-extended (middle_out drinkware),
+        # third-rack flat-lay (third_out fork). The mug sits out (see _reference_class).
+        combos = [("placement", cls) for cls in demo if cls != "mug"]
+        combos += [("middle_out", c) for c in ("cup", "tumbler")]
+        combos += [("third_out", "fork")]
+        return combos
     combos = [("placement", cls) for cls in demo]
     combos += [("placement_open", "plate"), ("placement_open", "bowl")]
     return combos
@@ -149,7 +182,7 @@ def rebase_statics(world: CollisionWorld, statics0: dict[str, np.ndarray],
     ``statics0`` holds the cached (front-placement) ``T_base_body`` per static; passing an
     identity ``T_delta`` restores the world exactly.
     """
-    for name in DISHWASHER_BODIES:
+    for name in dishwasher_bodies():
         if name in statics0:
             world.set_static_transform(name, T_delta @ statics0[name])
 
@@ -176,21 +209,22 @@ class SweepContext:
 
         for state, cls in funnel_combos():
             world = self._load(state, cls, attached=True,
-                               merged=config.OBJECTS[cls].placement.mode not in _THIN_MODES)
+                               merged=config.effective_placement_mode(cls) not in _THIN_MODES)
             key = (state, cls)
             self.worlds[key] = world
             self.statics0[key] = self._statics(world)
             self.slots0[key] = derive_slots(config.scenario_cache_dir(state, object_name=cls))
 
         # pick world: the machine and nothing carried — the state a pick happens in
-        self.pick_world = self._load("placement", "mug", attached=False, merged=True)
+        ref = _reference_class()
+        self.pick_world = self._load("placement", ref, attached=False, merged=True)
         self.pick_statics0 = self._statics(self.pick_world)
 
         # rack-gate worlds: the two robot-facing initial states, nothing carried
         self.rack_worlds: dict[str, CollisionWorld] = {}
         self.rack_statics0: dict[str, dict[str, np.ndarray]] = {}
         for scenario in config.SCENARIOS:
-            world = self._load(scenario, "mug", attached=False, merged=True)
+            world = self._load(scenario, ref, attached=False, merged=True)
             self.rack_worlds[scenario] = world
             self.rack_statics0[scenario] = self._statics(world)
 
@@ -200,7 +234,7 @@ class SweepContext:
         for state, world in (("placement", self.pick_world),
                              *self.rack_worlds.items()):
             objs = []
-            for name in DISHWASHER_BODIES:
+            for name in dishwasher_bodies():
                 entry = world.manifest["statics"].get(name)
                 if entry is None:
                     continue
@@ -216,7 +250,7 @@ class SweepContext:
             os.path.join(self.pick_world.cache_dir, base_entry["mesh"]), force="mesh"
         )
 
-        config.set_active_object("mug")
+        config.set_active_object(ref)
 
     @staticmethod
     def _load(state: str, cls: str, *, attached: bool, merged: bool) -> CollisionWorld:
@@ -234,13 +268,36 @@ class SweepContext:
     # -- per-candidate re-posing ---------------------------------------------------------------
 
     def rebase_all(self, cand: Candidate) -> None:
-        """Re-pose every world's machine statics for ``cand`` (pedestal/ground stay put)."""
+        """Re-pose every world's machine statics for ``cand``.
+
+        At the baseline height (``cand.z is None``) the pedestal and ground keep their cached
+        base-frame poses — the v1 behavior, byte-stable. At a non-baseline height the ground
+        is world-anchored like the machine (re-expressed by ``T_delta``) and the baked
+        25 cm pedestal is disabled in favor of a full candidate-height support column from
+        the base plane down to the floor (an ``add_object`` extra, checked against every
+        movable).
+        """
         T_delta = cand.T_delta()
+        z0 = float(config.ROBOT_BASE_POS_W[2])
+        height_axis = cand.z is not None and abs(cand.z_eff - z0) > 1e-9
         pairs = [*((self.worlds[k], self.statics0[k]) for k in self.worlds),
                  (self.pick_world, self.pick_statics0),
                  *((self.rack_worlds[s], self.rack_statics0[s]) for s in self.rack_worlds)]
         for world, statics0 in pairs:
             rebase_statics(world, statics0, T_delta)
+            if "ground" in statics0:
+                world.set_static_transform(
+                    "ground", (T_delta @ statics0["ground"]) if height_axis else statics0["ground"])
+            if "pedestal" in statics0:
+                world.set_static_enabled("pedestal", not height_axis)
+            if world.has_object("pedestal_column"):
+                world.remove_object("pedestal_column")
+            if height_axis:
+                col_h = cand.z_eff
+                col = trimesh.creation.box(
+                    extents=(config.PEDESTAL_SIZE[0], config.PEDESTAL_SIZE[1], col_h))
+                T_base_col = make_T((0.0, 0.0, -col_h / 2.0), (0.0, 0.0, 0.0, 1.0))
+                world.add_object("pedestal_column", [col], T_base_col)
 
     def slots_for(self, cand: Candidate, state: str, cls: str) -> list[SlotFrame]:
         """The (state, class) slots re-expressed in the candidate base frame."""
@@ -263,9 +320,14 @@ def gate_static_clearance(ctx: SweepContext, cand: Candidate) -> bool:
     a pedestal *inside* those volumes — where no sane base stands anyway.
     """
     T_w_base = cand.T_w_base()
-    T_w_ped = T_w_base @ make_T((0.0, 0.0, -config.PEDESTAL_SIZE[2] / 2.0), (0, 0, 0, 1))
+    # full support column from the base plane to the floor (candidate height, not the
+    # baked pedestal's — at the baseline height the two coincide)
+    col_h = cand.z_eff
+    col_mesh = trimesh.creation.box(
+        extents=(config.PEDESTAL_SIZE[0], config.PEDESTAL_SIZE[1], col_h))
+    T_w_ped = T_w_base @ make_T((0.0, 0.0, -col_h / 2.0), (0, 0, 0, 1))
     probes = [
-        fcl.CollisionObject(_fcl_convex(ctx.pedestal_mesh), _tf(T_w_ped)),
+        fcl.CollisionObject(_fcl_convex(col_mesh), _tf(T_w_ped)),
         fcl.CollisionObject(_fcl_convex(ctx.base_link_mesh), _tf(T_w_base)),
     ]
     for objs in ctx.machine_objs_w.values():
@@ -280,7 +342,8 @@ def gate_static_clearance(ctx: SweepContext, cand: Candidate) -> bool:
 def gate_home_free(ctx: SweepContext) -> bool:
     """HOME_Q collision-free with the mug carried and with the hand empty (after re-basing)."""
     home = np.array(config.HOME_Q)
-    return not ctx.worlds[("placement", "mug")].in_collision(home) and not ctx.pick_world.in_collision(home)
+    ref = _reference_class()
+    return not ctx.worlds[("placement", ref)].in_collision(home) and not ctx.pick_world.in_collision(home)
 
 
 def gate_rack(ctx: SweepContext, cand: Candidate, scenario: str) -> bool:
@@ -502,7 +565,7 @@ def score_candidate(ctx: SweepContext, cand: Candidate, level: str) -> dict:
         return card
     card["feasible"] = True
 
-    combos = knobs["combos"] or funnel_combos()
+    combos = [c for c in (knobs["combos"] or funnel_combos()) if c in ctx.worlds]
     funnels = {}
     for state, cls in combos:
         funnels[f"{state}/{cls}"] = funnel_feasible_slots(
@@ -520,6 +583,35 @@ def score_candidate(ctx: SweepContext, cand: Candidate, level: str) -> dict:
             return 0
         return len(set(a["feasible"]) & set(b["feasible"]))
 
+    card["pick"] = pick_coverage(ctx, cand, step=knobs["pick_step"], n_yaws=knobs["pick_yaws"],
+                                 classes=knobs["pick_classes"])
+
+    if config.MACHINE == "bosch800":
+        # Bosch A2 bar: destinations per rack tier + the pick band (docs plan §A2)
+        demo = [k for k, s in config.OBJECTS.items() if s.robot_demo]
+        counts = {
+            "lower_union": sum(n_feasible("placement", c) for c in demo),
+            "middle_union": sum(n_feasible("middle_out", c) for c in ("cup", "tumbler")),
+            "third_flat": n_feasible("third_out", "fork"),
+            "floor_common": common_floor(),
+        }
+        card["counts"] = counts
+        criteria = {
+            "lower": counts["lower_union"] >= 1,
+            "middle": counts["middle_union"] >= 1,
+            "third_flat": counts["third_flat"] >= 1,
+            "pick_band": card["pick"]["depth_x_m"] > CRITERIA["pick_depth_m"],
+        }
+        card["criteria"] = criteria
+        card["n_criteria"] = int(sum(criteria.values()))
+        card["weighted"] = float(
+            2.0 * counts["lower_union"] + 3.0 * counts["middle_union"]
+            + 2.0 * counts["third_flat"] + 1.0 * counts["floor_common"]
+            + 10.0 * card["pick"]["depth_x_m"] + 0.02 * card["pick"]["union_cells"]
+            + (3.0 if card["gates"].get("rack_push") else 0.0)
+        )
+        return card
+
     counts = {
         "plate": max(n_feasible("placement", "plate"), n_feasible("placement_open", "plate")),
         "bowl": max(n_feasible("placement", "bowl"), n_feasible("placement_open", "bowl")),
@@ -530,9 +622,6 @@ def score_candidate(ctx: SweepContext, cand: Candidate, level: str) -> dict:
         "floor_mug": n_feasible("placement", "mug"),
     }
     card["counts"] = counts
-
-    card["pick"] = pick_coverage(ctx, cand, step=knobs["pick_step"], n_yaws=knobs["pick_yaws"],
-                                 classes=knobs["pick_classes"])
 
     criteria = {
         "plates": counts["plate"] >= CRITERIA["plates"],

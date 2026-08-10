@@ -66,14 +66,15 @@ config.apply_scenario("both_out")  # racks extended for loading; fill targets us
 from dishsim import fill_plan  # noqa: E402
 from dishsim import scene as dscene  # noqa: E402
 from dishsim.media import CameraRig, VideoWriter  # noqa: E402
-from dishsim.transforms import T_to_pos_quat  # noqa: E402
+from dishsim.transforms import T_to_pos_quat, make_T  # noqa: E402
 
 RACK_JOINTS = ("PrismaticJoint_dishwasher_2_down", "PrismaticJoint_dishwasher_2_up")
 
 
 def pose_w_tensor(T_base: np.ndarray, device, hover: float = 0.0) -> torch.Tensor:
-    pos, quat = T_to_pos_quat(T_base)
-    pos = np.asarray(pos) + np.asarray(config.ROBOT_BASE_POS_W)
+    # full base transform: position AND quaternion compose with the (possibly yawed) base
+    T_w_base = make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W)
+    pos, quat = T_to_pos_quat(T_w_base @ np.asarray(T_base, dtype=float))
     pos[2] += hover
     return torch.tensor(np.concatenate([pos, quat])[None], dtype=torch.float32, device=device)
 
@@ -158,9 +159,9 @@ def main() -> None:
         drift_p = float(np.linalg.norm(hist[-1][0] - hist[0][0]))
         dq = abs(float(np.dot(hist[-1][1], hist[0][1])))
         drift_deg = float(np.degrees(2.0 * np.arccos(np.clip(dq, -1.0, 1.0))))
-        # target deviation: settled pose vs planned pose
-        T_target_w = it.T_base_obj.copy()
-        dev_p = float(np.linalg.norm(hist[-1][0] - (T_target_w[:3, 3] + np.asarray(config.ROBOT_BASE_POS_W))))
+        # target deviation: settled pose vs planned pose (lifted through the full base transform)
+        T_target_w = make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W) @ it.T_base_obj
+        dev_p = float(np.linalg.norm(hist[-1][0] - T_target_w[:3, 3]))
         stable = drift_p < 0.005 and drift_deg < 3.0 and dev_p < 0.06
         results[it.item_id] = {
             "name": it.name, "zone": it.zone, "rack": it.rack,

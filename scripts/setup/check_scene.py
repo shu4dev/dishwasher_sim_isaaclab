@@ -370,7 +370,9 @@ def main() -> None:
         rack_pos, rack_quat = body_pose_np(scene["dishwasher"], "E_shelf_1_04")
         T_w_rack = make_T(rack_pos, rack_quat)
         pts_w = (T_w_rack @ pts_body.T).T[:, :3]
-        shoulder_w = np.array(config.ROBOT_BASE_POS_W) + np.array([0.0, 0.0, 0.1625])
+        # shoulder sits 0.1625 m above the base origin along base z; lift it to the world
+        # through the full base transform (a yawed base rotates the offset too)
+        shoulder_w = dscene.base_to_world((0.0, 0.0, 0.1625))
         dists = np.linalg.norm(pts_w - shoulder_w, axis=1)
         frac = float((dists < config.UR5E_REACH_M).mean())
         print(

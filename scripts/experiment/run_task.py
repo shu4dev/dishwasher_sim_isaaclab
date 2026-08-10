@@ -51,6 +51,10 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 parser = argparse.ArgumentParser(description="Multi-object pick-and-place episodes.")
+parser.add_argument("--machine", type=str, default=None,
+                    help="Machine name (see config.MACHINES); default: the v1 baseline.")
+parser.add_argument("--placement", type=str, default=None,
+                    help="Named base placement (see config.BASE_PLACEMENTS); default: the machine's.")
 parser.add_argument("--seed", type=int, default=0, help="Layout seed (reproduces the scene).")
 parser.add_argument("--n_objects", type=int, default=None, help="Objects per episode.")
 parser.add_argument("--classes", type=str, default=None,
@@ -94,6 +98,11 @@ from isaaclab.sim import SimulationContext  # noqa: E402
 from isaaclab_physx.physics import PhysxCfg  # noqa: E402
 
 from dishsim import config  # noqa: E402
+
+if args_cli.machine:
+    config.apply_machine(args_cli.machine)  # first: it resets scenario + base placement
+if args_cli.placement:
+    config.apply_base_placement(args_cli.placement)
 
 def _resolve_scenario() -> str:
     """Machine state from --scenario, per-rack metres, or config — resolved before Kit boots."""
@@ -156,7 +165,7 @@ from dishsim.task.episode import EpisodeResult, write_episode  # noqa: E402
 from dishsim.task.motion import MotionService  # noqa: E402
 from dishsim.task.primitives import GraspProfile, PickPlace  # noqa: E402
 from dishsim.task.sequencer import TaskItem, TaskSequencer  # noqa: E402
-from dishsim.transforms import T_inv, make_T  # noqa: E402
+from dishsim.transforms import T_inv, T_to_pos_quat, make_T  # noqa: E402
 from dishsim.ur5e_kin import ik_wrist3_all  # noqa: E402
 
 TRIAL_SCHEMA_VERSION = 1
@@ -239,15 +248,17 @@ def main() -> int:
     # a state that has not been baked for these classes cannot be planned against. Check every
     # cache the run will open BEFORE Kit does any work, and say exactly how to create what is
     # missing — a bare FileNotFoundError minutes in is a poor substitute.
-    # The mug is checked unconditionally: the machine world is loaded from it whatever the pool.
+    # The reference class is checked unconditionally: the machine world is loaded from it
+    # whatever the pool (config.reference_class: mug on v1, cup on the Bosch).
     #
     # An episode with a rack action spans TWO states and therefore two sets of caches. The rack
     # phase plans in the START state but carries nothing, so it needs only the scenario-level
     # (mug-keyed) machine cache; every pick and place happens after the action and needs the
     # per-class caches of the POST state. Checking both against one state is what would send you
     # to bake `objects/cup/both_in`, which nothing ever reads.
-    wanted = [(SCENARIO, ["mug"])] if RACK_ACTION is not None else []
-    wanted.append((POST_STATE, list(dict.fromkeys(["mug", *classes_pool]))))
+    ref = config.reference_class()
+    wanted = [(SCENARIO, [ref])] if RACK_ACTION is not None else []
+    wanted.append((POST_STATE, list(dict.fromkeys([ref, *classes_pool]))))
     missing = []
     for state, names in wanted:
         for name in names:
@@ -276,8 +287,11 @@ def main() -> int:
     # values), so this only moves the hash the loader checks, never the machine.
     rack_world = None
     if RACK_ACTION is not None:
-        rack_cache = config.scenario_cache_dir(SCENARIO, object_name="mug")
-        rack_world = CollisionWorld(cache_dir=rack_cache, self_check=True, object_attached=False)
+        rack_cache = config.scenario_cache_dir(SCENARIO, object_name=config.reference_class())
+        # the reference-class cache hashes against ITS object being active (mug on v1 is the
+        # module default and matched implicitly; the Bosch reference is the cup)
+        with config.active_object(config.reference_class()):
+            rack_world = CollisionWorld(cache_dir=rack_cache, self_check=True, object_attached=False)
         print(f"[INFO] rack world:      {os.path.relpath(rack_cache, PROJECT_ROOT)} ({SCENARIO})")
         config.apply_scenario(POST_STATE)
 
@@ -287,9 +301,10 @@ def main() -> int:
     # that only stand things on the rack floor.
     merged = not any(config.OBJECTS[c].placement.mode in ("basket_drop", "plate_slot")
                      for c in classes_pool)
-    cache_dir = config.scenario_cache_dir(POST_STATE, object_name="mug")
-    world = CollisionWorld(cache_dir=cache_dir, self_check=True, object_attached=False,
-                           merged_cluster=merged)
+    cache_dir = config.scenario_cache_dir(POST_STATE, object_name=config.reference_class())
+    with config.active_object(config.reference_class()):
+        world = CollisionWorld(cache_dir=cache_dir, self_check=True, object_attached=False,
+                               merged_cluster=merged)
     if not merged:
         print("[INFO] per-piece payload cluster (a thin-insertion mode is in the pool)")
     T_w3_tcp = np.array(world.manifest["t_wrist3_tcp"])
@@ -620,6 +635,14 @@ def main() -> int:
             # it. Better one honest error than a run of quietly invalid placements.
             bad = next(o for o in rack_phase.outcomes if not o.ok)
             rack_detail = f"{bad.stage}: {bad.detail}"
+        else:
+            # World-handoff seam: the disengage was validated in the RACK world (rack at its
+            # cached, pre-action pose), so the parked arm can sit inside the EXTENDED rack's
+            # hulls in the pick world — the first pick then dies with an uninitializable
+            # start tree (measured: OMPL rejecting in 2.4 ms). Route through HOME, which the
+            # mount sweep verified collision-free in the post-action world.
+            how = pick_place.return_home(phase="post-rack-home", settle_steps=30)
+            print(f"[INFO] post-rack home return: {how}")
 
     if rack_detail is not None:
         result = EpisodeResult(episode_id=episode_id, seed=int(args_cli.seed), classes=list(draw),
@@ -775,12 +798,12 @@ def _assign_slots(items, slots_by_class, goal_sets, slot_names_by_class) -> dict
 
 
 def _pose_w(item):
-    """Layout pose -> world (position, XYZW quaternion) for spawning."""
-    from scipy.spatial.transform import Rotation  # noqa: PLC0415
+    """Layout pose -> world (position, XYZW quaternion) for spawning.
 
-    pos_w = item.T_base_obj[:3, 3] + np.asarray(config.ROBOT_BASE_POS_W)
-    quat = Rotation.from_matrix(item.T_base_obj[:3, :3]).as_quat()  # XYZW
-    return pos_w, quat
+    Full base transform: a yawed base rotates the spawn pose too, not just its position.
+    """
+    T_w_base = make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W)
+    return T_to_pos_quat(T_w_base @ item.T_base_obj)  # XYZW
 
 
 class _Ctx:
@@ -848,6 +871,7 @@ class _SceneAccess:
         self.peer_ids = {it.item_id for it in items}
         self._gripper_bodies = gripper_bodies
         self.T_base_w, self.T_w3_tcp = T_base_w, T_w3_tcp
+        self.T_w_base = T_inv(T_base_w)  # base -> world, for writing poses back to the sim
         self.profiles = profiles
 
     def object_pose_base(self, item_id: str) -> np.ndarray:
@@ -873,13 +897,12 @@ class _SceneAccess:
 
     def place_in_gripper(self, item_id: str, arm_q, object_class: str) -> None:
         from dishsim.ur5e_kin import fk_wrist3  # noqa: PLC0415
-        from scipy.spatial.transform import Rotation  # noqa: PLC0415
 
         T_base_obj = (fk_wrist3(np.asarray(arm_q, dtype=float)) @ self.T_w3_tcp
                       @ self.profiles[object_class].T_tcp_obj)
         obj = self.scene[item_id]
-        pos_w = T_base_obj[:3, 3] + np.asarray(config.ROBOT_BASE_POS_W)
-        quat = Rotation.from_matrix(T_base_obj[:3, :3]).as_quat()  # XYZW, as everywhere here
+        # full base transform: position AND quaternion compose with the (possibly yawed) base
+        pos_w, quat = T_to_pos_quat(self.T_w_base @ T_base_obj)  # XYZW, as everywhere here
         pose = torch.tensor(np.concatenate([pos_w, quat]), dtype=torch.float32,
                             device=obj.data.root_pos_w.torch.device).unsqueeze(0)
         obj.write_root_pose_to_sim_index(root_pose=pose)

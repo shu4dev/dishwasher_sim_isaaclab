@@ -125,3 +125,112 @@ def test_evaluate_placement_basket_inside_outside(rack_T):
     T_out = T.copy()
     T_out[1, 3] += 0.08  # outside the bay
     assert not placement.evaluate_placement(slot, T_out)["ok"]
+
+
+# ---------------------------------------------------------------------------------------------
+# flat_lay_third (Bosch third-rack tray; apply_machine mutates config globals -> fixture)
+# ---------------------------------------------------------------------------------------------
+
+THIRD = "E_shelf_third"
+
+
+@pytest.fixture()
+def bosch_third(monkeypatch):
+    """Bosch machine + a synthetic third-rack transform; restores the v1 baseline."""
+    config.apply_machine("bosch800")
+    T = np.eye(4)
+    T[:3, 3] = (0.5, -0.2, 0.3)
+    monkeypatch.setattr(placement, "_third_rack_T", lambda cache_dir: T)
+    yield T
+    config.apply_machine(config.MACHINE_BASELINE_NAME)
+
+
+def test_flat_lay_slots_inside_tray(bosch_third):
+    """Slot columns sit at each tray zone's x-center (long axis along rack x), rows inside
+    the tray footprint, origins ON the zone's floor plane — channel slots exactly
+    ``channel.drop`` below the wing plane."""
+    config.set_active_object("fork")
+    slots = placement.derive_flat_lay_slots("unused")
+    p = config.RACK_GEN[THIRD]
+    zones = {name: (span, z) for name, span, z in rack_gen.tray_zones(p)}
+    assert {s.params["zone"] for s in slots} == {"wing_l", "channel", "wing_r"}
+    z_wing = rack_gen.tray_floor_z(p)
+    for s in slots:
+        assert s.mode == "flat_lay_third" and s.rack == "third" and s.source == "derived"
+        d = s.T_base_slot[:3, 3] - bosch_third[:3, 3]
+        assert 0.0 < d[0] < p["footprint"][0] and 0.0 < d[1] < p["footprint"][1]
+        (x0, x1, y0, y1), z_floor = zones[s.params["zone"]]
+        assert abs(d[0] - (x0 + x1) / 2.0) < 1e-9  # zone x-center
+        assert y0 < d[1] < y1
+        assert abs(d[2] - z_floor) < 1e-9
+        assert abs(s.width_m - (x1 - x0)) < 1e-9  # usable long-axis extent
+        if s.params["zone"] == "channel":
+            assert abs((z_wing - d[2]) - p["channel"]["drop"]) < 1e-9
+    counts = {z: sum(1 for s in slots if s.params["zone"] == z) for z in zones}
+    assert min(counts.values()) >= 3  # a genuine row per zone, channel included
+    # geometry-derived labels stay unique for the 3-column grid
+    assert len(placement.slot_names(slots)) == len(slots)
+
+
+def test_flat_lay_dispatch_and_goal_pose(bosch_third, monkeypatch):
+    """derive_slots dispatches on the flat_lay_third mode; sampled goal poses lie the piece
+    FLAT (long axis near slot x, horizontal) at a low hover above the floor plane."""
+    import dataclasses
+
+    config.set_active_object("fork")
+    spec = config.OBJECTS["fork"]
+    monkeypatch.setitem(
+        config.OBJECTS,
+        "fork",
+        dataclasses.replace(
+            spec, placement=dataclasses.replace(spec.placement, mode="flat_lay_third", rack="third")
+        ),
+    )
+    slots = placement.derive_slots("unused")
+    assert len(slots) == len(placement.derive_flat_lay_slots("unused")) > 0
+    slot = slots[len(slots) // 2]
+    hover = config.placement_mode_params("flat_lay_third")["release_hover_m"]
+    rng = np.random.default_rng(3)
+    for T in placement.sample_goal_poses(slot, 8, rng):
+        axis = T[:3, :3] @ np.array(spec.axis_obj)
+        assert abs(axis[2]) < 0.1  # long axis near horizontal
+        assert abs(axis[0]) > 0.99  # ... and along the rack x (width) direction
+        d = T[:3, 3] - slot.T_base_slot[:3, 3]
+        assert abs(d[0]) < 0.01 and abs(d[1]) < 0.01
+        # center = hover + the piece's flat half-thickness (+/- the sampled pitch)
+        assert abs(d[2] - (hover + spec.bbox_half[2])) < 0.01
+
+
+def test_evaluate_placement_flat_lay(bosch_third):
+    """Per-mode verdict: settled center near the slot, long axis near horizontal, bottom on
+    the zone's floor plane — with the channel datum sitting ``drop`` below the wings."""
+    config.set_active_object("fork")
+    spec = config.OBJECTS["fork"]
+    slots = placement.derive_flat_lay_slots("unused")
+    wing = next(s for s in slots if s.params["zone"] == "wing_l")
+    chan = next(s for s in slots if s.params["zone"] == "channel")
+    from scipy.spatial.transform import Rotation
+
+    for slot in (wing, chan):
+        # perfect flat lay: as-authored orientation, resting on the slot's own floor plane
+        T = np.eye(4)
+        T[:3, 3] = slot.T_base_slot[:3, 3] + np.array([0.0, 0.0, spec.bbox_half[2]])
+        ev = placement.evaluate_placement(slot, T)
+        assert ev["ok"] and ev["lateral_m"] < 1e-6 and ev["tilt_deg"] < 1e-4
+        assert abs(ev["bottom_height_m"]) < 1e-6
+
+        T_off = T.copy()
+        T_off[0, 3] += 0.05  # 5 cm off the slot center
+        assert not placement.evaluate_placement(slot, T_off)["ok"]
+
+        T_tilt = T.copy()  # 30 deg pitch: the long axis leaves horizontal (tol is 15)
+        T_tilt[:3, :3] = Rotation.from_euler("y", np.radians(30.0)).as_matrix()
+        assert not placement.evaluate_placement(slot, T_tilt)["ok"]
+
+    # a piece stranded at WING height over a channel slot fails the bottom criterion
+    # (drop 28 mm >> tol_bottom 15 mm): the two floor datums are genuinely distinct
+    T_hi = np.eye(4)
+    T_hi[:3, 3] = chan.T_base_slot[:3, 3] + np.array(
+        [0.0, 0.0, config.RACK_GEN[THIRD]["channel"]["drop"] + spec.bbox_half[2]]
+    )
+    assert not placement.evaluate_placement(chan, T_hi)["ok"]

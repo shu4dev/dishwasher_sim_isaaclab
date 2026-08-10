@@ -9,8 +9,9 @@ has started the app. ``pxr`` is imported lazily inside the functions that touch 
 
 Key invariants enforced here:
 
-- One frame convention: robot-base frame == world frame shifted by
-  :data:`dishsim.config.ROBOT_BASE_POS_W`, identity base rotation (asserted).
+- One frame convention: robot-base frame == world frame posed by
+  :data:`dishsim.config.ROBOT_BASE_POS_W` / :data:`dishsim.config.ROBOT_BASE_QUAT_W`
+  (asserted against the live spawn at build).
 - The gripper is actuated only via ``finger_joint``, between exactly two calibrated apertures
   (:data:`dishsim.config.GRIPPER_APERTURE_OPEN_RAD` at trial endpoints,
   :data:`dishsim.config.GRIPPER_APERTURE_GRASP_RAD` during all planned motion). The mimic
@@ -37,7 +38,7 @@ from isaaclab.utils.configclass import configclass
 
 from . import config
 from .robots import DISHWASHER_V0_CFG, UR5E_ROBOTIQ_2F_85_CFG
-from .transforms import T_to_pos_quat, make_T
+from .transforms import T_inv, T_to_pos_quat, make_T
 from .ur5e_kin import fk_wrist3
 
 WELD_PRIM_NAME = "WeldToWrist"
@@ -86,8 +87,28 @@ def grasp_pose_w(q=None) -> tuple[np.ndarray, np.ndarray]:
 
 
 def world_to_base(pos_w) -> np.ndarray:
-    """World position -> robot-base-frame position (identity base rotation, asserted at build)."""
-    return np.asarray(pos_w, dtype=float) - np.asarray(config.ROBOT_BASE_POS_W)
+    """World position -> robot-base-frame position (full transform; the base may be yawed).
+
+    Reduces to exact ``pos_w - ROBOT_BASE_POS_W`` at the identity base quaternion.
+
+    Returns:
+        Position in the robot-base frame [m], shape [3].
+    """
+    T_base_w = T_inv(make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W))
+    return T_base_w[:3, :3] @ np.asarray(pos_w, dtype=float) + T_base_w[:3, 3]
+
+
+def base_to_world(pos_b) -> np.ndarray:
+    """Robot-base-frame position -> world position (full transform; the base may be yawed).
+
+    Inverse of :func:`world_to_base`; reduces to exact ``pos_b + ROBOT_BASE_POS_W`` at the
+    identity base quaternion.
+
+    Returns:
+        Position in the world frame [m], shape [3].
+    """
+    T_w_base = make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W)
+    return T_w_base[:3, :3] @ np.asarray(pos_b, dtype=float) + T_w_base[:3, 3]
 
 
 def countertop_pose_w(instance: int = 0) -> tuple[np.ndarray, np.ndarray]:
@@ -637,9 +658,13 @@ def assert_frames(scene) -> None:
     base_pos = scene["robot"].data.root_pos_w.torch[0].cpu().numpy()
     base_quat = scene["robot"].data.root_quat_w.torch[0].cpu().numpy()
     assert np.allclose(base_pos, config.ROBOT_BASE_POS_W, atol=1e-4), f"robot base at {base_pos}"
+    # sign-agnostic: q and -q are the same rotation, and the sim may hand back either sign
     assert np.allclose(base_quat, config.ROBOT_BASE_QUAT_W, atol=1e-4) or np.allclose(
         -base_quat, config.ROBOT_BASE_QUAT_W, atol=1e-4
-    ), f"robot base rotation {base_quat} != identity — the robot-base frame convention is broken"
+    ), (
+        f"robot base rotation {base_quat} != config.ROBOT_BASE_QUAT_W "
+        f"{config.ROBOT_BASE_QUAT_W} — the robot-base frame convention is broken"
+    )
 
 
 def statics_report(scene) -> dict:

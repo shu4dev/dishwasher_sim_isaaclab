@@ -133,7 +133,7 @@ def apply_scenario(name: str) -> None:
     Args:
         name: Key into :data:`SCENARIOS` or :data:`INTERNAL_STATES` (e.g. ``"placement"``).
     """
-    global RACK_LOWER_EXT_M, RACK_UPPER_EXT_M, RACK_JOINT_TARGETS, SCENARIO_NAME
+    global RACK_LOWER_EXT_M, RACK_UPPER_EXT_M, RACK_THIRD_EXT_M, RACK_JOINT_TARGETS, SCENARIO_NAME
     states = {**SCENARIOS, **INTERNAL_STATES}
     if name not in states:
         raise ValueError(f"unknown scenario {name!r} (choices: {sorted(states)})")
@@ -144,6 +144,11 @@ def apply_scenario(name: str) -> None:
         "PrismaticJoint_dishwasher_2_down": RACK_LOWER_EXT_M,
         "PrismaticJoint_dishwasher_2_up": RACK_UPPER_EXT_M,
     }
+    # third rack: only machines that have one carry the joint (v1 baseline dicts never
+    # mention rack_third_m, so the v1 targets — and their config_hash — stay byte-identical)
+    if HAS_THIRD_RACK:
+        RACK_THIRD_EXT_M = sc.get("rack_third_m", 0.0)
+        RACK_JOINT_TARGETS[RACK_THIRD_JOINT] = RACK_THIRD_EXT_M
     SCENARIO_NAME = name
 
 
@@ -186,11 +191,13 @@ def resolve_rack_state(spec=None, *, tol_m: float = 1e-6) -> str:
             f"rack_state must be a state name or {{'lower_m': float, 'upper_m': float}}, got {spec!r}"
         )
     lower, upper = float(spec["lower_m"]), float(spec["upper_m"])
-    for label, value in (("lower_m", lower), ("upper_m", upper)):
+    third = float(spec.get("third_m", 0.0))
+    checked = [("lower_m", lower), ("upper_m", upper)] + ([("third_m", third)] if HAS_THIRD_RACK else [])
+    for label, value in checked:
         if not (RACK_TRAVEL_LIMITS_M[0] - tol_m <= value <= RACK_TRAVEL_LIMITS_M[1] + tol_m):
             raise ValueError(
                 f"rack_state {label}={value} is outside the prismatic joint limits "
-                f"{RACK_TRAVEL_LIMITS_M} (0 = stowed, -0.20 = fully out)"
+                f"{RACK_TRAVEL_LIMITS_M} (0 = stowed, {RACK_TRAVEL_LIMITS_M[0]} = fully out)"
             )
     # Match INTERNAL_STATES first. Extensions do not identify a state uniquely — `both_out` and
     # `placement_open` are both (-0.20, -0.20) and even share a config_hash, since the hash
@@ -201,7 +208,8 @@ def resolve_rack_state(spec=None, *, tol_m: float = 1e-6) -> str:
     for tier, tier_states in (("INTERNAL_STATES", INTERNAL_STATES), ("SCENARIOS", SCENARIOS)):
         hits = [n for n, sc in tier_states.items()
                 if abs(sc["rack_lower_m"] - lower) <= tol_m
-                and abs(sc["rack_upper_m"] - upper) <= tol_m]
+                and abs(sc["rack_upper_m"] - upper) <= tol_m
+                and (not HAS_THIRD_RACK or abs(sc.get("rack_third_m", 0.0) - third) <= tol_m)]
         if len(hits) > 1:
             raise RuntimeError(
                 f"lower_m={lower}, upper_m={upper} matches several {tier} entries {sorted(hits)} "
@@ -247,6 +255,10 @@ def scenario_cache_dir(name: str | None = None, object_name: str | None = None) 
     """
     name = name or SCENARIO_NAME
     obj = object_name or ACTIVE_OBJECT
+    if MACHINE != MACHINE_BASELINE_NAME:
+        # non-default machines get a fully regular layout under their own root — no legacy
+        # carve-outs (those exist only to keep the validated v1 caches byte-stable)
+        return os.path.join(ASSETS_DIR, "cache", "machines", MACHINE, "objects", obj, name)
     if obj != "mug":
         return os.path.join(ASSETS_DIR, "cache", "objects", obj, name)
     if name == "both_out":
@@ -258,6 +270,8 @@ def scenario_media_dir(phase: str, name: str | None = None) -> str:
     """Media dir for a phase under the active scenario (baseline keeps ``media/<phase>``)."""
     name = name or SCENARIO_NAME
     base = os.path.join(PROJECT_ROOT, "media", phase)
+    if MACHINE != MACHINE_BASELINE_NAME:
+        return os.path.join(base, MACHINE, name)
     return base if name == "both_out" else os.path.join(base, name)
 
 # ---------------------------------------------------------------------------------------------
@@ -673,6 +687,16 @@ PLACEMENT_MODES: dict[str, dict] = {
         "tol_bottom_min_m": -0.005,  # settled center may not sink below the bay floor
         "default_top_z_m": 0.092,
     },
+    "flat_lay_third": {
+        # Bosch third rack: cutlery/utensils lying FLAT on the shallow tray mesh (long axis
+        # horizontal), released from a low hover onto the wires. Design values pending the
+        # first Bosch goal funnel (A2/A3); tolerances mirror floor_stand except tilt, which
+        # measures deviation from HORIZONTAL for a lying object.
+        "release_hover_m": 0.030,
+        "tol_lateral_m": 0.020,
+        "tol_tilt_deg": 15.0,
+        "tol_bottom_m": 0.015,
+    },
 }
 
 
@@ -733,6 +757,23 @@ RACK_PUSH_APERTURE_RAD = 0.78  # closed-fist contact for push
 RACK_SLIDE_TOL_M = 0.005  # the rack must settle within this of the action target
 RACK_TRACK_TOL_M = 0.020  # max TCP-vs-handle tracking error during the slide
 RACK_APPROACH_HOVER_M = 0.08  # planned pre-engage TCP offset above/behind the handle
+# Min planned clearance between distal ARM links and the MOVING rack during the slide [m].
+# The drive-synchronized pull tracks with speed-dependent lag (measured on the Bosch 560 mm
+# pull: 103.8 N wrist contact at 0.5 rad/s, 76.9 N at 0.25 — the sweeping plate-tine tips
+# pass ~mm under the wrist on zero-margin plans); the slide gate requires this much real
+# margin so tracking error cannot close the gap.
+SLIDE_ARM_CLEARANCE_M = 0.030
+# The rack DRIVE lags its ramped target under drag (compliance ~F/k plus the velocity
+# limit), so during a pull the real rack sits up to this much MACHINE-WARD of the
+# planned extension; the slide gate validates arm clearance across this whole band
+# (measured: identical wrist contact across three differently-gated plans — the
+# mis-registration, not the arm path, was closing the gap).
+RACK_LAG_BAND_M = 0.060
+# Max joint-space step between consecutive slide waypoints [rad]. Without a bound the
+# branch walker may switch IK branches mid-track (measured: one segment carrying ~40 %
+# of the path arc — a joint-space teleport during which the TCP leaves the handle line
+# and the drive-synchronized bar yanks the arm at 201 N).
+SLIDE_MAX_STEP_RAD = 0.35
 
 # ---------------------------------------------------------------------------------------------
 # planning + execution
@@ -1383,3 +1424,431 @@ def active_object_spec() -> ObjectSpec:
     """The currently active :class:`ObjectSpec`."""
     return OBJECTS[ACTIVE_OBJECT]
 SIM_DT = 1.0 / 60.0
+
+# ---------------------------------------------------------------------------------------------
+# machine selector (v2: Bosch 800 digital twin; the v1 ArtVIP compact is the byte-stable
+# default). Same contract as apply_scenario/set_active_object: switch via apply_machine()
+# BEFORE importing dishsim.robots/dishsim.scene; geometry.config_hash reads these attributes
+# at call time and keys the non-default machine conditionally, so v1 hashes never move.
+# Every bosch800 number traces to docs/bosch800_source_data.md (§8 modeling set) — values
+# tagged `estimated` there are Stage-B caliper targets, not tunables to eyeball.
+# ---------------------------------------------------------------------------------------------
+MACHINE_BASELINE_NAME = "artvip_compact"
+MACHINE = MACHINE_BASELINE_NAME  # active machine; switch via apply_machine() BEFORE scene imports
+HAS_THIRD_RACK = False  # per-machine; rewritten by apply_machine
+RACK_THIRD_JOINT = "PrismaticJoint_dishwasher_2_third"  # canonical name (Bosch-authored USD)
+RACK_THIRD_EXT_M = 0.0
+#: per-joint prismatic travel [m] for USD authoring (baseline: both v1 rack joints share
+#: RACK_TRAVEL_LIMITS_M; Bosch: the lower rack rolls fully out onto the door, farther than
+#: the rail-limited middle/third racks). resolve_rack_state validates against the envelope
+#: RACK_TRAVEL_LIMITS_M; the authored USD uses these exact per-joint limits.
+RACK_TRAVEL_LIMITS_BY_JOINT_M: dict[str, tuple[float, float]] = {
+    "PrismaticJoint_dishwasher_2_down": RACK_TRAVEL_LIMITS_M,
+    "PrismaticJoint_dishwasher_2_up": RACK_TRAVEL_LIMITS_M,
+}
+
+#: directory for self-authored (non-ArtVIP) machine USDs: assets/machines/<name>/
+MACHINE_USD_DIR = os.path.join(ASSETS_DIR, "machines")
+
+# Parametric machine geometry, machine frame: X width (centered), Y depth (front face at
+# y = -d/2, rear at +d/2, door opens toward -y), Z up from the floor, meters. Only
+# non-default machines have an entry; the ArtVIP machine's geometry is its downloaded USD.
+MACHINE_GEN: dict[str, dict] = {
+    "bosch800": {  # SHP78CM5N-class standard tall tub — docs/bosch800_source_data.md §8
+        "body": {"w": 0.598, "h": 0.860, "d": 0.602},  # published
+        "toe_kick": {"h": 0.090, "setback": 0.089},  # published / derived-from-drawing
+        "door": {
+            "w": 0.595, "h": 0.770, "t": 0.053,  # derived-from-drawing
+            "bottom_z": 0.117,  # derived-from-drawing
+            # estimated split of the published-derived constraint hinge_z + setback = 0.168
+            "hinge_z": 0.150, "hinge_setback": 0.018,
+            # estimated (product photos): collision bump on the inner face, faces up at 90 deg
+            "dispenser": {"w": 0.240, "h": 0.160, "bump": 0.015, "center_from_bottom": 0.400},
+        },
+        "tub": {  # ALL estimated — primary Stage-B caliper targets (source doc §3)
+            # d raised 0.530 -> 0.544: the PUBLISHED 549 mm lower-rack depth must stow
+            # inside (racks ride flush at the rear, nose slightly over the sill)
+            "w": 0.545, "d": 0.544, "h": 0.545,
+            "floor_z": 0.185, "sill_z": 0.172, "ceiling_z": 0.730,
+            "wall_t": 0.0265,
+            "sump": {"dia": 0.200, "depth": 0.050, "y_frac": 0.35},  # center-front bias
+        },
+        "spray": {  # count published, dims estimated; thin cylinders bounding under-rack space
+            "lower_span": 0.490, "mid_span": 0.410, "top_dia": 0.090, "arm_t": 0.035,
+        },
+        "racks": {  # vertical stack [z above floor] + travel [m]; rails estimated,
+            #         RackMatic travel published (3 positions / 50 mm), capacities published
+            "lower": {"rail_z": 0.185, "wire_z": 0.043, "travel": 0.560},
+            "middle": {"rail_z": 0.515, "travel": 0.510, "rackmatic_z": (0.490, 0.515, 0.540)},
+            "third": {"rail_z": 0.635, "travel": 0.510},
+        },
+    },
+}
+
+# Named robot-base placements per machine (the D5/BASE_PLACEMENTS mechanics). "front" is the
+# frozen v1 pose — its literals must stay byte-identical to the module-top values. The Bosch
+# entries are DESIGN candidates for the A2 mount sweep (elevated/side mounts as a human
+# loader stands), not measured winners; the sweep promotes one. Quaternions are XYZW yaw-
+# about-z. Pedestal is the support column under the base plate (top face at base z).
+BASE_PLACEMENTS: dict[str, dict[str, dict]] = {
+    "artvip_compact": {
+        "front": {
+            "base_pos_w": (0.0, 0.0, 0.25),
+            "base_quat_w": (0.0, 0.0, 0.0, 1.0),
+            "pedestal_size": (0.25, 0.25, 0.25),
+            "pedestal_pos_w": (0.0, 0.0, 0.125),
+        },
+    },
+    "bosch800": {
+        # the neutral BAKE REFERENCE: v1 height/yaw, pulled back 0.45 m so the arm's HOME
+        # pose (TCP ~x 0.49, z 0.69 at the v1 spot — with a welded handle_pinch payload
+        # extending to ~x 0.64) clears the EXTENDED THIRD RACK volume (x 0.31-0.86,
+        # z 0.635-0.725; measured live-vs-FK 2.9 mm contact deflection in the third_out
+        # extraction at x 0). The sweep re-expresses to candidates Kit-free, so the baked
+        # reference never constrains which mounts get scored.
+        "front": {
+            "base_pos_w": (-0.45, 0.0, 0.25),
+            "base_quat_w": (0.0, 0.0, 0.0, 1.0),
+            "pedestal_size": (0.25, 0.25, 0.25),
+            "pedestal_pos_w": (-0.45, 0.0, 0.125),
+        },
+        # THE A2 WINNER (results/base_sweep/bosch800/winner.json, 2026-08-10): side-elevated
+        # mount meeting all four criteria — lower 121 destinations, middle 2, third 13 bays,
+        # pick band 0.30 m. Adopted by user decision at the A2 checkpoint. Episodes bake and
+        # run here; the neutral "front" stays the sweep/bring-up reference.
+        "side_winner": {
+            "base_pos_w": (0.475, -0.525, 0.400),
+            "base_quat_w": (0.0, 0.0, 0.77301045, 0.63439328),  # yaw +101.25 deg
+            "pedestal_size": (0.25, 0.25, 0.400),
+            "pedestal_pos_w": (0.475, -0.525, 0.200),
+        },
+        # beside the open door, elevated — the human loading stance (yaw +45 toward machine)
+        "side_high": {
+            "base_pos_w": (0.45, -0.55, 0.75),
+            "base_quat_w": (0.0, 0.0, 0.38268343, 0.92387953),
+            "pedestal_size": (0.25, 0.25, 0.75),
+            "pedestal_pos_w": (0.45, -0.55, 0.375),
+        },
+        # behind the open door tip, elevated, facing the machine head-on
+        "front_high": {
+            "base_pos_w": (-0.05, 0.0, 0.75),
+            "base_quat_w": (0.0, 0.0, 0.0, 1.0),
+            "pedestal_size": (0.25, 0.25, 0.75),
+            "pedestal_pos_w": (-0.05, 0.0, 0.375),
+        },
+        # on the counter run beside the machine (cabinet column below), yaw +90 toward it
+        "side_counter": {
+            "base_pos_w": (0.95, -0.40, 0.914),
+            "base_quat_w": (0.0, 0.0, 0.70710678, 0.70710678),
+            "pedestal_size": (0.25, 0.25, 0.914),
+            "pedestal_pos_w": (0.95, -0.40, 0.457),
+        },
+    },
+}
+BASE_PLACEMENT = "front"  # active named placement; switch via apply_base_placement()
+#: bosch bakes at the neutral "front" reference (see BASE_PLACEMENTS note); elevated/side
+#: mounts are sweep candidates, then a named placement once the A2 verdict promotes one
+DEFAULT_BASE_PLACEMENT = {"artvip_compact": "front", "bosch800": "front"}
+
+#: Per-machine placement-mode rerouting. The Bosch lower rack carries no cutlery basket
+#: (the third rack replaces it), so every basket-drop class lies flat on the third-rack
+#: tray instead. The baseline machine has no entry — v1 dispatch is untouched.
+MACHINE_PLACEMENT_MODE_OVERRIDES: dict[str, dict[str, str]] = {
+    "bosch800": {"basket_drop": "flat_lay_third"},
+}
+
+
+def reference_class() -> str:
+    """Class whose caches carry the machine-only worlds (rack-action gates, empty-hand
+    picks). v1: the frozen mug. Bosch: the cup — the legacy Y-up mug's pinch gate fails
+    extraction away from the frozen v1 base reference (measured 2026-08-10; see
+    base_sweep._reference_class for the numbers), so it sits out of v2 studies.
+    """
+    return "cup" if MACHINE == "bosch800" else "mug"
+
+
+def effective_placement_mode(object_name: str | None = None) -> str:
+    """The object's placement mode under the ACTIVE machine (mode-level override).
+
+    Args:
+        object_name: Object class; defaults to the active object.
+    """
+    spec = OBJECTS[object_name] if object_name else active_object_spec()
+    mode = spec.placement.mode
+    return MACHINE_PLACEMENT_MODE_OVERRIDES.get(MACHINE, {}).get(mode, mode)
+
+# Bosch rack_gen parameter dicts (rack frame: x width, y depth, z up; same schema as the v1
+# RACK_GEN entries, usd_scale_x 1.0 because the Bosch USD is self-authored with no inherited
+# Xform scale). Wire gauges are real Bosch (~3.2 mm tines); pitches/heights from the source
+# doc §4 (estimated rows). The third rack uses the NEW "tray" builder (shallow cutlery tray
+# with a dropped center channel) — see rack_gen.build_tray.
+_RACK_GEN_BOSCH: dict = {
+    "E_shelf_1_04": {  # lower rack, OEM 20007189: 527 x 549, plate bank + open floor zone
+        "usd_scale_x": 1.0,
+        "footprint": (0.527, 0.549),
+        "wire_dia_heavy": 0.006,
+        "wire_dia_load": 0.004,
+        "wire_dia_light": 0.0032,
+        "wire_sides": 12,
+        "rim_side_h": 0.050,
+        "rim_front_h": 0.038,
+        "front_dip_x": (0.130, 0.400),
+        # grip bar raised 0.060 -> 0.090 -> 0.115 (both steps measured against the pull
+        # gate): the stowed rack's handle rides directly over the open-door deck, and the
+        # 560 mm pull track passes over the DISPENSER BUMP (15 mm proud, x span ~0.36-0.52
+        # of the runway). At 0.060 the jaws entered the door hull at the engage pose; at
+        # 0.090 the engage cleared but the mid-slide gripper hull clipped the dispenser
+        # (onset measured exactly at the bump's edge, ext -0.224). 0.115 puts the gripper's
+        # lowest point ~40 mm above the bump incl. margins. Real Bosch racks carry a tall
+        # molded grab bar on the front rim; Stage-B calipers verify the true height.
+        "handle": {"x": (0.235, 0.295), "grip_z": 0.115},
+        "rim_rear_h": 0.062,
+        "rear_zone_y0": 0.370,
+        "corner_r": 0.020,
+        "corner_segments": 4,
+        "baluster_pitch": 0.040,
+        "guard_mid_rail": True,
+        "runner_xs": (0.030, 0.0689, 0.1078, 0.1467, 0.1857, 0.2246, 0.2635, 0.3024,
+                      0.3413, 0.3802, 0.4192, 0.4581, 0.497),
+        "channel": {"x": (0.245, 0.285), "runner_xs": (0.255, 0.275), "drop": 0.004},
+        "crossbar_ys": (0.025, 0.070, 0.115, 0.160, 0.205, 0.250, 0.295, 0.340,
+                        0.385, 0.430, 0.475, 0.520),
+        "slope_zones": (),
+        "slope_deg": 6.0,
+        "slope_sign": -1.0,
+        # robot plate bank: two rows at the real ~50 mm pitch in the front band
+        "plate_zone_y": (0.060, 0.220),
+        "plate_rows_y": (0.090, 0.190),
+        "plate_tine_pitch": 0.050,
+        "plate_tine_xspan": (0.060, 0.460),
+        "plate_tine_h": 0.095,
+        "plate_tine_lean_deg": 7.0,
+        "candy_cane": {"r": 0.012, "sweep_deg": 120.0, "segments": 4},
+        "tine_fillet": {"r": 0.006, "segments": 3},
+        "tine_tie_frac": None,
+        "tine_bead": {"dia_factor": 1.6, "len": 0.004},
+        "insert": None,
+        "bank_bar_ys": (0.060, 0.140, 0.220),
+        "rib_amplitude": 0.0025,
+        # 8 wheels dia 35 (published, OEM 00611475); builder authors 4/side when supported
+        "wheels": {"dia": 0.035, "width": 0.010, "y_inset": 0.040},
+        # open floor: bowls/standing items behind the plate bank
+        "open_zones": ((0.030, 0.250, 0.260, 0.510),),
+        "mass_kg": 2.4,
+        "sdf_resolution": 768,
+    },
+    "E_shelf_03": {  # middle rack, OEM 20007068: 511 x 556, glass/mug variant, RackMatic
+        "usd_scale_x": 1.0,
+        "footprint": (0.511, 0.556),
+        "wire_dia_heavy": 0.006,
+        "wire_dia_load": 0.004,
+        "wire_dia_light": 0.0032,
+        "wire_sides": 12,
+        "rim_side_h": 0.045,
+        "rim_front_h": 0.045,
+        "handle": {"x": (0.225, 0.285), "grip_z": 0.060},
+        "rim_rear_h": 0.055,
+        "rear_zone_y0": 0.380,
+        "corner_r": 0.020,
+        "corner_segments": 4,
+        "baluster_pitch": 0.040,
+        "guard_mid_rail": True,
+        "runner_xs": (0.030, 0.071, 0.112, 0.153, 0.194, 0.235, 0.276, 0.317,
+                      0.358, 0.399, 0.440, 0.481),
+        "crossbar_ys": (0.025, 0.0712, 0.1174, 0.1636, 0.2097, 0.2559, 0.3021, 0.3483,
+                        0.3945, 0.4406, 0.4868, 0.533),
+        "slope_zones": ((0.004, 0.048), (0.463, 0.507)),
+        "slope_deg": 6.0,
+        "slope_sign": 1.0,
+        "divider_tine_x": 0.255,
+        "divider_tine_ys": (0.025, 0.0712, 0.1174, 0.1636, 0.2097, 0.2559, 0.3021, 0.3483,
+                            0.3945, 0.4406, 0.4868, 0.533),
+        "divider_tine_h": 0.060,
+        "cup_shelf": {
+            "depth": 0.055, "y_span": (0.060, 0.180), "mount_z": 0.030,
+            "tilt_deg": 13.0, "rungs": 5, "scallops": 3, "scallop_r": 0.008,
+        },
+        "rackmatic_blocks": {"size": (0.014, 0.026, 0.012), "ys": (0.080, 0.420), "z": 0.030},
+        "wheels": {"dia": 0.022, "width": 0.008, "y_inset": 0.030},
+        "open_zones": ((0.070, 0.240, 0.030, 0.520), (0.271, 0.441, 0.030, 0.520)),
+        "mass_kg": 2.0,
+        "sdf_resolution": 768,
+    },
+    "E_shelf_third": {  # third rack, OEM 20007198 / SMZCD200UC: shallow flat-lay cutlery tray
+        "builder": "tray",
+        "usd_scale_x": 1.0,
+        "footprint": (0.508, 0.546),
+        "wire_dia_heavy": 0.005,
+        "wire_dia_light": 0.0025,
+        "wire_sides": 12,
+        "rim_h": 0.050,  # wing side walls (tray usable depth, estimated)
+        "channel": {"x": (0.184, 0.324), "drop": 0.028},  # dropped center V-channel
+        "runner_pitch": 0.020,  # fine mesh so cutlery lies flat without falling through
+        "crossbar_pitch": 0.045,
+        "mass_kg": 1.2,
+        "sdf_resolution": 768,
+    },
+}
+
+#: Bosch planner params: the v1 20 s budget predates even the v4 rack (docs/known_
+#: limitations.md); the Bosch world's bigger workspace showed a pick-approach timeout
+#: on the first episode, so the Bosch runs at the 60 s budget the v4 bowl needed.
+_PLANNER_PARAMS_BOSCH = {**PLANNER_PARAMS,
+                         "rrt_connect": {**PLANNER_PARAMS["rrt_connect"], "budget_s": 60.0}}
+
+#: Bosch TASK view: identical to the baseline except the countertop spawn rectangle,
+#: which is the A2 winner mount's MEASURED pickable rectangle
+#: (results/base_sweep/bosch800/winner.json pick.rect_w, 1 cm inset) on the Bosch counter.
+_TASK_BOSCH = {**TASK, "spawn_rect_w": {"x_min": 0.830, "x_max": 1.060,
+                                        "y_min": -0.880, "y_max": -0.320}}
+
+MACHINES: dict[str, dict] = {
+    MACHINE_BASELINE_NAME: {},  # baseline: no overrides; module-top values ARE its definition
+    "bosch800": {
+        "HAS_THIRD_RACK": True,
+        # spawn pose of the authored root frame (machine frame origin: floor level, body
+        # center in x/y): front face at world x = pos_x - d/2 under the yaw -90 convention,
+        # door opening toward the robot region at the world origin. Design value; the A2
+        # sweep moves the ROBOT, never the machine.
+        "DISHWASHER_POS_W": (1.12, 0.0, 0.0),
+        "DISHWASHER_QUAT_W": (0.0, 0.0, -0.70710678, 0.70710678),
+        "RACK_TRAVEL_LIMITS_M": (-0.56, 0.0),  # envelope; per-joint below
+        "RACK_TRAVEL_LIMITS_BY_JOINT_M": {
+            "PrismaticJoint_dishwasher_2_down": (-0.56, 0.0),  # rolls out onto the door
+            "PrismaticJoint_dishwasher_2_up": (-0.51, 0.0),  # rail-limited
+            "PrismaticJoint_dishwasher_2_third": (-0.51, 0.0),
+        },
+        "SCENARIOS": {
+            "both_out": {  # lower + middle extended -> push the middle rack in, place lower
+                "rack_lower_m": -0.56,
+                "rack_upper_m": -0.51,
+                "min_feasible_slots": 2,
+                "rack_action": {
+                    "joint": "PrismaticJoint_dishwasher_2_up",
+                    "body": "E_shelf_03",
+                    "to": 0.0,
+                    "mode": "push",
+                },
+            },
+            "both_in": {  # everything stowed -> pull the lower rack fully out onto the door
+                "rack_lower_m": 0.0,
+                "rack_upper_m": 0.0,
+                "min_feasible_slots": 2,
+                "rack_action": {
+                    "joint": "PrismaticJoint_dishwasher_2_down",
+                    "body": "E_shelf_1_04",
+                    "to": -0.56,
+                    "mode": "pull",
+                },
+            },
+        },
+        "INTERNAL_STATES": {
+            # the shared post-rack-action placement state: lower rack out over the open door
+            "placement": {"rack_lower_m": -0.56, "rack_upper_m": 0.0, "min_feasible_slots": 2},
+            # third rack pulled out for flat-lay cutlery placement (lower/middle stowed)
+            "third_out": {"rack_lower_m": 0.0, "rack_upper_m": 0.0, "rack_third_m": -0.51,
+                          "min_feasible_slots": 2},
+            # middle rack pulled out for drinkware placement (A2 bar: middle-extended > 0)
+            "middle_out": {"rack_lower_m": 0.0, "rack_upper_m": -0.51, "min_feasible_slots": 2},
+        },
+        "RACK_GEN": _RACK_GEN_BOSCH,
+        # real 900 mm counter run beside the machine, on the robot's side; top at z 0.914
+        # (US standard 36 in), thickness 38 mm
+        "COUNTERTOP_SIZE": (0.60, 0.90, 0.038),
+        "COUNTERTOP_CENTER_W": (1.12, -0.75, 0.895),
+        # 0.56 m rack travel at the v1 slide velocity: keep ~the same m/s as the measured
+        # 0.2 m / 240-step pull
+        "RACK_SLIDE_STEPS": 672,
+        "TASK": _TASK_BOSCH,
+        "PLANNER_PARAMS": _PLANNER_PARAMS_BOSCH,
+        # halved vs v1: the 560 mm loaded rack pull showed deterministic 103.8 N
+        # wrist_2 contact under the middle-rack rail — tracking lag under drag
+        # load scales with speed (diagnosis 2026-08-10; revisit after Stage B)
+        "EXEC_JOINT_SPEED_RAD_S": 0.25,
+        # machine sits deeper (body x 0.82-1.42, door runway to x 0.13 at z 0.19) — steep
+        # down-angles, or the runway/racks hide below flat sightlines (measured on the
+        # first bring-up renders); same three names so phase media stay comparable
+        "CAMERAS": {
+            "front": ((-0.55, 0.00, 1.80), (0.75, 0.00, 0.20)),
+            "top": ((0.50, 0.15, 2.40), (0.50, 0.15, 0.19)),
+            "iso": ((-0.45, 1.35, 1.75), (0.70, 0.00, 0.25)),
+        },
+    },
+}
+
+_MACHINE_MUTABLE = (
+    "HAS_THIRD_RACK",
+    "DISHWASHER_POS_W",
+    "DISHWASHER_QUAT_W",
+    "RACK_TRAVEL_LIMITS_M",
+    "RACK_TRAVEL_LIMITS_BY_JOINT_M",
+    "SCENARIOS",
+    "INTERNAL_STATES",
+    "RACK_GEN",
+    "COUNTERTOP_SIZE",
+    "COUNTERTOP_CENTER_W",
+    "RACK_SLIDE_STEPS",
+    "CAMERAS",
+    "TASK",
+    "EXEC_JOINT_SPEED_RAD_S",
+    "PLANNER_PARAMS",
+)
+_MACHINE_BASELINE_SNAPSHOT: dict | None = None
+
+
+def apply_machine(name: str) -> None:
+    """Activate a machine by rewriting the per-machine module globals in place.
+
+    Must run before importing :mod:`dishsim.robots`/:mod:`dishsim.scene` (they bind the
+    machine USD path, spawn pose and rack values at import time). The baseline module-top
+    values are snapshotted on first use and restored before every overlay, so
+    ``apply_machine(MACHINE_BASELINE_NAME)`` after any switch reproduces the v1 globals —
+    and therefore the v1 ``config_hash`` — byte-identically. The active scenario is
+    re-applied under the new machine's state tables (falling back to ``both_out`` when the
+    current name doesn't exist there), and the machine's default base placement is applied.
+
+    Args:
+        name: Key into :data:`MACHINES`.
+    """
+    global MACHINE, _MACHINE_BASELINE_SNAPSHOT
+    if name not in MACHINES:
+        raise ValueError(f"unknown machine {name!r} (choices: {sorted(MACHINES)})")
+    g = globals()
+    if _MACHINE_BASELINE_SNAPSHOT is None:
+        _MACHINE_BASELINE_SNAPSHOT = {k: g[k] for k in _MACHINE_MUTABLE}
+    overrides = MACHINES[name]
+    unknown = set(overrides) - set(_MACHINE_MUTABLE)
+    if unknown:
+        raise ValueError(f"machine {name!r} overrides unknown globals {sorted(unknown)}")
+    g.update(_MACHINE_BASELINE_SNAPSHOT)
+    g.update(overrides)
+    MACHINE = name
+    states = {**SCENARIOS, **INTERNAL_STATES}
+    apply_scenario(SCENARIO_NAME if SCENARIO_NAME in states else "both_out")
+    apply_base_placement(DEFAULT_BASE_PLACEMENT[name])
+
+
+def apply_base_placement(name: str) -> None:
+    """Activate a named robot-base placement for the ACTIVE machine.
+
+    Rewrites ``ROBOT_BASE_POS_W``/``ROBOT_BASE_QUAT_W`` and the pedestal geometry in place
+    (same pre-import contract as :func:`apply_machine`). The v1 ``"front"`` placement
+    restores the exact frozen literals, keeping the baseline hash byte-stable; non-default
+    placements are additionally keyed into ``geometry.config_hash`` (including the base
+    QUATERNION, which the v1 payload never covered).
+
+    Args:
+        name: Key into ``BASE_PLACEMENTS[MACHINE]``.
+    """
+    global ROBOT_BASE_POS_W, ROBOT_BASE_QUAT_W, PEDESTAL_SIZE, PEDESTAL_POS_W, BASE_PLACEMENT
+    placements = BASE_PLACEMENTS[MACHINE]
+    if name not in placements:
+        raise ValueError(
+            f"unknown base placement {name!r} for machine {MACHINE!r} (choices: {sorted(placements)})"
+        )
+    p = placements[name]
+    ROBOT_BASE_POS_W = p["base_pos_w"]
+    ROBOT_BASE_QUAT_W = p["base_quat_w"]
+    PEDESTAL_SIZE = p["pedestal_size"]
+    PEDESTAL_POS_W = p["pedestal_pos_w"]
+    BASE_PLACEMENT = name

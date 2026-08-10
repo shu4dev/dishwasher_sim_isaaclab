@@ -169,10 +169,13 @@ _DISHWASHER_SRC_USD = os.path.join(
 
 DISHWASHER_DOOR_JOINT = "RevoluteJoint_dishwasher_2_middle"
 DISHWASHER_RACK_JOINTS = ["PrismaticJoint_dishwasher_2_up", "PrismaticJoint_dishwasher_2_down"]
+if config.HAS_THIRD_RACK:
+    DISHWASHER_RACK_JOINTS = DISHWASHER_RACK_JOINTS + [config.RACK_THIRD_JOINT]
 DISHWASHER_DOOR_BODY = "E_door_4"
 DISHWASHER_BASE_BODY = "E_body_5"
 DISHWASHER_LOWER_RACK_BODY = "E_shelf_1_04"
 DISHWASHER_UPPER_RACK_BODY = "E_shelf_03"
+DISHWASHER_THIRD_RACK_BODY = "E_shelf_third"  # exists only on machines with HAS_THIRD_RACK
 
 DISHWASHER_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
@@ -221,19 +224,32 @@ DISHWASHER_CFG = ArticulationCfg(
 """ArtVIP dishwasher_2 with a passive (freely swinging, damped) door and stowed racks."""
 
 # v0 derived copy: static machine — door limits clamped open, rack drive targets at the
-# configured extensions (see usd_prep.make_dishwasher_v0_usd).
-DISHWASHER_V0_USD_PATH = (
-    make_dishwasher_v0_usd(
-        _DISHWASHER_SRC_USD,
+# configured extensions. The baseline machine derives from the ArtVIP source
+# (usd_prep.make_dishwasher_v0_usd); the Bosch 800 is fully self-authored
+# (usd_prep.make_bosch800_usd). Both require config.apply_machine()/apply_scenario()
+# BEFORE this import (per-scenario derived copies).
+_V0_SUFFIX = "" if config.SCENARIO_NAME == "both_out" else f"_{config.SCENARIO_NAME}"
+if config.MACHINE == "bosch800":
+    from .usd_prep import make_bosch800_usd
+
+    DISHWASHER_V0_USD_PATH = make_bosch800_usd(
         door_open_deg=config.DOOR_OPEN_DEG,
         door_band_deg=config.DOOR_BAND_DEG,
         rack_targets=config.RACK_JOINT_TARGETS,
-        # per-scenario derived copies; requires config.apply_scenario() BEFORE this import
-        suffix="" if config.SCENARIO_NAME == "both_out" else f"_{config.SCENARIO_NAME}",
+        suffix=_V0_SUFFIX,
     )
-    if os.path.isfile(_DISHWASHER_SRC_USD)
-    else _DISHWASHER_SRC_USD
-)
+else:
+    DISHWASHER_V0_USD_PATH = (
+        make_dishwasher_v0_usd(
+            _DISHWASHER_SRC_USD,
+            door_open_deg=config.DOOR_OPEN_DEG,
+            door_band_deg=config.DOOR_BAND_DEG,
+            rack_targets=config.RACK_JOINT_TARGETS,
+            suffix=_V0_SUFFIX,
+        )
+        if os.path.isfile(_DISHWASHER_SRC_USD)
+        else _DISHWASHER_SRC_USD
+    )
 
 DISHWASHER_V0_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
@@ -251,6 +267,7 @@ DISHWASHER_V0_CFG = ArticulationCfg(
             DISHWASHER_DOOR_JOINT: config.DOOR_INIT_RAD,
             "PrismaticJoint_dishwasher_2_up": config.RACK_UPPER_EXT_M,
             "PrismaticJoint_dishwasher_2_down": config.RACK_LOWER_EXT_M,
+            **({config.RACK_THIRD_JOINT: config.RACK_THIRD_EXT_M} if config.HAS_THIRD_RACK else {}),
         },
     ),
     actuators={

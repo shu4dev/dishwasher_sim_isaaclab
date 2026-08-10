@@ -110,6 +110,9 @@ def build_support_graph(items, *, backend: str | None = None, forces=None,
     if surface_z_base is None:
         from .layout import countertop_top_z_w  # noqa: PLC0415
 
+        # z-only conversion, deliberately: base placements are pure yaws about world z
+        # (config.BASE_PLACEMENTS), and z is invariant under a yaw about z — the full base
+        # transform reduces to exactly this subtraction for every valid placement.
         surface_z_base = countertop_top_z_w() - float(config.ROBOT_BASE_POS_W[2])
 
     geo = _geometric(items, surface_z_base)

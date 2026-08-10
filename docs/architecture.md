@@ -40,11 +40,18 @@ dishwasher_sim_isaaclab/
 │
 ├── src/dishsim/                      [the environment package (installed editable)]
 │   ├── config.py                     [EVERY tunable: object registry, grasps, rack params,
-│   │                                  planner defaults, cameras, tolerances. Tune here]
-│   ├── robots.py                     [UR5e + Robotiq and dishwasher ArticulationCfgs]
+│   │                                  planner defaults, cameras, tolerances. Tune here.
+│   │                                  Machine selector: apply_machine("bosch800") swaps the
+│   │                                  world to the Bosch 800 twin (MACHINE_GEN, per-machine
+│   │                                  RACK_GEN/scenarios/BASE_PLACEMENTS); v1 stays the
+│   │                                  byte-stable default. Numbers: docs/bosch800_source_data.md]
+│   ├── robots.py                     [UR5e + Robotiq and dishwasher ArticulationCfgs;
+│   │                                  machine-aware v0 USD derivation incl. the third rack]
 │   ├── scene.py                      [scene construction, the wrist weld, gripper control]
-│   ├── usd_prep.py                   [derived dishwasher USDs; authors the procedural racks]
-│   ├── rack_gen.py                   [procedural wire racks + cutlery basket (Kit-free)]
+│   ├── usd_prep.py                   [derived dishwasher USDs; authors the procedural racks;
+│   │                                  make_bosch800_usd authors the Bosch machine from scratch]
+│   ├── rack_gen.py                   [procedural wire racks + cutlery basket + the Bosch
+│   │                                  third-rack tray (Kit-free)]
 │   ├── prop_gen.py                   [procedural props: tumbler, wine glass, container, lid]
 │   ├── geometry.py                   [USD -> mesh extraction + the collision-cache format]
 │   ├── collision_world.py            [Kit-free FCL world; the planners' validity oracle]

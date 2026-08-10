@@ -44,9 +44,23 @@ parser.add_argument("--classes", type=str, required=True,
                     help="Comma list of object classes to bake, e.g. mug,cup,tumbler.")
 parser.add_argument("--skip_parity", action="store_true",
                     help="Skip the FCL-vs-PhysX parity gate (faster; you lose the safety check).")
+parser.add_argument("--skip_goals", action="store_true",
+                    help="Skip the goal-funnel stage. The base-pose sweep derives slots and "
+                         "runs its own funnels, so bakes that only feed the sweep never need "
+                         "the baked goal sets; episode runs DO (rebake without this flag).")
 parser.add_argument("--force", action="store_true", help="Re-decompose even if pieces exist.")
 parser.add_argument("--dry_run", action="store_true", help="Print the commands and exit.")
+parser.add_argument("--placement", type=str, default=None,
+                    help="Named base placement to bake at (see config.BASE_PLACEMENTS).")
+parser.add_argument("--machine", type=str, default=None,
+                    help="Machine name (see config.MACHINES); default: the v1 baseline.")
 args = parser.parse_args()
+
+if args.machine:
+    config.apply_machine(args.machine)  # before resolve_rack_state — states are per-machine
+
+_MACHINE_ARGS = (["--machine", args.machine] if args.machine else []) \
+    + (["--placement", args.placement] if args.placement else [])
 
 RUN_KIT = os.path.join(PROJECT_ROOT, "scripts", "run_kit.sh")
 VENV_PY = "/workspace/isaaclab/env_isaaclab/bin/python"
@@ -57,18 +71,21 @@ def stages(obj: str) -> list:
     setup = os.path.join(PROJECT_ROOT, "scripts", "setup")
     out = [
         ("extract_geometry", [RUN_KIT, os.path.join(setup, "extract_geometry.py"),
-                              "--headless", "--object", obj, "--scenario", args.state], True),
+                              "--headless", "--object", obj, "--scenario", args.state]
+                             + _MACHINE_ARGS, True),
         ("decompose_meshes", [VENV_PY, os.path.join(setup, "decompose_meshes.py"),
-                              "--object", obj, "--scenario", args.state]
+                              "--object", obj, "--scenario", args.state] + _MACHINE_ARGS
                              + (["--force"] if args.force else []), True),
     ]
     if not args.skip_parity:
         out.append(("parity_check", [RUN_KIT, os.path.join(setup, "parity_check.py"),
-                                     "--headless", "--object", obj, "--scenario", args.state], True))
-    # zero feasible slots is a measured outcome for some classes, not a build error
-    out.append(("goal_configs", [RUN_KIT, os.path.join(setup, "goal_configs.py"),
-                                 "--headless", "--object", obj, "--scenario", args.state,
-                                 "--sheets_per_slot", "0"], False))
+                                     "--headless", "--object", obj, "--scenario", args.state]
+                                    + _MACHINE_ARGS, True))
+    if not args.skip_goals:
+        # zero feasible slots is a measured outcome for some classes, not a build error
+        out.append(("goal_configs", [RUN_KIT, os.path.join(setup, "goal_configs.py"),
+                                     "--headless", "--object", obj, "--scenario", args.state,
+                                     "--sheets_per_slot", "0"] + _MACHINE_ARGS, False))
     return out
 
 

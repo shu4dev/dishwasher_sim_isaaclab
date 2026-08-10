@@ -214,7 +214,8 @@ class CollisionWorld:
                 # a physically present wire that FCL never sees
                 from . import rack_gen  # local import: only needed on the rack path
 
-                expected = len(rack_gen.build_rack(config.RACK_GEN[name]))
+                # route through the builder dispatcher (the Bosch third rack is a tray)
+                expected = len(rack_gen.build(config.RACK_GEN[name]))
                 if len(files) != expected:
                     raise RuntimeError(
                         f"rack piece dir for '{name}' has {len(files)} pieces, expected {expected} "

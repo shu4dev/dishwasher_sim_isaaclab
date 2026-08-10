@@ -39,7 +39,8 @@ class SlotFrame:
     ``mode`` selects the goal-pose generator and success criteria: ``floor_stand`` (origin ON
     the wire floor, z up — the v0 standing cell), ``plate_slot`` (origin at the disc bottom
     edge between two tines), ``basket_drop`` (origin at the basket-bay floor center; goals
-    hover above it).
+    hover above it), ``flat_lay_third`` (origin ON the third-rack tray floor — wing plane or
+    dropped channel floor — with the object lying flat, long axis along slot x).
     """
 
     slot_id: int
@@ -201,14 +202,19 @@ def object_pose_for_slot(slot: SlotFrame, yaw: float, lateral: np.ndarray, tilt:
 
 
 def derive_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
-    """Slots for the ACTIVE object's placement mode (dispatch; ids are mode-local)."""
-    mode = config.active_object_spec().placement.mode
+    """Slots for the ACTIVE object's placement mode (dispatch; ids are mode-local).
+
+    The mode is the machine-effective one (:func:`config.effective_placement_mode`): on the
+    Bosch, basket-drop classes reroute to the third-rack flat lay."""
+    mode = config.effective_placement_mode()
     if mode == "floor_stand":
         return derive_slots_from_rack(cache_dir)
     if mode == "plate_slot":
         return derive_plate_slots(cache_dir)
     if mode == "basket_drop":
         return derive_basket_slots(cache_dir)
+    if mode == "flat_lay_third":
+        return derive_flat_lay_slots(cache_dir)
     raise ValueError(f"no robot slot derivation for placement mode {mode!r}")
 
 
@@ -277,6 +283,60 @@ def derive_basket_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
     return slots
 
 
+def _third_rack_T(cache_dir: str) -> np.ndarray:
+    """T_base_body of the third-rack tray (Bosch machines only; keyed like :func:`_rack_T`)."""
+    manifest = load_manifest(cache_dir)
+    return np.array(manifest["statics"]["E_shelf_third"]["T_base_body"])
+
+
+#: Depth inset of the flat-lay slot rows from the tray's usable-area edges [m]. Design value
+#: pending the first Bosch goal funnel (like the flat_lay_third tolerances in config): the
+#: mode's tol_lateral (20 mm) plus the widest cutlery half-width (~19 mm, spatula) keeps the
+#: whole settled tolerance disc clear of the rim balusters.
+_FLAT_LAY_RIM_INSET_M = 0.040
+
+
+def derive_flat_lay_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
+    """Lying-flat slots on the third-rack cutlery tray (machines with ``E_shelf_third``).
+
+    One slot column per tray zone (left wing, dropped center channel — usable for deeper
+    items — right wing), rows along the tray depth at the standing-grid pitch. The slot
+    origin sits ON that zone's floor plane (wing mesh, or the channel floor inside the
+    channel x-span) at the zone's x-center; slot x = rack x = the placed object's long-axis
+    direction, z up. ``width_m`` is the zone's usable long-axis extent.
+    """
+    from . import rack_gen  # noqa: PLC0415
+
+    p = config.RACK_GEN.get("E_shelf_third")
+    if p is None:
+        raise ValueError("active machine has no third rack (config.RACK_GEN lacks 'E_shelf_third')")
+    T_base_rack = _third_rack_T(cache_dir)
+    pitch = config.SLOT_GRID_PITCH_M
+    slots: list[SlotFrame] = []
+    for zone, (x0, x1, y0, y1), z_floor in rack_gen.tray_zones(p):
+        lo, hi = y0 + _FLAT_LAY_RIM_INSET_M, y1 - _FLAT_LAY_RIM_INSET_M
+        k = max(1, int((hi - lo) // pitch) + 1)
+        ys = lo + (hi - lo - (k - 1) * pitch) / 2.0 + np.arange(k) * pitch
+        for y in ys:
+            T_rack_slot = np.eye(4)
+            T_rack_slot[:3, 3] = ((x0 + x1) / 2.0, float(y), z_floor)
+            T_base_slot = T_base_rack @ T_rack_slot
+            # frame sanity: slot z must stay "up" in the base frame (the tray is level)
+            assert T_base_slot[2, 2] > 0.99, f"slot frame tilted: z-axis {T_base_slot[:3, 2]}"
+            slots.append(
+                SlotFrame(
+                    slot_id=len(slots),
+                    T_base_slot=T_base_slot,
+                    width_m=float(x1 - x0),
+                    source="derived",
+                    mode="flat_lay_third",
+                    rack="third",
+                    params={"zone": zone, "span_x": [float(x0), float(x1)]},
+                )
+            )
+    return slots
+
+
 def _spec_R_stand() -> np.ndarray:
     """Rotation standing the ACTIVE object's axis up (design/base z)."""
     from scipy.spatial.transform import Rotation  # noqa: PLC0415
@@ -334,6 +394,17 @@ def object_pose_for_mode(slot: SlotFrame, spin: float, lateral: np.ndarray, tilt
         t_local = np.array(
             [lateral[0] * 0.3, lateral[1] * 0.3, hover + spec.height_m / 2.0]
         )
+    elif slot.mode == "flat_lay_third":
+        # lying FLAT on the tray mesh: the long axis (+x_obj) stays along slot/rack x —
+        # tilt[0] yaws it in the floor plane, tilt[1] pitches it slightly, spin rolls
+        # gently about the long axis (a released fork settles tines-up/down); the bottom
+        # face hovers ``release_hover_m`` above the zone's floor plane
+        R_local = (
+            Rotation.from_euler("z", tilt[0] * 0.5).as_matrix()
+            @ Rotation.from_euler("y", tilt[1] * 0.3).as_matrix()
+            @ Rotation.from_euler("x", spin * 0.05).as_matrix()
+        )
+        t_local = np.array([lateral[0] * 0.5, lateral[1] * 0.5, hover + spec.bbox_half[2]])
     else:
         raise ValueError(f"no goal-pose generator for mode {slot.mode!r}")
 
@@ -520,6 +591,21 @@ def evaluate_placement(slot: SlotFrame, T_base_obj: np.ndarray) -> dict:
         tilt = float(np.degrees(np.arccos(np.clip(abs(axis_base[2]), -1.0, 1.0))))
         ok = bool(inside_xy and inside_z)
         return {"lateral_m": round(lateral, 4), "tilt_deg": round(tilt, 2), "bottom_height_m": round(float(d[2]), 4), "ok": ok}
+
+    if slot.mode == "flat_lay_third":
+        # lying flat on the tray: settled CENTER near the slot origin, long axis near
+        # HORIZONTAL (tilt = the axis' elevation off the floor plane), resting on the
+        # zone's floor plane — the slot origin already sits on the right datum (wing
+        # plane, or the dropped channel floor for channel slots)
+        lateral = float(np.hypot(d[0], d[1]))
+        tilt = float(np.degrees(np.arcsin(np.clip(abs(float(axis_base[2])), 0.0, 1.0))))
+        # flat rest half-thickness: the smaller cross-axis half extent (the piece may
+        # settle rolled onto either face)
+        rest_half = float(min(spec.bbox_half[1], spec.bbox_half[2]))
+        bottom = float(d[2]) - rest_half
+        ok = (lateral <= mp["tol_lateral_m"] and tilt <= mp["tol_tilt_deg"]
+               and abs(bottom) <= mp["tol_bottom_m"])
+        return {"lateral_m": round(lateral, 4), "tilt_deg": round(tilt, 2), "bottom_height_m": round(bottom, 4), "ok": bool(ok)}
 
     raise ValueError(f"no evaluation for mode {slot.mode!r}")
 

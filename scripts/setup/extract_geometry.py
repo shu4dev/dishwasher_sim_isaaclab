@@ -23,6 +23,10 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 
 parser = argparse.ArgumentParser(description="Dump collision-world cache from the v0 scene.")
 parser.add_argument("--settle_steps", type=int, default=200)
+parser.add_argument("--placement", type=str, default=None,
+                    help="Named base placement (see config.BASE_PLACEMENTS); default: the machine's.")
+parser.add_argument("--machine", type=str, default=None,
+                    help="Machine name (see config.MACHINES); default: the v1 baseline.")
 parser.add_argument("--object", type=str, default="mug", help="Carried object class (see config.OBJECTS).")
 parser.add_argument("--scenario", type=str, default="both_out",
                     help="Rack-state scenario (see config.SCENARIOS).")
@@ -46,8 +50,12 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 from dishsim import config  # noqa: E402
 
 # scenario BEFORE scene/robots imports — they bind rack targets + the derived USD at import
+if args_cli.machine:
+    config.apply_machine(args_cli.machine)  # first: it resets scenario + base placement
 config.set_active_object(args_cli.object)
 config.apply_scenario(args_cli.scenario)
+if args_cli.placement:
+    config.apply_base_placement(args_cli.placement)  # after machine/scenario — they reset it
 
 from dishsim import geometry as dgeom  # noqa: E402
 from dishsim import scene as dscene  # noqa: E402

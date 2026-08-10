@@ -31,6 +31,10 @@ parser.add_argument("--seed", type=int, default=11)
 parser.add_argument("--out_dir", type=str, default=None,
                     help="Media dir (default: media/goals or media/goals/<scenario>).")
 parser.add_argument("--sheets_per_slot", type=int, default=6)
+parser.add_argument("--placement", type=str, default=None,
+                    help="Named base placement (see config.BASE_PLACEMENTS); default: the machine's.")
+parser.add_argument("--machine", type=str, default=None,
+                    help="Machine name (see config.MACHINES); default: the v1 baseline.")
 parser.add_argument("--object", type=str, default="mug", help="Carried object class (see config.OBJECTS).")
 parser.add_argument("--scenario", type=str, default=None,
                     help="Rack-state scenario (default: the placement state scripts/experiment/run_trials.py reads).")
@@ -57,8 +61,12 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 from dishsim import config  # noqa: E402
 
 # scenario BEFORE scene/robots imports — they bind rack targets + the derived USD at import
+if args_cli.machine:
+    config.apply_machine(args_cli.machine)  # first: it resets scenario + base placement
 config.set_active_object(args_cli.object)
 config.apply_scenario(args_cli.scenario or config.PLACEMENT_STATE)
+if args_cli.placement:
+    config.apply_base_placement(args_cli.placement)  # after machine/scenario — they reset it
 if args_cli.out_dir is None:
     args_cli.out_dir = config.scenario_media_dir("goals")
 
@@ -101,7 +109,6 @@ def render_slot_detection(slots, out_png: str) -> None:
         half = s.width_m / 2.0
         ax.add_patch(plt.Rectangle((cx - half, cy - half), 2 * half, 2 * half, fill=False, ec="tab:blue"))
         ax.annotate(str(s.slot_id), (cx, cy), ha="center", va="center", color="tab:red", fontsize=12)
-    ax.add_patch(plt.Circle((0, -config.ROBOT_BASE_POS_W[1]), 0.0, fill=False))
     ax.scatter([0], [0], marker="*", s=140, c="k", label="robot base")
     theta = np.linspace(0, 2 * np.pi, 128)
     ax.plot(config.UR5E_REACH_M * np.cos(theta), config.UR5E_REACH_M * np.sin(theta), "k--", lw=0.8, label="0.85 m reach")
@@ -122,7 +129,7 @@ def main() -> None:
     # ---- Kit-free computation ------------------------------------------------------------
     # thin-insertion modes (cutlery into a bay, a disc into a 30 mm tine gap): the merged
     # gripper+object hull is a giant wedge that can never fit — use the per-piece cluster
-    merged = config.active_object_spec().placement.mode not in ("basket_drop", "plate_slot")
+    merged = config.effective_placement_mode() not in ("basket_drop", "plate_slot")
     world = CollisionWorld(cache_dir=config.scenario_cache_dir(), self_check=True, merged_cluster=merged)
     slots = placement.derive_slots(config.scenario_cache_dir())  # mode dispatch per object
     print(f"[INFO] scenario {config.SCENARIO_NAME}: home config in_collision: "

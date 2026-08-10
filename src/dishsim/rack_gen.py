@@ -32,6 +32,13 @@ identical params, identical geometry.
 Wire cross-sections are regular 12-gons: 12 divides both 90 and 180 degrees, so axis-aligned
 rods have vertices pointing exactly along the negative axes and the assembled bounding box lands
 on the configured footprint to float precision (the slot grid derives from these bounds).
+
+Machines: the v1 ``config.RACK_GEN`` dicts (ArtVIP compact) are FROZEN — every parameter path
+here keeps their output byte-identical. The Bosch 800 dicts (``config.apply_machine("bosch800")``)
+reuse :func:`build_rack` for the two big wire racks (bigger footprints, ``usd_scale_x`` 1.0, no
+basket/second bank on the lower) and route the third rack to the NEW :func:`build_tray` (a
+shallow flat-lay cutlery tray) via the ``"builder"`` key — dispatch in :func:`build`. Optional
+feature keys may be absent or ``None`` in either machine's dicts; both mean "skip the feature".
 """
 
 import hashlib
@@ -276,7 +283,7 @@ def _bar_segments(p: dict, y: float, z: float, with_slopes: bool) -> list[tuple[
     W = p["footprint"][0]
     zl = _z_levels(p)
     x_lo, x_hi = zl["r_load"] + 0.0015, W - zl["r_load"] - 0.0015
-    tan_s = math.tan(math.radians(p["slope_deg"])) * p.get("slope_sign", -1.0)
+    tan_s = math.tan(math.radians(p.get("slope_deg", 0.0))) * p.get("slope_sign", -1.0)
     slopes = sorted(p.get("slope_zones") or ()) if with_slopes else []
     ch = p.get("channel")
     ramp_run = 0.006
@@ -418,19 +425,21 @@ def _perimeter(parts: list[RackPart], p: dict) -> None:
             parts.append(RackPart(f"handle_riser_{i}", "handle", _rod((hx, r_w, z0), (hx, r_w, gz), d_load, n)))
         parts.append(RackPart("handle_grip", "handle", _rod((hx0, r_w, gz), (hx1, r_w, gz), d_load, n)))
 
-    # balusters (vertical infill wires; front ones follow the dip profile)
-    pitch = p["baluster_pitch"]
-    margin = ax + 0.004
-    for i, x in enumerate(np.arange(margin, W - margin + 1e-9, pitch)):
-        parts.append(
-            RackPart(f"bal_f_{i:02d}", "perimeter", _rod((x, r_w, z_bot), (x, r_w, _front_rail_z(p, x)), d_light, n))
-        )
-        parts.append(RackPart(f"bal_r_{i:02d}", "guard", _rod((x, D - r_w, z_bot), (x, D - r_w, z_rear), d_light, n)))
-    for i, y in enumerate(np.arange(margin, D - margin + 1e-9, pitch)):
-        z_top = z_side if y < y_split else z_rear
-        zone = "perimeter" if y < y_split else "guard"
-        for side, x in (("l", r_w), ("r", W - r_w)):
-            parts.append(RackPart(f"bal_s{side}_{i:02d}", zone, _rod((x, y, z_bot), (x, y, z_top), d_light, n)))
+    # balusters (vertical infill wires; front ones follow the dip profile). Optional —
+    # absent/None baluster_pitch skips the infill.
+    pitch = p.get("baluster_pitch")
+    if pitch:
+        margin = ax + 0.004
+        for i, x in enumerate(np.arange(margin, W - margin + 1e-9, pitch)):
+            parts.append(
+                RackPart(f"bal_f_{i:02d}", "perimeter", _rod((x, r_w, z_bot), (x, r_w, _front_rail_z(p, x)), d_light, n))
+            )
+            parts.append(RackPart(f"bal_r_{i:02d}", "guard", _rod((x, D - r_w, z_bot), (x, D - r_w, z_rear), d_light, n)))
+        for i, y in enumerate(np.arange(margin, D - margin + 1e-9, pitch)):
+            z_top = z_side if y < y_split else z_rear
+            zone = "perimeter" if y < y_split else "guard"
+            for side, x in (("l", r_w), ("r", W - r_w)):
+                parts.append(RackPart(f"bal_s{side}_{i:02d}", zone, _rod((x, y, z_bot), (x, y, z_top), d_light, n)))
 
 
 def _plate_bank(parts: list[RackPart], p: dict) -> None:
@@ -467,16 +476,18 @@ def _plate_bank(parts: list[RackPart], p: dict) -> None:
                 RackPart(f"bank_bar_{j}_{k:02d}", "floor_dense" if zone == "floor_open" else zone, _rod(p0, p1, d_light, n))
             )
     # corrugated cradle ribs: V-profile, peaks under the tines, troughs at the gap centers
-    z_peak, z_trough = zl["z_cross"], zl["z_cross"] - 2.0 * p["rib_amplitude"]
-    for r_i, y in enumerate(p["plate_rows_y"]):
-        pts: list[tuple[float, float]] = []
-        for k, xp in enumerate(tine_xs):
-            pts.append((float(xp), z_peak))
-            if k < len(tine_xs) - 1:
-                pts.append((float(xp + tine_xs[k + 1]) / 2.0, z_trough))
-        for k in range(len(pts) - 1):
-            (xa, za), (xb, zb) = pts[k], pts[k + 1]
-            parts.append(RackPart(f"rib_{r_i}_{k:02d}", "ribs", _rod((xa, y, za), (xb, y, zb), d_light, n)))
+    # (optional — absent/None rib_amplitude skips the ribs)
+    if p.get("rib_amplitude"):
+        z_peak, z_trough = zl["z_cross"], zl["z_cross"] - 2.0 * p["rib_amplitude"]
+        for r_i, y in enumerate(p["plate_rows_y"]):
+            pts: list[tuple[float, float]] = []
+            for k, xp in enumerate(tine_xs):
+                pts.append((float(xp), z_peak))
+                if k < len(tine_xs) - 1:
+                    pts.append((float(xp + tine_xs[k + 1]) / 2.0, z_trough))
+            for k in range(len(pts) - 1):
+                (xa, za), (xb, zb) = pts[k], pts[k + 1]
+                parts.append(RackPart(f"rib_{r_i}_{k:02d}", "ribs", _rod((xa, y, za), (xb, y, zb), d_light, n)))
 
     # Tine rows: ends are candy canes, middles straight shafts + bead caps; every base
     # filleted. The cane is optional (None -> straight end tines): its inboard-curling hook
@@ -484,8 +495,8 @@ def _plate_bank(parts: list[RackPart], p: dict) -> None:
     # canes — measured on the robot bank: end gap 0 is behind the arm-access boundary
     # regardless, and end gap 2 still bakes accepted goals with the cane in place.
     cane = p.get("candy_cane")
-    bead = p["tine_bead"]
-    fil = p["tine_fillet"]
+    bead = p.get("tine_bead")  # optional: absent/None -> plain full-height shafts, no tip caps
+    fil = p.get("tine_fillet")  # optional: absent/None -> no base fillets
     ux, uz = np.array([1.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0])
     for r_i, y in enumerate(p["plate_rows_y"]):
         group = "insert" if r_i == insert_row else "frame"
@@ -510,30 +521,32 @@ def _plate_bank(parts: list[RackPart], p: dict) -> None:
                         RackPart(f"cane_arc_r{r_i}_c{k:02d}_{s}", "plate_tines", _rod(pts3[s], pts3[s + 1], d_light, n), group)
                     )
             else:
-                shaft_top = h - bead["len"]
+                shaft_top = h - bead["len"] if bead else h
                 parts.append(
                     RackPart(f"plate_tine_r{r_i}_c{k:02d}", "plate_tines", _sheared_rod(base, 0.0, shaft_top, d_light, lean, n), group)
                 )
-                parts.append(
-                    RackPart(
-                        f"bead_r{r_i}_c{k:02d}",
-                        "plate_tines",
-                        _sheared_rod(base, h - bead["len"] - 0.002, h, d_light * bead["dia_factor"], lean, n),
-                        group,
+                if bead:
+                    parts.append(
+                        RackPart(
+                            f"bead_r{r_i}_c{k:02d}",
+                            "plate_tines",
+                            _sheared_rod(base, h - bead["len"] - 0.002, h, d_light * bead["dia_factor"], lean, n),
+                            group,
+                        )
                     )
-                )
             # base fillet: quarter arc curving DOWN from the shaft base into the floor grid
             # (real U-bend wires dive into the floor; curving upward would also pollute the
             # slot-datum percentile band above floor_top — the down-arc's top ring is exactly
             # perpendicular to z, so no fillet vertex exceeds the floor-top level)
-            direction = 1.0 if k % 2 == 0 else -1.0
-            f_c = np.array([x + direction * fil["r"], y, base_z])
-            a0, a1 = (180.0, 270.0) if direction > 0 else (0.0, -90.0)
-            fpts = _arc_points_3d(f_c, fil["r"], ux, uz, a0, a1, fil["segments"])
-            for s in range(len(fpts) - 1):
-                parts.append(
-                    RackPart(f"fillet_r{r_i}_c{k:02d}_{s}", "plate_tines", _rod(fpts[s], fpts[s + 1], d_light, n), group)
-                )
+            if fil:
+                direction = 1.0 if k % 2 == 0 else -1.0
+                f_c = np.array([x + direction * fil["r"], y, base_z])
+                a0, a1 = (180.0, 270.0) if direction > 0 else (0.0, -90.0)
+                fpts = _arc_points_3d(f_c, fil["r"], ux, uz, a0, a1, fil["segments"])
+                for s in range(len(fpts) - 1):
+                    parts.append(
+                        RackPart(f"fillet_r{r_i}_c{k:02d}_{s}", "plate_tines", _rod(fpts[s], fpts[s + 1], d_light, n), group)
+                    )
         # Mid-height tie wire threaded through the row. Optional (None skips): the tie crosses
         # every gap THROUGH the standing disc's plane, so a robot-loaded bank cannot have one —
         # measured 2026-08-09: it single-handedly rejected 100% of plate goal poses. Fill-only
@@ -767,12 +780,12 @@ def build_rack(params: dict) -> list[RackPart]:
     for si, (s0, s1) in enumerate(p.get("slope_zones") or ()):
         xm = (s0 + s1) / 2.0
         run = (s1 - xm) if xm < W / 2.0 else (xm - s0)
-        z = zl["z_cross"] + p.get("slope_sign", -1.0) * math.tan(math.radians(p["slope_deg"])) * run
+        z = zl["z_cross"] + p.get("slope_sign", -1.0) * math.tan(math.radians(p.get("slope_deg", 0.0))) * run
         y0s, y1s = min(p["crossbar_ys"]) - 0.008, max(p["crossbar_ys"]) + 0.008
         parts.append(RackPart(f"slope_runner_{si}", "slope", _rod((xm, y0s, z), (xm, y1s, z), d_light, n)))
 
     # -- rear plate bank (lower rack) -----------------------------------------------------------
-    if "plate_rows_y" in p:
+    if p.get("plate_rows_y"):
         _plate_bank(parts, p)
     if p.get("plate_bank2"):
         # A second, independently-parameterized tine bank (e.g. a fill-only rear bank behind a
@@ -781,11 +794,11 @@ def build_rack(params: dict) -> list[RackPart]:
         _plate_bank(parts, {**p, **p["plate_bank2"]})
 
     # -- cutlery basket (lower rack, v3) ---------------------------------------------------------
-    if "basket" in p:
+    if p.get("basket"):
         _cutlery_basket(parts, p)
 
     # -- upper-rack center divider (glass row) ---------------------------------------------------
-    if "divider_tine_x" in p:
+    if p.get("divider_tine_x") is not None:
         for yi, y in enumerate(p["divider_tine_ys"]):
             parts.append(
                 RackPart(
@@ -807,6 +820,175 @@ def build_rack(params: dict) -> list[RackPart]:
     _upper_features(parts, p)
     _perimeter(parts, p)
     return parts
+
+
+# ---------------------------------------------------------------------------------------------
+# tray builder (Bosch third rack: shallow flat-lay cutlery tray)
+# ---------------------------------------------------------------------------------------------
+
+#: Ramp run [m] joining the wing floor to the dropped channel floor on each tray crossbar
+#: (the same short-diagonal idiom as the v1 tracking-channel dip in :func:`_bar_segments`;
+#: longer here because the tray channel drops 28 mm, not 4).
+_TRAY_RAMP_RUN = 0.010
+#: Vertical rim-infill wire spacing [m] (design value: matches the v1 racks' visual density
+#: at the tray's larger footprint; the tray dicts carry no baluster_pitch key).
+_TRAY_BALUSTER_PITCH = 0.060
+
+
+def _tray_z_levels(p: dict) -> dict:
+    """Derived vertical layout for the tray builder (same convention as :func:`_z_levels`).
+
+    The dropped center channel carries the global z-minimum: channel-span runners bottom
+    exactly at z=0, wing runners are raised by ``channel.drop``, crossbars rest tangent on
+    the runners, and the plane an object lies on is the crossbar top.
+    """
+    r_heavy = p["wire_dia_heavy"] / 2.0
+    r_light = p["wire_dia_light"] / 2.0
+    ch = p.get("channel")
+    drop = ch["drop"] if ch else 0.0
+    z_runner = r_light + drop  # wing runners; channel runners sit at r_light (bottoms at z=0)
+    z_cross = z_runner + 2.0 * r_light  # crossbars rest tangent on the runners
+    return {
+        "r_heavy": r_heavy,
+        "r_light": r_light,
+        "drop": drop,
+        "z_runner": z_runner,
+        "z_cross": z_cross,
+        "z_bot_rail": max(z_runner, r_heavy),  # bottom perimeter rail center
+        "floor_top": z_cross + r_light,  # wing floor plane (the flat-lay resting level)
+    }
+
+
+def tray_floor_z(params: dict) -> float:
+    """Wing (main) floor plane of the tray [m] — what a flat-laid object rests on."""
+    return _tray_z_levels(params)["floor_top"]
+
+
+def tray_channel_floor_z(params: dict) -> float:
+    """Floor plane of the dropped center channel [m] (``channel.drop`` below the wings)."""
+    zl = _tray_z_levels(params)
+    return zl["floor_top"] - zl["drop"]
+
+
+def tray_zones(params: dict) -> list[tuple[str, tuple[float, float, float, float], float]]:
+    """Usable flat-lay areas as ``(name, (x0, x1, y0, y1), floor_z)``, left wing to right wing.
+
+    Wing bounds run from the rim inner face to the channel edge; the channel zone keeps only
+    its flat mid span (the crossbar ramps eat ``_TRAY_RAMP_RUN`` on each side). ``floor_z``
+    is that zone's resting plane (wing plane, or the dropped channel floor). Without a
+    ``channel`` key the whole floor is one ``"floor"`` zone.
+    """
+    W, D = params["footprint"]
+    zl = _tray_z_levels(params)
+    x_lo, x_hi = 2.0 * zl["r_heavy"], W - 2.0 * zl["r_heavy"]  # inner face of the rim wires
+    y_lo, y_hi = 2.0 * zl["r_heavy"], D - 2.0 * zl["r_heavy"]
+    z_wing = zl["floor_top"]
+    ch = params.get("channel")
+    if not ch:
+        return [("floor", (x_lo, x_hi, y_lo, y_hi), z_wing)]
+    cx0, cx1 = ch["x"]
+    return [
+        ("wing_l", (x_lo, cx0, y_lo, y_hi), z_wing),
+        ("channel", (cx0 + _TRAY_RAMP_RUN, cx1 - _TRAY_RAMP_RUN, y_lo, y_hi), z_wing - zl["drop"]),
+        ("wing_r", (cx1, x_hi, y_lo, y_hi), z_wing),
+    ]
+
+
+def build_tray(params: dict) -> list[RackPart]:
+    """Build the shallow flat-lay cutlery tray (Bosch third rack). Deterministic; every part convex.
+
+    Layout (design frame, wire bottoms at z=0, footprint = the assembled x/y span): a
+    heavy-gauge perimeter rim whose top sits ``rim_h`` above the wing floor plane (bottom +
+    top rail loops joined by corner posts and light balusters), a fine light-gauge mesh floor
+    (longitudinal runners along y at ``runner_pitch``, transverse crossbars at
+    ``crossbar_pitch``), and a dropped center channel spanning ``channel.x`` whose floor sits
+    ``channel.drop`` below the wing plane — runners inside the channel span are authored at
+    the dropped level, crossbars dip over short diagonal ramps (two floor levels joined by
+    slopes). All parts land in the ``frame`` group so the USD/FCL plumbing
+    (:func:`parts_by_group` / :func:`mesh_arrays_usd` / :func:`merged_mesh`) works unchanged.
+    """
+    p = params
+    W, D = p["footprint"]
+    zl = _tray_z_levels(p)
+    n = p["wire_sides"]
+    d_heavy, d_light = p["wire_dia_heavy"], p["wire_dia_light"]
+    r_w = zl["r_heavy"]  # rail centerline inset: outer wire surface exactly on the bbox edge
+    r_l = zl["r_light"]
+    ch = p.get("channel")
+    parts: list[RackPart] = []
+
+    # floor wires stop just short of the rim rails (same 1.5 mm relief as the rack builder)
+    x_lo, x_hi = r_w + 0.0015, W - r_w - 0.0015
+    y_lo, y_hi = r_w + 0.0015, D - r_w - 0.0015
+
+    def centered(lo: float, hi: float, pitch: float) -> np.ndarray:
+        """Positions at ``pitch`` centered in [lo, hi] (the placement-grid arithmetic)."""
+        k = max(1, int((hi - lo) // pitch) + 1)
+        return lo + (hi - lo - (k - 1) * pitch) / 2.0 + np.arange(k) * pitch
+
+    # -- mesh floor: longitudinal runners (along y); channel-span runners drop with the floor --
+    for i, x in enumerate(centered(x_lo + r_l, x_hi - r_l, p["runner_pitch"])):
+        in_channel = ch is not None and ch["x"][0] < x < ch["x"][1]
+        z = zl["z_runner"] - (zl["drop"] if in_channel else 0.0)
+        zone = "channel" if in_channel else "floor_open"
+        parts.append(RackPart(f"tray_runner_{i:02d}", zone, _rod((x, y_lo, z), (x, y_hi, z), d_light, n)))
+
+    # -- mesh floor: transverse crossbars, dipping through the channel over short ramps --------
+    z_c = zl["z_cross"]
+    for j, y in enumerate(centered(y_lo + r_l, y_hi - r_l, p["crossbar_pitch"])):
+        if ch is None:
+            segs = [((x_lo, y, z_c), (x_hi, y, z_c), "floor_open")]
+        else:
+            cx0, cx1 = ch["x"]
+            zd = z_c - ch["drop"]
+            segs = [
+                ((x_lo, y, z_c), (cx0, y, z_c), "floor_open"),
+                ((cx0, y, z_c), (cx0 + _TRAY_RAMP_RUN, y, zd), "slope"),
+                ((cx0 + _TRAY_RAMP_RUN, y, zd), (cx1 - _TRAY_RAMP_RUN, y, zd), "channel"),
+                ((cx1 - _TRAY_RAMP_RUN, y, zd), (cx1, y, z_c), "slope"),
+                ((cx1, y, z_c), (x_hi, y, z_c), "floor_open"),
+            ]
+        for k, (p0, p1, zone) in enumerate(segs):
+            parts.append(RackPart(f"tray_cross_{j}_{k}", zone, _rod(p0, p1, d_light, n)))
+
+    # -- perimeter rim: bottom + top heavy rail loops, corner posts, light balusters -----------
+    z_bot = zl["z_bot_rail"]
+    z_top = zl["floor_top"] + p["rim_h"] - r_w  # rim top wire surface = wing floor + rim_h
+    for tag, z in (("bot", z_bot), ("top", z_top)):
+        parts.append(RackPart(f"tray_rail_{tag}_front", "perimeter", _rod((r_w, r_w, z), (W - r_w, r_w, z), d_heavy, n)))
+        parts.append(RackPart(f"tray_rail_{tag}_rear", "perimeter", _rod((r_w, D - r_w, z), (W - r_w, D - r_w, z), d_heavy, n)))
+        parts.append(RackPart(f"tray_rail_{tag}_l", "perimeter", _rod((r_w, r_w, z), (r_w, D - r_w, z), d_heavy, n)))
+        parts.append(RackPart(f"tray_rail_{tag}_r", "perimeter", _rod((W - r_w, r_w, z), (W - r_w, D - r_w, z), d_heavy, n)))
+    for ci, (cx, cy) in enumerate(((r_w, r_w), (W - r_w, r_w), (r_w, D - r_w), (W - r_w, D - r_w))):
+        parts.append(RackPart(f"tray_post_{ci}", "perimeter", _rod((cx, cy, z_bot), (cx, cy, z_top), d_heavy, n)))
+    bp = _TRAY_BALUSTER_PITCH
+    for i, x in enumerate(centered(r_w + bp / 2.0, W - r_w - bp / 2.0, bp)):
+        for side, yb in (("f", r_w), ("r", D - r_w)):
+            parts.append(RackPart(f"tray_bal_{side}_{i:02d}", "perimeter", _rod((x, yb, z_bot), (x, yb, z_top), d_light, n)))
+    for i, y in enumerate(centered(r_w + bp / 2.0, D - r_w - bp / 2.0, bp)):
+        for side, xb in (("l", r_w), ("r", W - r_w)):
+            parts.append(RackPart(f"tray_bal_s{side}_{i:02d}", "perimeter", _rod((xb, y, z_bot), (xb, y, z_top), d_light, n)))
+    return parts
+
+
+def build(params: dict) -> list[RackPart]:
+    """Build the rack described by ``params``, routed on its ``"builder"`` key.
+
+    ``"tray"`` selects :func:`build_tray` (the Bosch third-rack cutlery tray); an absent key
+    — which every v1 dict is — or ``"rack"`` selects :func:`build_rack`.
+
+    Args:
+        params: One ``config.RACK_GEN`` entry.
+
+    Returns:
+        The built parts, as from the selected builder.
+    """
+    builder = params.get("builder")
+    if builder == "tray":
+        return build_tray(params)
+    if builder in (None, "rack"):
+        return build_rack(params)
+    raise ValueError(f"unknown rack builder {builder!r} (choices: 'rack', 'tray')")
 
 
 def merged_mesh(parts: list[RackPart]) -> trimesh.Trimesh:

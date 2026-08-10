@@ -29,8 +29,14 @@ from . import config
 MESH_DIR = "meshes"
 MANIFEST = "scene_state.json"
 
-#: dishwasher rigid bodies to extract (body-frame meshes + world poses)
+#: dishwasher rigid bodies to extract (body-frame meshes + world poses); machines with a
+#: third rack extend this via :func:`dishwasher_bodies`
 DISHWASHER_BODIES = ["E_body_5", "E_door_4", "E_shelf_03", "E_shelf_1_04"]
+
+
+def dishwasher_bodies() -> list[str]:
+    """The active machine's extractable rigid bodies (adds the third rack when present)."""
+    return DISHWASHER_BODIES + (["E_shelf_third"] if config.HAS_THIRD_RACK else [])
 #: arm links whose meshes move with fk_all_links
 ARM_LINKS = ["base_link", "shoulder_link", "upper_arm_link", "forearm_link", "wrist_1_link", "wrist_2_link", "wrist_3_link"]
 
@@ -62,6 +68,20 @@ def config_hash() -> str:
     if config.ACTIVE_OBJECT != "mug":
         spec = config.active_object_spec()
         payload["object_spec"] = (spec.scale, spec.mass_kg, spec.bbox_half, spec.coacd)
+    # Non-default machines additionally hash their name + parametric geometry + per-joint
+    # travels (their RACK_GEN, rack targets, spawn pose and countertop already flow through
+    # the unconditional keys above). Conditional for the same reason as object_spec: the
+    # baseline payload — and every validated v1 cache hash — must stay byte-stable.
+    if config.MACHINE != config.MACHINE_BASELINE_NAME:
+        payload["machine"] = (
+            config.MACHINE,
+            config.MACHINE_GEN.get(config.MACHINE),
+            config.RACK_TRAVEL_LIMITS_BY_JOINT_M,
+        )
+    # Non-default base placements hash the placement name + base QUATERNION — the v1
+    # payload only covers the base position (the known coverage gap this closes).
+    if config.BASE_PLACEMENT != "front":
+        payload["base_placement"] = (config.BASE_PLACEMENT, config.ROBOT_BASE_QUAT_W)
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -154,7 +174,7 @@ def dump_cache(scene, sim, cache_dir: str = config.CACHE_DIR) -> str:
     # -- dishwasher bodies (static in v0) ------------------------------------------------------
     dw = scene["dishwasher"]
     env_path = "/World/envs/env_0"
-    for body in DISHWASHER_BODIES:
+    for body in dishwasher_bodies():
         prim = None
         for cand in stage.Traverse():
             if cand.GetName() == body and str(cand.GetPath()).startswith(f"{env_path}/Dishwasher"):
@@ -168,7 +188,7 @@ def dump_cache(scene, sim, cache_dir: str = config.CACHE_DIR) -> str:
             # (USD-round-tripped) rack must match the generator's design-space geometry
             from . import rack_gen  # noqa: PLC0415
 
-            ref = rack_gen.merged_mesh(rack_gen.build_rack(config.RACK_GEN[body]))
+            ref = rack_gen.merged_mesh(rack_gen.build(config.RACK_GEN[body]))
             dev = np.abs(np.asarray(mesh.bounds) - np.asarray(ref.bounds)).max()
             assert dev < 2e-3, f"{body}: extracted bounds deviate {dev * 1e3:.2f} mm from rack_gen"
         T_base_body = T_base_w @ body_pose_w(dw, body)

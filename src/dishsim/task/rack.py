@@ -185,11 +185,20 @@ class RackAction:
                         if not m.world.in_collision(q)]
             if not pre_sols:
                 continue
-            arm_path = rack_ops.slide_arm_path(m.world, spec.T_base_body, params, _action(spec),
-                                               spec.cached_ext, pre_sols[0], flip=flip)
-            if arm_path is None:
+            # Only SLIDE-CAPABLE branches may be approach goals: the approach planner picks
+            # whichever goal it reaches, and the engaged arm stays in that branch — handing
+            # it a branch whose slide re-plan later fails forced a silent fallback onto
+            # another branch's path, entered via an ungated joint-space jump (measured:
+            # 0.41 rad from plan, wrist swept through the mouth, 76.9-103.8 N).
+            slide_sols = [q for q in pre_sols
+                          if rack_ops.slide_arm_path(m.world, spec.T_base_body, params,
+                                                     _action(spec), spec.cached_ext, q,
+                                                     flip=flip) is not None]
+            if not slide_sols:
                 continue
-            plan_r = (flip, T_engage, T_pre, pre_sols, arm_path)
+            arm_path = rack_ops.slide_arm_path(m.world, spec.T_base_body, params, _action(spec),
+                                               spec.cached_ext, slide_sols[0], flip=flip)
+            plan_r = (flip, T_engage, T_pre, slide_sols, arm_path)
             break
         if plan_r is None:
             out.stage = "rack-slide-plan"
@@ -227,23 +236,82 @@ class RackAction:
 
         # Re-seed the slide from the configuration actually REACHED, not the one planned: the
         # engage reach-in tracks IK and lands slightly off, and following a path seeded from the
-        # planned pose would fight the drive for the whole slide.
+        # planned pose would fight the drive for the whole slide. NO silent fallback: every
+        # approach goal was slide-capable, so a failed re-plan here means the reached pose
+        # genuinely cannot slide — playing another branch's path would enter it through an
+        # ungated joint-space jump (the measured 0.41 rad wrist sweep).
         arm_path2 = rack_ops.slide_arm_path(m.world, spec.T_base_body, params, _action(spec),
                                             spec.cached_ext, q_engaged, flip=flip)
-        if arm_path2 is not None:
-            arm_path = arm_path2
+        if arm_path2 is None:
+            out.stage = "rack-slide-plan"
+            out.detail = "slide re-plan failed from the engaged configuration (no fallback)"
+            return out
+        arm_path = arm_path2
 
         # ---- slide: the rack drive ramps while the tool tracks the handle -------------------
         e0, e1 = spec.cached_ext, spec.to
 
+        # The ramp must follow the ARM'S progress along the SOURCE waypoints, not the step
+        # fraction: time parameterization spends more steps on bigger joint moves, so a
+        # step-fraction ramp runs the 200 N rack drive ahead of the hand, and the caged
+        # grip drags the whole arm off its drive targets (measured: 0.41 rad off-plan,
+        # wrist hauled into the third rack at 76.9-103.8 N). Precompute each retimed
+        # step's source-waypoint extension by nearest-config lookup (deterministic — the
+        # same retiming call execute() itself makes).
+        from .. import trajectory as dtraj  # noqa: PLC0415
+        src = np.asarray(arm_path, dtype=float)
+        traj_preview = np.asarray(list(dtraj.time_parameterize(src)), dtype=float)
+        # Monotone mapping via cumulative joint-space arc length: nearest-config lookup
+        # ALIASES (similar arm shapes recur at different extensions — measured commanding
+        # 0 -> -0.224 -> -0.14 -> 0 -> -0.56 and stalling the rack), while arc length along
+        # the shared polyline is exact for the retimed resampling.
+        src_arc = np.concatenate([[0.0], np.cumsum(np.abs(np.diff(src, axis=0)).max(axis=1))])
+        tr_arc = np.concatenate(
+            [[0.0], np.cumsum(np.abs(np.diff(traj_preview, axis=0)).max(axis=1))])
+        step_exts = np.interp(tr_arc, src_arc, np.linspace(e0, e1, len(src))).tolist()
+        if len(step_exts) < 2:  # degenerate retime (near-zero-length path)
+            step_exts = [e0, e1]
+        step_exts[0], step_exts[-1] = e0, e1  # exact endpoints regardless of float interp
+
         def ramp(frac: float) -> None:
-            m.set_rack_target({**self._latched, spec.joint: e0 + (e1 - e0) * frac})
+            i = min(int(round(frac * (len(step_exts) - 1))), len(step_exts) - 1)
+            m.set_rack_target({**self._latched, spec.joint: step_exts[i]})
 
         step = m.execute(arm_path, phase="rack-slide", aperture=slide_aperture,
                          exclude=self.gripper_bodies, on_step=self.on_step, on_before_step=ramp)
         if not step.ok:
             out.stage = "rack-slide-fault"
             out.detail = step.detail
+            # fault forensics: live arm config vs the nearest planned waypoint, and the
+            # rack's measured extension vs the ramp — separates arm tracking error from
+            # rack drive lag from planner blind spots (2026-08-10 Bosch pull debugging)
+            q_live = np.asarray(m.current_q(), dtype=float)
+            i_near = int(np.argmin(np.abs(np.asarray(arm_path) - q_live).max(axis=1)))
+            dq = np.abs(np.asarray(arm_path[i_near]) - q_live)
+            ext_live = float(self.measure_ext()) if self.measure_ext is not None else float("nan")
+            print(f"[DEBUG] slide fault: nearest waypoint {i_near}/{len(arm_path) - 1}, "
+                  f"max|q_live - q_plan| {dq.max():.4f} rad (per-joint {np.round(dq, 4).tolist()})")
+            print(f"[DEBUG] slide fault: rack ext live {ext_live:+.4f} m, "
+                  f"ramp target at waypoint {i_near}: "
+                  f"{e0 + (e1 - e0) * (i_near / (len(arm_path) - 1)):+.4f} m")
+            # what does FCL think of the JAMMED configuration? (rack posed at the LIVE ext)
+            try:
+                if not np.isnan(ext_live):
+                    m.world.set_static_offset(spec.body, ext_live - spec.cached_ext)
+                hit, pairs = m.world.in_collision(q_live, return_pairs=True)
+                dmin = m.world.min_distance(q_live) if not hit else -1.0
+                print(f"[DEBUG] FCL at jammed q (rack at live ext): hit={hit} pairs={pairs[:4]} "
+                      f"min_dist={dmin:.4f} m")
+                from dishsim.ur5e_kin import fk_all_links  # noqa: PLC0415
+                fk = fk_all_links(q_live)
+                for ln in ("forearm_link", "wrist_1_link", "wrist_2_link", "wrist_3_link"):
+                    if ln in fk:
+                        print(f"[DEBUG]   {ln} base-frame pos {np.round(fk[ln][:3, 3], 4).tolist()}")
+            except Exception as exc:  # forensics must never mask the real fault
+                print(f"[DEBUG] forensic dump failed: {exc}")
+            finally:
+                if not np.isnan(ext_live) and hasattr(m.world, "set_static_offset"):
+                    m.world.set_static_offset(spec.body, 0.0)
             return out
         ramp(1.0)
         m.hold(60, phase="rack-settle", arm_q=arm_path[-1], aperture=slide_aperture,
