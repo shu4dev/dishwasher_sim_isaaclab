@@ -1,3 +1,4 @@
+#!/workspace/isaaclab/env_isaaclab/bin/python
 # Copyright (c) 2026, dishsim project.
 #
 # SPDX-License-Identifier: BSD-3-Clause

@@ -661,17 +661,6 @@ PLACEMENT_MODES: dict[str, dict] = {
         "tol_tilt_deg": 12.0,  # face-normal deviation, flip-insensitive
         "tol_bottom_m": 0.02,
     },
-    "bowl_lean": {
-        # lean positions over the drinkware slope, against the bowl tines
-        "slot_x_m": 0.070,
-        "slot_ys_m": (0.060, 0.105, 0.150),
-        "slot_width_m": 0.110,
-        "default_lean_deg": 48.0,  # opening down-slope
-        "release_hover_m": RELEASE_HOVER_M,
-        "tol_lateral_m": 0.04,
-        "tol_tilt_deg": 20.0,
-        "tol_bottom_m": 0.06,
-    },
     "basket_drop": {
         # v4: the basket is handleless (no arch bar over the bays), so cutlery drops
         # dead-center — the old -0.020 offset existed only to dodge the bar
@@ -785,7 +774,7 @@ TASK: dict = {
     #
     #   grasp family   classes                 real countertop pick?
     #   rim_diam       mug, cup, tumbler       yes — approach, close, weld, lift
-    #   edge_pinch     plate                   no  — START_WELDED in run_trials.py:135
+    #   edge_pinch     plate                   no  — START_WELDED in run_trials.py
     #   rim_edge       bowl                    no  — START_WELDED
     #   handle_pinch   fork                    no  — START_WELDED
     #
@@ -801,14 +790,15 @@ TASK: dict = {
     # Bounded by DESTINATION capacity, not by countertop room — the counter comfortably holds
     # far more than the machine can accept from the robot. Two measured limits stack:
     #
-    #   reachability  only 4 of the 15 lower-rack grid slots have any goal configurations
-    #                 (ids 1, 2, 6, 7); the rest sit where the carried object cannot be brought
-    #                 in. Empty goal sets there are expected signal, not a bug.
-    #   overlap       those 4 form a 2x2 block at the 60 mm SLOT_GRID_PITCH_M. The grid is an
-    #                 *overlapping candidate* grid built for one-object-per-trial coverage, so
-    #                 only the ~85 mm diagonals are simultaneously occupiable.
+    #   reachability  RACK_GEN v4 measured: 5 of the 15 floor cells accept cup AND tumbler
+    #                 (ids 0, 1, 5, 6, 7; mug reaches {0, 5, 6}); the rest sit where the
+    #                 carried object cannot be brought in. Empty goal sets there are expected
+    #                 signal, not a bug.
+    #   overlap       the grid is an *overlapping candidate* grid at the 60 mm
+    #                 SLOT_GRID_PITCH_M, built for one-object-per-trial coverage — adjacent
+    #                 cells are not simultaneously occupiable by wide items.
     #
-    # Net simultaneous capacity is therefore 2. Raising this without widening the slot pool
+    # Net simultaneous capacity stays conservative at 2. Raising this without widening the slot pool
     # just produces items the assigner honestly reports it cannot place.
     "n_objects": 2,
     # EXPLICIT composition: object type -> exact count, or an inclusive (lo, hi) range whose
@@ -847,7 +837,6 @@ TASK: dict = {
     "slot_pools": {
         "floor_stand": None,
         "plate_slot": None,
-        "bowl_lean": None,
         "basket_drop": None,
     },
     # Goal slots per object TYPE, as an ORDERED list of slot NAMES (see
@@ -878,7 +867,7 @@ TASK: dict = {
     "support_backend": "both",  # "contact" | "geometric" | "both" (both cross-checks and logs)
     "support_gap_m": 0.008,  # max vertical gap still counted as resting-on
     "support_overlap_frac": 0.10,  # min footprint-circle overlap counted as resting-on
-    "support_force_thresh_n": 0.05,  # object-object contact above this counts as touching  # min footprint-circle overlap counted as resting-on
+    "support_force_thresh_n": 0.05,  # object-object contact above this counts as touching
     # Stage C — blocked grasps and recovery
     "grasp_yaw_samples": 12,  # candidate grasp yaws probed against the CURRENT world
     "grasp_yaw_samples_wide": 36,  # recovery step 1 widens the sweep to this
@@ -942,7 +931,7 @@ class GraspSpec:
 class PlacementSpec:
     """Default placement mode for demos/fill.
 
-    Modes: ``floor_stand`` | ``plate_slot`` | ``bowl_lean`` | ``basket_drop`` (robot-capable)
+    Modes: ``floor_stand`` | ``plate_slot`` | ``basket_drop`` (robot-capable)
     and ``upside_down`` | ``stem_scallop`` | ``flat_lay`` (capacity-fill only).
     """
 
@@ -1189,21 +1178,6 @@ OBJECTS: dict[str, ObjectSpec] = {
         ),
         placement=PlacementSpec(mode="flat_lay", rack="upper"),
         coacd={"threshold": 0.05, "max_convex_hull": 16},
-    ),
-    "pitcher": ObjectSpec(
-        name="pitcher",
-        source="ycb16k",
-        source_id="019_pitcher_base",
-        scale=0.50,  # real 242 mm tall -> 121 mm carafe (fits under the tub ceiling)
-        mass_kg=0.15,
-        bbox_half=(0.0373, 0.0362, 0.0606),
-        axis_obj=(0.0, 0.0, 1.0),
-        body_center_uv=(0.0, 0.0),
-        rim_radius_m=0.0475,  # max radial incl. spout (fill-only spacing bound)
-        height_m=0.1212,
-        grasp=GraspSpec(family="rim_diam", grasp_width_m=0.0724, rim_tcp_z_m=-0.018),
-        placement=PlacementSpec(mode="floor_stand", rack="lower"),
-        coacd={"threshold": 0.03, "max_convex_hull": 32},
     ),
     # ---- procedural drinkware + containers (prop_gen; dims exact by construction) -------------
     "tumbler": ObjectSpec(

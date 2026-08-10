@@ -412,37 +412,6 @@ class CollisionWorld:
             obj.setTransform(_tf(T))
         self._static_mgr.update()
 
-    def replace_static(self, name: str, meshes: list[trimesh.Trimesh],
-                       T_base_body: np.ndarray | None = None) -> None:
-        """Swap a static body's geometry for new convex pieces (same broadphase slot).
-
-        The rack-design harness evaluates candidate procedural racks against the otherwise
-        unchanged cached scene: the machine, the pose, and the robot stay put — only the
-        rack's pieces are exchanged. Pieces are used as given (no margin inflation),
-        matching how cached static pieces are loaded at construction.
-
-        Args:
-            meshes: Convex pieces in the body frame.
-            T_base_body: Optional new base-frame pose; defaults to the body's current pose.
-        """
-        T = (np.asarray(T_base_body, dtype=float).copy()
-             if T_base_body is not None else self._static_T[name])
-        disabled = name in getattr(self, "_static_disabled", set())
-        for obj in self._static_objs[name]:
-            if not disabled:
-                self._static_mgr.unregisterObject(obj)
-            self._static_lookup.pop(id(obj), None)
-        objs = []
-        for piece in meshes:
-            obj = fcl.CollisionObject(_fcl_convex(piece), _tf(T))
-            objs.append(obj)
-            self._static_lookup[id(obj)] = name
-        self._static_objs[name] = objs
-        self._static_T[name] = T
-        if not disabled:
-            self._static_mgr.registerObjects(objs)
-        self._static_mgr.update()
-
     def carried_object_pieces(self) -> list[trimesh.Trimesh]:
         """Body-frame CoACD pieces of the carried object.
 

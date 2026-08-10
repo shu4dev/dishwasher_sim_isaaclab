@@ -559,9 +559,3 @@ def rank_key(card: dict) -> tuple:
     if not card.get("feasible"):
         return (-1, -1.0)
     return (card["n_criteria"], card["weighted"])
-
-
-def save_scorecards(cards: list[dict], path: str) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        json.dump({"criteria": CRITERIA, "cards": cards}, f, indent=2)

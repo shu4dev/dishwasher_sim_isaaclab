@@ -53,7 +53,6 @@ ZONE_COLORS = {
     "channel": "#2ca089",
     "slope": "#7b52ab",
     "plate_tines": "#c23b22",
-    "bowl_tines": "#d29c2f",
     "divider_tines": "#c23b22",
     "ribs": "#5c8a3a",
     "tie": "#96694a",
@@ -784,14 +783,6 @@ def build_rack(params: dict) -> list[RackPart]:
     # -- cutlery basket (lower rack, v3) ---------------------------------------------------------
     if "basket" in p:
         _cutlery_basket(parts, p)
-
-    # -- bowl tines (sparser, shorter) -----------------------------------------------------------
-    if "bowl_tine_xs" in p:
-        for xi, x in enumerate(p["bowl_tine_xs"]):
-            for yi, y in enumerate(p["bowl_tine_ys"]):
-                parts.append(
-                    RackPart(f"bowl_tine_{xi}_{yi}", "bowl_tines", _tine((x, y, zl["tine_base"]), p["bowl_tine_h"], d_light, 0.0, n))
-                )
 
     # -- upper-rack center divider (glass row) ---------------------------------------------------
     if "divider_tine_x" in p:

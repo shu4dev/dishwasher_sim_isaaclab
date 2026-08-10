@@ -38,8 +38,8 @@ class SlotFrame:
 
     ``mode`` selects the goal-pose generator and success criteria: ``floor_stand`` (origin ON
     the wire floor, z up — the v0 standing cell), ``plate_slot`` (origin at the disc bottom
-    edge between two tines), ``bowl_lean`` (origin at the lean contact), ``basket_drop``
-    (origin at the basket-bay floor center; goals hover above it).
+    edge between two tines), ``basket_drop`` (origin at the basket-bay floor center; goals
+    hover above it).
     """
 
     slot_id: int
@@ -207,8 +207,6 @@ def derive_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
         return derive_slots_from_rack(cache_dir)
     if mode == "plate_slot":
         return derive_plate_slots(cache_dir)
-    if mode == "bowl_lean":
-        return derive_bowl_slots(cache_dir)
     if mode == "basket_drop":
         return derive_basket_slots(cache_dir)
     raise ValueError(f"no robot slot derivation for placement mode {mode!r}")
@@ -244,33 +242,6 @@ def derive_plate_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
                 width_m=float(p["plate_tine_pitch"]),
                 source="derived",
                 mode="plate_slot",
-                rack="lower",
-                params={"lean_deg": lean},
-            )
-        )
-    return slots
-
-
-def derive_bowl_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
-    """Lean positions over the drinkware slope against the bowl tines (x ~ 0.070)."""
-    from . import rack_gen  # noqa: PLC0415
-
-    p = config.RACK_GEN["E_shelf_1_04"]
-    T_base_rack = _rack_T(cache_dir)
-    z_floor = rack_gen.floor_top_z(p)
-    mp = config.placement_mode_params("bowl_lean")
-    lean = float(config.active_object_spec().placement.params.get("lean_deg", mp["default_lean_deg"]))
-    slots = []
-    for si, y in enumerate(mp["slot_ys_m"]):
-        T_rack_slot = np.eye(4)
-        T_rack_slot[:3, 3] = (float(mp["slot_x_m"]), float(y), z_floor)
-        slots.append(
-            SlotFrame(
-                slot_id=si,
-                T_base_slot=T_base_rack @ T_rack_slot,
-                width_m=float(mp["slot_width_m"]),
-                source="derived",
-                mode="bowl_lean",
                 rack="lower",
                 params={"lean_deg": lean},
             )
@@ -352,17 +323,6 @@ def object_pose_for_mode(slot: SlotFrame, spin: float, lateral: np.ndarray, tilt
         t_local = np.array(
             [lateral[0] * 0.25, np.sin(lean) * r + lateral[1] * 0.25, hover + np.cos(lean) * r]
         )
-    elif slot.mode == "bowl_lean":
-        lean = np.radians(slot.params.get("lean_deg", mp["default_lean_deg"]))
-        # opening faces down-interior (+x), leaning back onto the tines; spin free
-        R_local = (
-            Rotation.from_euler("y", lean + tilt[0]).as_matrix()
-            @ Rotation.from_euler("x", np.pi).as_matrix()
-            @ Rotation.from_euler("z", spin).as_matrix()
-        )
-        t_local = np.array(
-            [lateral[0] * 0.3, lateral[1] * 0.3, hover + np.sin(lean) * spec.rim_radius_m + 0.004]
-        )
     elif slot.mode == "basket_drop":
         # cutlery hangs head-DOWN below the gripper (grasped at the handle = top), released
         # high above the bay so gravity inserts it
@@ -386,12 +346,12 @@ def object_pose_for_mode(slot: SlotFrame, spin: float, lateral: np.ndarray, tilt
 def _top_grasp_spin(slot: SlotFrame) -> float | None:
     """Spin putting the grasped feature at the TOP of the placed object (or None if free).
 
-    For plate_slot/bowl_lean the grasp point is a fixed rim location in the object frame and
+    For plate_slot the grasp point is a fixed rim location in the object frame and
     the spin rotates it around the rim: only spins with the gripper ABOVE the object are
     reachable (any other spin buries the wrist in the rack — measured 0/11 feasible slots
     with uniform spin). Solved numerically: argmax of the grasp point's world z over spin.
     """
-    if slot.mode not in ("plate_slot", "bowl_lean"):
+    if slot.mode != "plate_slot":
         return None
     pos, _ = config.grasp_transform(config.active_object_spec())
     # the grasped feature in the OBJECT frame: invert the tcp<-obj transform's grasp point.
@@ -413,7 +373,7 @@ def _top_grasp_spin(slot: SlotFrame) -> float | None:
 def sample_goal_poses(slot: SlotFrame, n: int, rng: np.random.Generator) -> list[np.ndarray]:
     """Sample object poses in the slot's tolerance region (spin, small lateral/tilt).
 
-    The spin is uniform for standing/basket modes; for plate_slot/bowl_lean it concentrates
+    The spin is uniform for standing/basket modes; for plate_slot it concentrates
     in a +-0.5 rad window around the top-grasp spin (see :func:`_top_grasp_spin`).
     """
     poses = []
@@ -546,16 +506,6 @@ def evaluate_placement(slot: SlotFrame, T_base_obj: np.ndarray) -> dict:
                and abs(bottom) <= mp["tol_bottom_m"])
         return {"lateral_m": round(lateral, 4), "tilt_deg": round(tilt, 2), "bottom_height_m": round(bottom, 4), "ok": bool(ok)}
 
-    if slot.mode == "bowl_lean":
-        lean = np.radians(slot.params.get("lean_deg", mp["default_lean_deg"]))
-        a_target = R_slot @ np.array([-np.sin(lean), 0.0, -np.cos(lean)])  # opening down-wall
-        cosang = abs(float(axis_base @ a_target))
-        tilt = float(np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0))))
-        lateral = float(np.hypot(d[0], d[1]))
-        ok = (tilt <= mp["tol_tilt_deg"] and lateral <= mp["tol_lateral_m"]
-               and abs(d[2]) <= mp["tol_bottom_m"])
-        return {"lateral_m": round(lateral, 4), "tilt_deg": round(tilt, 2), "bottom_height_m": round(float(d[2]), 4), "ok": bool(ok)}
-
     if slot.mode == "basket_drop":
         bay = slot.params.get("bay")
         top_z = slot.params.get("top_z", mp["default_top_z_m"])
@@ -627,16 +577,15 @@ def slot_names(slots) -> dict:
     config that named ids would then be wrong without anything failing.
 
     The vocabulary follows what each mode's grid actually *is*, rather than forcing one shape on
-    all four:
+    all three:
 
-    ==============  =====================  ==============================
-    mode            grid                   names
-    ==============  =====================  ==============================
-    ``floor_stand`` depth x lateral        ``near_centre``, ``mid_left1``
-    ``plate_slot``  lateral only (gaps)    ``gap_left5`` … ``gap_right5``
-    ``bowl_lean``   depth only             ``near``, ``mid``, ``far``
-    ``basket_drop`` depth only (bays)      ``bay_near``, ``bay_mid`` …
-    ==============  =====================  ==============================
+    ==============  ==========================  ==================================
+    mode            grid                        names
+    ==============  ==========================  ==================================
+    ``floor_stand`` depth x lateral             ``near_centre``, ``mid_left1``
+    ``plate_slot``  lateral only (gaps)         ``gap_left1``, ``gap_centre`` …
+    ``basket_drop`` lateral only (x-split bays) ``gap_left1``, ``gap_centre`` …
+    ==============  ==========================  ==================================
 
     Names are ordinal within the RACK, so they are invariant to how far the rack is pulled out —
     ``near_centre`` keeps meaning the same cell. Which slots are *feasible* is not invariant:

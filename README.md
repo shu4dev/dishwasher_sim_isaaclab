@@ -5,7 +5,7 @@
     Classical motion planning · Imitation learning · Reinforcement learning
   </p>
   <p align="center">
-    <img src="https://img.shields.io/badge/Isaac%20Sim-6.0.1-76B900?style=flat&logo=nvidia&logoColor=white" alt="Isaac Sim 6.0.1"/>
+    <img src="https://img.shields.io/badge/Isaac%20Sim-6.0.1--rc.7-76B900?style=flat&logo=nvidia&logoColor=white" alt="Isaac Sim 6.0.1-rc.7"/>
     <img src="https://img.shields.io/badge/Isaac%20Lab-3.0.0-76B900?style=flat&logo=nvidia&logoColor=white" alt="Isaac Lab 3.0.0"/>
     <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat&logo=python&logoColor=white" alt="Python 3.12"/>
     <img src="https://img.shields.io/badge/License-BSD--3--Clause-blue?style=flat" alt="BSD-3-Clause"/>
@@ -22,25 +22,13 @@
   </tr>
 </table>
 
-## Important Notes First
+> **Read this first.** Every Kit script runs through `scripts/run_kit.sh` (never bare
+> `isaaclab.sh -p` — it dies at boot with the planning venv present), success is judged from
+> **log content**, never exit codes (`isaaclab.sh -p` exits 0 on crashes), and the Isaac
+> Sim 6.0.1-rc.7 / Isaac Lab 3.0.0 pins must not be changed. The full list of launcher
+> landmines and why they exist: [docs/environment.md](docs/environment.md).
 
-- **Every Kit script must run through `scripts/run_kit.sh`.** With the planning venv present,
-  `isaaclab.sh -p` resolves to the bare venv interpreter, which lacks `EXP_PATH` /
-  `LD_LIBRARY_PATH`, and `AppLauncher` dies at boot with `KeyError: 'EXP_PATH'`.
-- **`./isaaclab.sh -p` exits 0 even when the wrapped script crashes.** Judge success from log
-  content (`[RESULT] PASS`, absence of tracebacks), never from the exit code.
-- **Do not up/downgrade Isaac Sim or Isaac Lab.** Everything is pinned to 6.0.1 + 3.0.0; the
-  code targets the 3.0 API (XYZW quaternions, `ProxyArray.torch`, keyword-only `*_index`
-  writes) and 2.x snippets are wrong on both counts.
-- Everything runs `--headless`. Only *rendering* needs `--enable_cameras`; experiments do not.
-- First run downloads ~85 MB of ArtVIP assets plus YCB scans, and rebuilding the geometry
-  caches costs ~1.5 h — or restore a prebuilt archive in one command (§2.4).
-- `assets/`, `media/`, `results/` are gitignored; only curated figures under `docs/figures/`
-  are tracked. The asset archive must stay **private** (NVIDIA EULA + YCB dataset terms).
-- Developed and tested on a single NVIDIA **L4** (23 GB) / 8 vCPU / 30 GiB. OMPL planning is
-  CPU-bound, so core count matters more than the GPU except when rendering.
-
-## 1 Introduction
+## 1 Overview
 
 This project is built on **Isaac Lab** to simulate a **UR5e + Robotiq 2F-85** loading an
 articulated **ArtVIP dishwasher**, as a substrate for classical motion planning (shipped),
@@ -48,7 +36,7 @@ imitation learning, and reinforcement learning.
 
 The scene: a hinged-door dishwasher whose two sliding racks are replaced with procedurally
 generated, reference-styled wire racks plus a 3-bay cutlery basket; a robot on a pedestal; and
-a 15-class kitchen-object library scaled to fit the compact machine, each class carrying
+a 14-class kitchen-object library scaled to fit the compact machine, each class carrying
 *measured* grasp and placement specifications.
 
 Work is organised in three phases, mirrored by the layout of `scripts/`:
@@ -66,7 +54,7 @@ Work is organised in three phases, mirrored by the layout of `scripts/`:
       <br/>
       <code>setup/build_object_assets.py</code>
       <br/>
-      15-class object library
+      Kitchen-object library
     </td>
     <td align="center">
       <img src="docs/figures/rack_geometry.png" width="300" alt="procedural rack"/>
@@ -112,7 +100,7 @@ Work is organised in three phases, mirrored by the layout of `scripts/`:
 
 `run_trials.py --planner <name>` selects the algorithm; the experiment runner never names one.
 A planner implements one method — `plan(world, start_q, goal_qs, seed, debug)` — and declares
-its own capabilities. Adding one touches no experiment code (§5.1).
+its own capabilities. Adding one touches no experiment code (§7).
 
 | Planner | Kind | Multi-goal | Defaults |
 |---|---|---|---|
@@ -158,7 +146,6 @@ disagrees with the registry.
 | `spoon` | YCB `031_spoon` | 0.60 | `basket_drop` | basket |
 | `knife` | YCB `032_knife` | 0.60 | `basket_drop` | basket |
 | `spatula` | YCB `033_spatula` | 0.45 | `flat_lay` | upper |
-| `pitcher` | YCB `019_pitcher_base` | 0.50 | `floor_stand` | lower |
 | `tumbler` | procedural | 1.00 | `floor_stand` | lower |
 | `wine_glass` | procedural | 1.00 | `stem_scallop` | upper |
 | `serving_spoon` | procedural | 1.00 | `basket_drop` | basket |
@@ -173,20 +160,28 @@ trials place in.
 
 | Doc | Contents |
 |---|---|
-| [docs/environment.md](docs/environment.md) | Hardware/software stack, venv recipe, Isaac Lab 3.0-vs-2.x API deltas, OMPL 2.0 nanobind notes, launcher landmines |
-| [docs/success_criteria.md](docs/success_criteria.md) | Placement success definition per placement mode, slot model, frame conventions |
+| [docs/environment.md](docs/environment.md) | Hardware/software stack, venv recipe, Isaac Lab 3.0-vs-2.x API deltas, OMPL 2.0 nanobind notes, **launcher landmines (canonical)** |
+| [docs/architecture.md](docs/architecture.md) | Code structure, the task/planner layer boundary, completed one-off studies |
+| [docs/episodes.md](docs/episodes.md) | The multi-object episode runner manual (CLI, slot assignment, rack actions) |
+| [docs/success_criteria.md](docs/success_criteria.md) | Placement success definition per placement mode, slot model, the reachability success bar |
+| [docs/known_limitations.md](docs/known_limitations.md) | Honest negative results and open items, with measured evidence |
+| [docs/extending.md](docs/extending.md) | Add an object class / placement mode / machine state |
 | [docs/joint_report.md](docs/joint_report.md) | *Auto-generated* by `setup/inspect_scene.py`: measured articulation numbers every constant derives from |
 | [docs/grasp_calibration.md](docs/grasp_calibration.md) | *Auto-generated* by `setup/calibrate_grasp.py`: θ_touch/θ_grasp, per-pad force band, mimic signs |
 | [docs/asset_survey.md](docs/asset_survey.md) | Survey of the 7 ArtVIP dishwasher variants justifying the `dishwasher_2` pick |
+| [docs/figures/README.md](docs/figures/README.md) | Provenance of every tracked figure (producing command + media source) |
 
 ## 2 Environment Setup
 
 ### 2.1 Prerequisites
 
-An Isaac Sim 6.0.1 / Isaac Lab 3.0.0 install at `/workspace/isaaclab`. This repo nests inside
-that tree as an independent git repo. See the
+An Isaac Sim 6.0.1-rc.7 / Isaac Lab 3.0.0 install at `/workspace/isaaclab`. This repo nests
+inside that tree as an independent git repo. See the
 [official installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html),
-and [docs/environment.md](docs/environment.md) for this project's pinned versions.
+and [docs/environment.md](docs/environment.md) for this project's pinned versions. Developed
+and tested on a single NVIDIA **L4** (23 GB) / 8 vCPU / 30 GiB; OMPL planning is CPU-bound, so
+core count matters more than the GPU except when rendering. Everything runs `--headless`; only
+*rendering* additionally needs `--enable_cameras`.
 
 ### 2.2 Planning venv
 
@@ -196,10 +191,14 @@ resolves Python to it, which is also why `run_kit.sh` has to re-export the Kit e
 
 ```bash
 /isaac-sim/kit/python/bin/python3 -m venv --system-site-packages /workspace/isaaclab/env_isaaclab
-/workspace/isaaclab/env_isaaclab/bin/pip install 'trimesh==4.12.2' ompl python-fcl coacd \
-    matplotlib imageio pytest requests pyyaml filelock tqdm fsspec
+/workspace/isaaclab/env_isaaclab/bin/pip install -r requirements-planning.txt
 /workspace/isaaclab/env_isaaclab/bin/pip install -e .
 ```
+
+`requirements-planning.txt` pins the measured working set (the table in
+[docs/environment.md](docs/environment.md) is the measurement of record). The optional
+archive tooling (§2.4) additionally needs
+`huggingface_hub requests pyyaml filelock tqdm fsspec` (unpinned).
 
 ### 2.3 Assets
 
@@ -214,6 +213,9 @@ scripts/run_kit.sh scripts/setup/inspect_scene.py --headless --test_door
 scripts/run_kit.sh scripts/setup/make_prop_physics_usd.py --object 025_mug
 scripts/run_kit.sh scripts/setup/build_object_assets.py
 ```
+
+`assets/`, `media/`, `results/` are gitignored; only curated figures under `docs/figures/`
+are tracked. The asset archive must stay **private** (NVIDIA EULA + YCB dataset terms).
 
 ### 2.4 Fast path: restore a prebuilt archive
 
@@ -242,21 +244,52 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m 
 ```
 
 `kit_smoke.py` proves the planning stack imports *inside* the Kit process and that headless
-camera capture produces non-black frames. The suite is **449 test cases across 26 files**, all
+camera capture produces non-black frames. The suite is **455 test cases across 27 files**, all
 Kit-free.
 
 > **Note:** `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is required — the system site-packages carry
 > hydra, whose pytest plugin imports `yaml`, a module that only exists inside Kit.
 
-## 3 Running
+## 3 Reproduce the results
 
-Run from the repo root. Kit scripts go through `scripts/run_kit.sh`; venv scripts use
-`/workspace/isaaclab/env_isaaclab/bin/python`, written `$PY` below.
-
-### 3.1 Phase 1 — Setup: build the world
+The end-to-end path from a fresh setup to the Results table in §5. Venv scripts use
+`$PY = /workspace/isaaclab/env_isaaclab/bin/python`.
 
 ```bash
-# collision world for one machine state and carried object
+# 1. install + assets: §2.1–2.3 (or the §2.4 restore, which also bakes nothing — it ships
+#    the caches prebuilt and validated; skip step 2 in that case)
+
+# 2. bake the collision caches the experiments load (~1–1.5 h total, one-time)
+./scripts/setup/build_state.py --state both_out --classes mug
+./scripts/setup/build_state.py --state both_in  --classes mug
+./scripts/setup/build_state.py --state placement --classes mug,cup,tumbler,plate,bowl,fork
+
+# 3. the v0 single-object baseline: mug into the lower rack, both racks out.
+#    v4-feasible mug slots are {0, 5, 6} (near_left2, mid_left2, mid_left1)
+scripts/run_kit.sh scripts/experiment/run_trials.py --headless \
+    --scenario both_out --object mug --slots 0,6 --seeds 0 --run_id repro_v0
+
+# 4. a multi-object episode from the stowed machine (rack pull + picks + basket drops)
+scripts/run_kit.sh scripts/experiment/run_task.py --headless --enable_cameras \
+    --scenario both_in --spawn "cup=1,tumbler=1,fork=2" --seed 1 --run_id repro_episode
+
+# 5. the capacity fill (the hero figure) and the metrics
+scripts/run_kit.sh scripts/setup/capacity_fill.py --headless --enable_cameras
+$PY scripts/evaluation/compute_metrics.py --all
+```
+
+Judge every Kit run from its log (`[RESULT] PASS`, no tracebacks) — exit codes lie. Step 3
+should report `2/2 trials succeeded`; step 4's episode places the cup and tumbler and pulls
+the rack to sub-millimetre error (the forks are an open item — see §6).
+
+## 4 Running
+
+Run from the repo root. Kit scripts go through `scripts/run_kit.sh`; venv scripts use `$PY`.
+
+### 4.1 Phase 1 — Setup: build the world
+
+```bash
+# collision world for one machine state and carried object (build_state.py chains these)
 scripts/run_kit.sh scripts/setup/extract_geometry.py --headless --scenario placement
 $PY scripts/setup/decompose_meshes.py --scenario placement
 scripts/run_kit.sh scripts/setup/parity_check.py --headless --scenario placement
@@ -277,17 +310,17 @@ scripts/run_kit.sh scripts/setup/capacity_fill.py --headless --enable_cameras
 > configurations per state. If you change rack geometry or an object, rerun
 > `extract_geometry → decompose_meshes → parity_check` before trusting any planning result.
 
-### 3.2 Phase 2 — Experiment: run an algorithm
+### 4.2 Phase 2 — Experiment: run an algorithm
 
 ```bash
 # default planner, no cameras — the trajectory is recorded either way
 scripts/run_kit.sh scripts/experiment/run_trials.py --headless \
-    --scenario both_out --object mug --slots 2,7 --seeds 0-1
+    --scenario both_out --object mug --slots 0,6 --seeds 0-1
 
 # choose and tune the algorithm; also record the search tree for the planning visual
 scripts/run_kit.sh scripts/experiment/run_trials.py --headless --planner rrt_star \
     --planner_param range_rad=0.3 --planner_param budget_s=15 \
-    --slots 7 --seeds 0 --run_id my_run --save_plan_debug
+    --slots 6 --seeds 0 --run_id my_run --save_plan_debug
 ```
 
 - `--planner`: `rrt_connect` (default) · `rrt_star` · `bit_star` · `prm`
@@ -300,8 +333,7 @@ scripts/run_kit.sh scripts/experiment/run_trials.py --headless --planner rrt_sta
 - `--run_id`: names the run (default `<object>_<scenario>_<planner>_<UTC>`)
 - `--save_plan_debug`: also write the planning query + search tree for `plan_visual.py`
 - `--skip_existing`: resume, skipping trials whose JSON already exists
-- `--enable_cameras`: *additionally* capture video inline — only needed for the replay A/B
-  check, since Phase 3 renders video from the recording
+- `--enable_cameras`: *additionally* capture video inline (Phase 3 renders from the recording)
 
 Each run writes one self-contained directory:
 
@@ -319,7 +351,7 @@ To compare algorithms, run the same slots and seeds under each and let Phase 3 b
 ```bash
 for p in rrt_connect rrt_star bit_star; do
   scripts/run_kit.sh scripts/experiment/run_trials.py --headless --planner $p \
-      --slots 7 --seeds 0 --run_id "cmp_$p"
+      --slots 6 --seeds 0 --run_id "cmp_$p"
 done
 ```
 
@@ -327,103 +359,12 @@ done
 > Phase 2 and only *aggregated* in Phase 3. Placement geometry is recomputable from a recorded
 > pose, and evaluation cross-checks it against the trial record.
 
-#### Multi-object episodes
+**Multi-object episodes** (`run_task.py`) spawn N objects at seeded random countertop poses,
+settle them, and clear them one at a time in an order the sequencer decides; an episode
+starting from a stowed machine opens with a rack action. Full manual:
+[docs/episodes.md](docs/episodes.md).
 
-`run_task.py` spawns N objects at seeded random countertop poses, settles them, and clears them
-one at a time in an order it decides:
-
-```bash
-# reproducible from the seed alone
-scripts/run_kit.sh scripts/experiment/run_task.py --headless --seed 0
-
-# swap the ordering heuristic; the planner and the scene are untouched
-scripts/run_kit.sh scripts/experiment/run_task.py --headless --seed 0 --cost_fn shortest_ik
-```
-
-- `--seed`: layout seed — with the composition this reproduces the scene exactly
-- `--spawn "cup=2-4,mug=1"`: **explicit composition** — a count or an inclusive range per object
-  type. A range is drawn per episode from the seed, so the number varies while staying
-  reproducible. Term order does not matter (`a=1,b=2` == `b=2,a=1`), and the expanded list is
-  shuffled so no type always gets first claim on countertop space. Config equivalent:
-  `TASK["spawn_counts"]`
-- `--n_objects` / `--classes`: the uniform-draw fallback when no explicit composition is given
-- `--rack_lower_m` / `--rack_upper_m`: rack extensions in metres (0 = stowed, −0.20 = fully out;
-  the racks are independently articulated). Resolved to a named machine state — extensions are
-  part of the collision-cache hash, so a combination that has not been baked fails at startup
-  with the command that bakes it. `--scenario NAME` selects one directly. Config equivalent:
-  `TASK["rack_state"]`
-- `--video_camera`: which camera the episode MP4 is written from (default `episode`)
-- `--cost_fn`: pick-order heuristic — `nearest_first` (default) · `shortest_ik` · `farthest_first`
-- `--allow_stacking`: spawn objects stacked on each other. Because settling then decides the
-  final poses, reachability is re-checked *after* physics and the whole layout is resampled if
-  any object ends up unreachable (capped by `TASK["max_layout_retries"]`, then a loud failure)
-- `--planner` / `--planner_param`: as for `run_trials.py` — the task layer never names a planner
-
-Per-pick records use the **existing trial schema**, so Phase 3 consumes an episode unchanged;
-`episodes/<ep>.json` adds what a per-trial record cannot express (pick order, the cost each
-choice scored, why anything was blocked, the support graph).
-
-**Goal slots by object type.** `TASK["type_slots"]` maps an object type to an ORDERED list of
-slot **names**, e.g. `{"mug": ("mid_centre", "near_centre")}`. Names are derived from the rack
-geometry (`placement.slot_names`) rather than hardcoded ids, because ids are positional and would
-silently re-point to different cells if the grid pitch were retuned. Each type consumes its list
-in order; a slot already taken, overlapping an assigned one, or with no reachable goal
-configurations for that class is skipped, and an object whose list runs out is reported unplaced.
-The vocabulary follows each mode's actual grid — `near_centre`/`mid_left1` for the `floor_stand`
-3×5, `gap_centre` for the plate tine gaps, `bay_near` for the cutlery bays.
-
-**Starting from a stowed machine.** `--scenario both_in` begins with both racks pushed in, where
-**no slot is reachable at all** (0 of 15, measured). The episode opens with a rack action — the
-gripper engages the lower rack's handle and pulls it out to −0.20 m while the tool tracks the
-moving handle — and then loads the machine in the resulting `placement` state. The episode spans
-two collision-cache states; the post-action state is derived from the action, and a rack that
-settles beyond `RACK_SLIDE_TOL_M` ends the episode rather than letting later picks plan against a
-world the machine no longer matches.
-
-```bash
-scripts/run_kit.sh scripts/experiment/run_task.py --headless --enable_cameras \
-    --scenario both_in --spawn "cup=1,tumbler=1,fork=2" --seed 1 --run_id bothin_load
-```
-
-> Measured: pulling the *upper* rack out as well (`placement_open`) does not open the rear rows —
-> it drops every class (cup, tumbler, fork, plate and bowl) to **0** reachable slots, because the
-> extended upper rack shadows the lower rack's front band where all v4 destinations live. The
-> lower rack is already at its mechanical limit, and 87 mm of its 287 mm depth never leaves the
-> machine mouth.
-
-**Home-anchored trajectories.** Every episode's recording begins and ends at `config.HOME_Q`.
-The start is measured, corrected if it drifted during layout settling, and then asserted; the
-closing retreat plans back to home and holds for `SETTLE_STEPS`, and runs on the failure and
-exception paths too. It happens *before* the recording and media are finalised (so the retreat is
-in the `.npz`, the MP4 and the final stills) and *after* the sequencer (so placement verdicts are
-already decided and parking the arm can never revise a pass/fail). The record carries
-`start_home_err_rad`, `end_home_err_rad`, `home_return_status` and — because the fallback retreat
-is a straight interpolation that is not collision-checked — `post_home_displacement_mm` for each
-placed object.
-
-**Camera framing.** `config.CAMERA_LENS` makes focal length and aperture configurable (they were
-hardcoded), and `config.EPISODE_CAMERA` is a wide view that keeps the countertop and the machine
-in frame for the whole episode — the previous `front` view sat 2.4× too close and cropped the
-counter out entirely. Vertical FOV is the binding constraint on a 16:9 frame, not horizontal.
-
-> **Note:** episode size is capped by DESTINATION capacity, not countertop room — the counter
-> holds far more than the robot can put away. Measured ceiling, per rack structure (RACK_GEN v4,
-> 64-sample goal funnels):
->
-> | destination | reachable | why |
-> |---|---|---|
-> | rack floor (`floor_stand`) | 5 of 15 cells (cup∩tumbler; mug 4, bowl 3) | the left/centre-front block clears the machine mouth; the far column and right edge funnel to zero on collision |
-> | plate bank (`plate_slot`) | 2 of 3 robot gaps | the centre-most gap sits behind the measured arm-access boundary (~rack x ≥ 0.28 alive) |
-> | cutlery basket (`basket_drop`) | 3 of 3 bays | fork/knife/spoon — weld-acquired, not picked |
->
-> So the v4 rack offers **13 robot destinations** (v3: 6) — 2 plate gaps + 3 bowl cells + 3
-> basket bays + 5 floor cells, with bowl cells drawn from the floor cells, so a mixed load
-> shares them. The floor placements are genuine countertop picks. For contrast,
-> `capacity_fill.py` *teleports* 30 items in and 27 settle stably: the rack's own capacity is
-> still larger than what this arm can reach into it.
-> See [docs/success_criteria.md](docs/success_criteria.md#multi-object-episodes-scriptsexperimentrun_taskpy).
-
-### 3.3 Phase 3 — Evaluation: read the artifacts
+### 4.3 Phase 3 — Evaluation: read the artifacts
 
 None of these re-plan or re-simulate; the first and last need no Kit at all.
 
@@ -433,17 +374,14 @@ $PY scripts/evaluation/compute_metrics.py --all
 
 # prove a recording replays exactly (kinematics only, no cameras, seconds)
 scripts/run_kit.sh scripts/evaluation/verify_replay.py --headless \
-    --trial results/experiments/<run_id>/trajectories/trial_07_00_0.npz
+    --trial results/experiments/<run_id>/trajectories/trial_06_00_0.npz
 
 # render video from recordings — one clip per camera, plus a final still
 scripts/run_kit.sh scripts/evaluation/render_videos.py --headless --enable_cameras \
     --run_dir results/experiments/<run_id>/trajectories
 
 # the planner's search tree, drawn from the recorded query
-$PY scripts/evaluation/plan_visual.py --slot 7 --seed 0
-
-# A/B a replayed clip against a live capture (the decoupling acceptance test)
-$PY scripts/evaluation/compare_videos.py --live <live.mp4> --replay <replay.mp4>
+$PY scripts/evaluation/plan_visual.py --slot 6 --seed 0
 ```
 
 | Tool | Reads | Writes | Needs Kit |
@@ -452,7 +390,6 @@ $PY scripts/evaluation/compare_videos.py --live <live.mp4> --replay <replay.mp4>
 | `verify_replay.py` | `trajectories/*.npz` | pass/fail gate on link-pose error | yes (no cameras) |
 | `render_videos.py` | `trajectories/*.npz` | `media/trials/<run_id>/*.mp4` + stills | yes + cameras |
 | `plan_visual.py` | `plans/*.npz` | search-tree PNGs | no |
-| `compare_videos.py` | two MP4s | PSNR verdict + worst-frame sheet | no |
 
 - `compute_metrics.py`: `--run <id>` a specific run · `--all` every run + comparison ·
   `--no_figures`
@@ -462,103 +399,38 @@ $PY scripts/evaluation/compare_videos.py --live <live.mp4> --replay <replay.mp4>
 - `plan_visual.py`: `--run <id>` / `--plan_debug <npz>` to pick the artifact · `--replan` to
   plan a fresh query instead of reading a recorded one
 
-### 3.4 Archive / restore the generated artifacts
+### 4.4 Archive / restore the generated artifacts
 
 ```bash
 $PY scripts/tools/archive_assets.py --upload      # build tarballs, push to the private dataset
 $PY scripts/tools/restore_assets.py --with_media  # download, extract, validate, run tests
 ```
 
-## 4 Code Structure
+## 5 Results
 
-```
-dishwasher_sim_isaaclab/
-│
-├── scripts/
-│   ├── run_kit.sh                    [Kit launcher: exports the Isaac env, then isaaclab.sh -p]
-│   │
-│   ├── setup/                        [PHASE 1 — assets and the simulation world]
-│   │   ├── kit_smoke.py              [dependency + headless-capture gate]
-│   │   ├── inspect_scene.py          [articulation survey -> docs/joint_report.md]
-│   │   ├── prepare_dishwasher_usd.py [derived dishwasher USDs (door/rack variants)]
-│   │   ├── make_prop_physics_usd.py  [Isaac-bucket prop -> physics USD (the mug)]
-│   │   ├── build_object_assets.py    [YCB scans + procedural props -> the object library]
-│   │   ├── check_scene.py            [scene verification; --measure derives the pad map]
-│   │   ├── calibrate_grasp.py        [per-object pinch calibration (force staircase)]
-│   │   ├── freeze_calibration.py     [freeze measured constants into config.OBJECTS]
-│   │   ├── extract_geometry.py       [dump the settled scene into the collision cache]
-│   │   ├── decompose_meshes.py       [convex FCL pieces (CoACD / analytic parts)]
-│   │   ├── parity_check.py           [FCL vs PhysX agreement gate]
-│   │   ├── goal_configs.py           [slot frames + IK goal sets]
-│   │   ├── build_state.py            [bake one machine state's caches for N classes]
-│   │   ├── reach_map.py              [measure where on the counter a class can be picked]
-│   │   ├── preview_rack.py           [rack geometry preview PNGs]
-│   │   └── capacity_fill.py          [fully-loaded scene generator + closability check]
-│   │
-│   ├── experiment/                   [PHASE 2 — run algorithms, write artifacts]
-│   │   ├── run_trials.py             [ONE object: rack reconfigure -> pick -> plan -> place]
-│   │   └── run_task.py               [N objects: spawn -> settle -> sequence -> clear]
-│   │
-│   ├── evaluation/                   [PHASE 3 — reads artifacts only]
-│   │   ├── compute_metrics.py        [trial JSONs -> metrics.json + figures + comparison]
-│   │   ├── render_videos.py          [trajectory .npz -> MP4s + stills (kinematic replay)]
-│   │   ├── verify_replay.py          [replay faithfulness gate, camera-free]
-│   │   ├── compare_videos.py         [live-vs-replay PSNR A/B + worst-frame sheet]
-│   │   └── plan_visual.py            [planner search tree from the recorded query]
-│   │
-│   └── tools/
-│       ├── archive_assets.py         [tar the generated artifacts, push to a private dataset]
-│       └── restore_assets.py         [download, safe-extract, validate caches, run tests]
-│
-├── src/dishsim/                      [the environment package (installed editable)]
-│   ├── config.py                     [EVERY tunable: object registry, grasps, rack params,
-│   │                                  planner defaults, cameras, tolerances. Tune here]
-│   ├── robots.py                     [UR5e + Robotiq and dishwasher ArticulationCfgs]
-│   ├── scene.py                      [scene construction, the wrist weld, gripper control]
-│   ├── usd_prep.py                   [derived dishwasher USDs; authors the procedural racks]
-│   ├── rack_gen.py                   [procedural wire racks + cutlery basket (Kit-free)]
-│   ├── prop_gen.py                   [procedural props: tumbler, wine glass, container, lid]
-│   ├── geometry.py                   [USD -> mesh extraction + the collision-cache format]
-│   ├── collision_world.py            [Kit-free FCL world; the planners' validity oracle]
-│   ├── ur5e_kin.py                   [analytic UR5e FK/IK, 8 branches (Pinocchio-validated)]
-│   ├── placement.py                  [slot derivation, goal poses and success per mode]
-│   ├── rack_ops.py                   [rack-handle engage + drive-synchronized slide]
-│   ├── fill_plan.py                  [deterministic full-load plan + FCL validation]
-│   ├── trajectory.py                 [per-step recording format (Phase 2 -> Phase 3)]
-│   ├── replay.py                     [kinematic playback of a recording (Phase 3)]
-│   ├── plan_debug_io.py              [persist a planning query + search tree]
-│   ├── metrics.py                    [Kit-free aggregation over trial records]
-│   ├── media.py                      [camera rig, video writer, contact sheets]
-│   ├── transforms.py                 [pose helpers (XYZW throughout)]
-│   ├── task/                         [the task layer — decides WHAT, never HOW to move]
-│   │   ├── sequencer.py              [which object next, in what order; support + grasp gates]
-│   │   ├── primitives.py             [one object's pick-and-place choreography]
-│   │   ├── motion.py                 [object-agnostic "move A to B" over the planner]
-│   │   ├── layout.py                 [seeded random countertop layouts, with stacking]
-│   │   ├── support.py                [which object rests on which (contact + geometric)]
-│   │   ├── grasp.py                  [state-dependent grasp availability + yaw sweep]
-│   │   ├── recovery.py               [bounded recovery ladder (a registry)]
-│   │   ├── rack.py                   [open the machine: engage a handle, slide a rack]
-│   │   ├── cost.py                   [swappable pick-order heuristics (a registry)]
-│   │   └── episode.py                [episode record + aggregation]
-│   └── planners/                     [the pluggable planner layer]
-│       ├── base.py                   [PlanResult, PlanDebug, the Planner ABC]
-│       ├── ompl_base.py              [shared OMPL query: space, validity, goals, solve]
-│       ├── rrt_connect.py            [bidirectional RRT (default)]
-│       ├── rrt_star.py               [asymptotically optimal RRT]
-│       ├── bit_star.py               [Batch Informed Trees]
-│       ├── prm.py                    [probabilistic roadmap (single-goal here)]
-│       └── registry.py               [name -> class; make_planner(); available()]
-│
-├── tests/                            [449 cases across 26 files; venv pytest, no Kit]
-├── docs/                             [environment, success criteria, measured reports]
-├── assets/  media/  results/         [generated, gitignored]
-└── pyproject.toml
-```
+Every claim maps to a recorded run; artifacts live under the gitignored `results/` and
+`media/` trees (restorable via §2.4 `--with_media`). All numbers measured on the RACK_GEN v4
+rack at the front base placement.
 
-## 5 Extending
+| Claim | Run / artifact | Evidence |
+|---|---|---|
+| The **v0 single-object baseline reproduces**: 2/2 mug trials succeed (slots 0 and 6, lateral err 3.3 / 8.5 mm, tilt ≤ 0.01°, plans 3.3 / 3.9 s) | `freeze_v4` | `results/experiments/freeze_v4/`, `media/trials/` |
+| **Reachability success bar met at the front base pose** — plate 2/3 gaps, bowl 3 cells, fork 3/3 bays, floor 5 cells, pick band 0.20 m: a 420-candidate base-pose sweep's winner matches front on every slot criterion and only deepens the pick band (0.40 m), so the front placement was kept | `results/base_sweep/` | `stage4_final.json`, `winner.json`, heatmaps in `media/base_sweep/`; table in [docs/success_criteria.md](docs/success_criteria.md) |
+| **Capacity fill is closable**: 30 items planned, 27 settle stably, 0 displaced during the stow | `results/fill/capacity.json` | `media/fill/` (timelapse, orbit, stills); mechanisms documented in `fill_plan.py` |
+| **Stowed-machine episode**: the robot pulls the lower rack out (error < 1 µm) and places the cup and tumbler with genuine countertop picks (2/4 — the two forks fail on transit contact, an open item) | `bothin_v4` | `results/experiments/bothin_v4/episodes/ep001.json`, `media/task/bothin_v4/ep001.mp4` |
+| **First robot bowl placement** — weld-acquired, carried, released, verdict pass; needed `--planner_param budget_s=60` | `platebowl_v4_b60` | `results/experiments/platebowl_v4_b60/episodes/ep000.json`, `media/task/platebowl_v4_b60/ep000.mp4` |
+| **Negative result:** plate placement is path-blocked — goal configs exist in both feasible gaps but RRT-Connect finds no path even at a 180 s budget | `plate_b180` | `results/experiments/plate_b180/episodes/ep000.json`; analysis in [docs/known_limitations.md](docs/known_limitations.md) |
 
-### 5.1 Add a motion planner
+## 6 Known limitations
+
+The honest edges, each with measured evidence: plate placement is path-blocked (not
+goal-blocked); fork-bay transit contacts past the weld-acquire hover gates; the default 20 s
+plan budget predates the v4 rack (the bowl needed 60 s); the stemware lie-in never settles.
+Details and next levers: [docs/known_limitations.md](docs/known_limitations.md).
+
+## 7 Extending
+
+### Add a motion planner
 
 Nothing in `scripts/experiment/` changes. Write a module in `src/dishsim/planners/` — for
 anything OMPL provides, subclass `OMPLPlanner` and override the one method that constructs the
@@ -580,58 +452,19 @@ class RRTConnectPlanner(OMPLPlanner):
         return planner
 ```
 
-Then add one line to `PLANNERS` in `registry.py`:
-
-```python
-PLANNERS: dict[str, type[Planner]] = {
-    RRTConnectPlanner.name: RRTConnectPlanner,
-    ...
-    MyPlanner.name: MyPlanner,
-}
-```
-
-`--planner my_planner` now works, and `tests/test_planners.py` covers it automatically — every
-registered planner must solve a stub-world query, respect the joint bounds, never return a
-colliding path, and describe itself for the trial record.
-
-Parameters are applied **inside** each subclass rather than by a generic loop, because the OMPL
-planners do not share a parameter interface (`RRTConnect` has `setRange` only; `RRTstar` adds
-`setGoalBias`; `PRM` has neither). A planner that cannot accept a goal set declares
+Then add one line to `PLANNERS` in `registry.py`. `--planner my_planner` now works, and
+`tests/test_planners.py` covers it automatically — every registered planner must solve a
+stub-world query, respect the joint bounds, never return a colliding path, and describe itself
+for the trial record. Parameters are applied **inside** each subclass because the OMPL
+planners do not share a parameter interface; a planner that cannot accept a goal set declares
 `supports_multi_goal = False` and the base class hands it the goal nearest the start. A
 non-OMPL method (lattice A*, CHOMP) implements `Planner` directly — the only thing it needs
 from the world is `in_collision(q) -> bool`.
 
-### 5.2 Add an object class
+Adding an **object class**, **placement mode**, or **machine state**:
+[docs/extending.md](docs/extending.md).
 
-1. Add an `ObjectSpec` to `config.OBJECTS` — source (`ycb16k` / `procedural`), scale, mass,
-   a `GraspSpec` (family + contact width) and a `PlacementSpec` (mode + rack).
-2. Build the asset: `scripts/run_kit.sh scripts/setup/build_object_assets.py --objects <name>`.
-   It prints the *measured* dimensions and fails if they disagree with the registry by >2 mm —
-   freeze the printed block into the spec.
-3. Measure the pinch: `setup/check_scene.py --measure` for the pad map, then
-   `setup/calibrate_grasp.py --object <name>`.
-4. Freeze the result: `setup/freeze_calibration.py --object <name>`.
-5. Rebuild that object's caches: `extract_geometry` → `decompose_meshes` → `goal_configs`.
-
-> **Note:** never eyeball-edit a measured value. Every dimension, aperture and force band in
-> `config.py` traces to a calibration or inspection run, and `geometry.config_hash()`
-> invalidates the collision caches when any of them changes.
-
-### 5.3 Add a placement mode
-
-In `src/dishsim/placement.py`: write a `derive_<mode>_slots()` returning `SlotFrame`s, add a
-branch to `object_pose_for_mode()` for the goal-pose geometry, and a branch to
-`evaluate_placement()` for the success criteria. Register the mode name in the object's
-`PlacementSpec`, and document the criteria in `docs/success_criteria.md`.
-
-### 5.4 Add a machine state
-
-Add an entry to `config.INTERNAL_STATES` (rack extensions + `min_feasible_slots`), then rebuild
-the cache for it: `extract_geometry --scenario <name>` → `decompose_meshes --scenario <name>`
-→ `parity_check --scenario <name>` → `goal_configs --scenario <name>`.
-
-
-## Acknowledgement
+## 8 Assets and licenses
 
 This project builds on the following open-source projects and datasets. Please visit the URLs
 for their respective licenses:
@@ -643,8 +476,8 @@ for their respective licenses:
 3. https://huggingface.co/datasets/X-Humanoid/ArtVIP — the articulated `dishwasher_2` asset
    (Apache-2.0)
 4. https://www.ycbbenchmarks.com — YCB Object & Model Set, Calli et al., *"The YCB Object and
-   Model Set"* (IEEE ICAR 2015): textured `google_16k` scans for plate, bowl, cups, cutlery,
-   spatula and pitcher, used under the YCB dataset terms
+   Model Set"* (IEEE ICAR 2015): textured `google_16k` scans for plate, bowl, cups, cutlery
+   and spatula, used under the YCB dataset terms
 5. https://github.com/ompl/ompl — Șucan, Moll, Kavraki, *"The Open Motion Planning Library"*
    (IEEE RAM 2012): the RRT-Connect, RRT*, BIT* and PRM implementations behind
    `dishsim.planners`

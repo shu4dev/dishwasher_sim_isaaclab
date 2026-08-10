@@ -1,13 +1,12 @@
 # Environment
 
-Discovered 2026-07-28 on an NVIDIA Brev Isaac Launchable instance; re-verified 2026-07-29 on a
-fresh instance of the same launchable (the original instance was recycled — only committed work
-survived; `assets/`, `logs/`, and pip installs had to be recreated).
+Measured on an NVIDIA Brev Isaac Launchable instance and re-verified on a fresh instance of
+the same launchable. This is the **canonical home of the launcher landmines** — the README and
+`CLAUDE.md` link here rather than restating them.
 
-> **v0 pivot (2026-07-29):** the project moved from RL door-opening to classical OMPL placement
-> planning (see README). The RL pipeline lives on in git history (branch
-> `archive/rl-door-opening`). OMPL is CPU-bound, so the vCPU count below now matters more than
-> the GPU.
+> The project's RL door-opening pipeline lives in git history (branch
+> `archive/rl-door-opening`). OMPL planning is CPU-bound, so the vCPU count below matters more
+> than the GPU.
 
 ## Hardware
 
@@ -92,27 +91,11 @@ Notable findings in the 6.0 asset library:
   `RigidBodyAPI`). This project derives a local physics-enabled mug USD instead
   (`scripts/setup/make_prop_physics_usd.py`).
 
-## Smoke test (initial bring-up)
-
-```bash
-cd /workspace/isaaclab
-./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py \
-    --task Isaac-Reach-UR10-v0 --num_envs 64 --max_iterations 5 --headless
-```
-
-**Result: PASS** — 5 learning iterations logged, checkpoints written to
-`/workspace/isaaclab/logs/rsl_rl/reach_ur10/`, no crash.
-
-Two findings from the smoke-test process:
-
-1. `Isaac-Open-Drawer-Franka-v0` (the first candidate) **fails on this machine**: the in-tree
-   `FRANKA_PANDA_CFG` points at `{ISAACLAB_NUCLEUS_DIR}/Robots/FrankaEmika/panda_instanceable.usd`,
-   which no longer exists in the 6.0 S3 bucket (the bucket now has
-   `FrankaEmika/franka_panda.usda` + a `Legacy/` folder). The in-tree asset configs and the live
-   bucket are slightly out of sync — every asset URL used by this project is verified against the
-   bucket before use.
-2. `./isaaclab.sh -p` **exits 0 even when the wrapped script crashes** — success must be verified
-   from the log output (iteration lines / absence of tracebacks), never from the exit code.
+> **Bucket drift warning:** the in-tree Isaac Lab asset configs and the live 6.0 S3 bucket are
+> slightly out of sync (e.g. `panda_instanceable.usd` no longer exists) — every asset URL used
+> by this project is verified against the bucket before use. And `./isaaclab.sh -p` **exits 0
+> even when the wrapped script crashes** — success must be verified from log output, never
+> from the exit code.
 
 ## Planning stack
 
@@ -121,9 +104,12 @@ The RL train/play entry points were removed in the v0 pivot (recoverable from th
 
 ```bash
 /isaac-sim/kit/python/bin/python3 -m venv --system-site-packages /workspace/isaaclab/env_isaaclab
-/workspace/isaaclab/env_isaaclab/bin/pip install ompl python-fcl coacd trimesh matplotlib imageio pytest
+/workspace/isaaclab/env_isaaclab/bin/pip install -r requirements-planning.txt
 /workspace/isaaclab/env_isaaclab/bin/pip install -e /workspace/isaaclab/dishwasher_sim_isaaclab
 ```
+
+The pins in `requirements-planning.txt` are exactly the measured working set in the table
+below (the table stays the measurement of record).
 
 | Item | Value |
 |---|---|

@@ -47,6 +47,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from dishsim import config  # noqa: E402
+from dishsim.base_sweep import _bottom_offset, _stand_R, largest_rectangle  # noqa: E402
 from dishsim.collision_world import CollisionWorld  # noqa: E402
 from dishsim.transforms import T_inv, make_T  # noqa: E402
 from dishsim.ur5e_kin import ik_wrist3_all  # noqa: E402
@@ -69,53 +70,6 @@ parser.add_argument("--rect_x_min", type=float, default=0.65,
                          "the machine's mid-depth. The full grid is still mapped and plotted.")
 parser.add_argument("--out_dir", type=str, default=os.path.join(PROJECT_ROOT, "media", "reach"))
 args = parser.parse_args()
-
-
-def _stand_R(spec, yaw_deg: float) -> np.ndarray:
-    """Rotation standing the object axis up, then yawing about world z (fill_plan convention)."""
-    from scipy.spatial.transform import Rotation  # noqa: PLC0415
-
-    axis = tuple(spec.axis_obj)
-    if axis == (0.0, 1.0, 0.0):
-        R0 = Rotation.from_euler("x", 90.0, degrees=True).as_matrix()
-    elif axis == (0.0, 0.0, 1.0):
-        R0 = np.eye(3)
-    else:
-        R0 = Rotation.from_euler("y", -90.0, degrees=True).as_matrix()
-    return Rotation.from_euler("z", yaw_deg, degrees=True).as_matrix() @ R0
-
-
-def _bottom_offset(spec, R: np.ndarray) -> float:
-    """Distance from the object origin down to its lowest bbox point under ``R``."""
-    h = np.array(spec.bbox_half)
-    corners = np.array([[sx * h[0], sy * h[1], sz * h[2]] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
-    return -float((R @ corners.T).T[:, 2].min())
-
-
-def largest_rectangle(mask: np.ndarray) -> tuple[int, int, int, int]:
-    """Largest all-True axis-aligned rectangle in a boolean grid.
-
-    Returns:
-        ``(i0, i1, j0, j1)`` inclusive index bounds, or ``(0, -1, 0, -1)`` when empty.
-    """
-    n_rows, n_cols = mask.shape
-    heights = np.zeros(n_cols, dtype=int)
-    best = (0, (0, -1, 0, -1))
-    for i in range(n_rows):
-        heights = np.where(mask[i], heights + 1, 0)
-        # classic stack sweep for the largest rectangle in a histogram
-        stack: list[int] = []
-        for j in range(n_cols + 1):
-            h = heights[j] if j < n_cols else 0
-            start = j
-            while stack and stack[-1][1] >= h:
-                sj, sh = stack.pop()
-                area = sh * (j - sj)
-                if area > best[0] and sh > 0:
-                    best = (area, (i - sh + 1, i, sj, j - 1))
-                start = sj
-            stack.append((start, h))
-    return best[1]
 
 
 def main() -> int:

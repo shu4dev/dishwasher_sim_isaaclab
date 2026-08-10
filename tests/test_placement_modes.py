@@ -63,19 +63,6 @@ def test_plate_goal_pose_is_vertical_disc(rack_T):
         assert abs(d[0]) < 0.02 and 0.0 < d[2] < 0.12
 
 
-def test_bowl_slots_and_goal_axis(rack_T):
-    config.set_active_object("bowl")
-    slots = placement.derive_bowl_slots("unused")
-    assert len(slots) == 3 and all(s.mode == "bowl_lean" for s in slots)
-    rng = np.random.default_rng(1)
-    lean = np.radians(slots[0].params["lean_deg"])
-    a_target = np.array([-np.sin(lean), 0.0, -np.cos(lean)])  # opening down-wall (slope side)
-    for T in placement.sample_goal_poses(slots[0], 6, rng):
-        axis = T[:3, :3] @ np.array([0.0, 0.0, 1.0])
-        cosang = abs(float(axis @ a_target))
-        assert np.degrees(np.arccos(np.clip(cosang, -1, 1))) < 15.0
-
-
 def test_basket_slots_inside_bays(rack_T):
     config.set_active_object("fork")
     slots = placement.derive_basket_slots("unused")

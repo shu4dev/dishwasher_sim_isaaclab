@@ -15,9 +15,10 @@ trial endpoints, the calibrated contact-pinch aperture during all planned motion
 damping values below are load-bearing: the near-massless mimic-constrained finger links resonate
 and blow up without them.
 
-**Dishwasher.** ArtVIP ``dishwasher_2`` with the passive-door derived USD (world-weld removed,
-authored door drive neutralized — see :mod:`dishsim.usd_prep`). ``DISHWASHER_CFG`` keeps the
-RL-era passive-door setup that the inspection script's stability/door tests are written against.
+**Dishwasher.** ArtVIP ``dishwasher_2``. ``DISHWASHER_CFG`` keeps the RL-era passive-door
+setup that the inspection script's stability/door tests are written against; the passive-door
+derived USD (world-weld removed, door drive neutralized — see :mod:`dishsim.usd_prep`) is
+authored on demand by that script, not at import time.
 ``DISHWASHER_V0_CFG`` is the static variant (door locked open at 90 deg, lower rack extended).
 
 Joint names (verified against the composed stage, see ``docs/joint_report.md``):
@@ -38,7 +39,7 @@ from isaaclab.assets import ArticulationCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 from . import ASSETS_DIR, config
-from .usd_prep import make_dishwasher_rl_usd, make_dishwasher_v0_usd
+from .usd_prep import make_dishwasher_v0_usd
 
 # ---------------------------------------------------------------------------------------------
 # UR5e + Robotiq 2F-85
@@ -166,12 +167,6 @@ _DISHWASHER_SRC_USD = os.path.join(
     "model_dishwasher_2.usda",
 )
 
-# Passive-door derived copy (world-weld joint removed, door drive neutralized); generated on
-# demand, the downloaded original stays pristine. See usd_prep.py for the why.
-DISHWASHER_USD_PATH = (
-    make_dishwasher_rl_usd(_DISHWASHER_SRC_USD) if os.path.isfile(_DISHWASHER_SRC_USD) else _DISHWASHER_SRC_USD
-)
-
 DISHWASHER_DOOR_JOINT = "RevoluteJoint_dishwasher_2_middle"
 DISHWASHER_RACK_JOINTS = ["PrismaticJoint_dishwasher_2_up", "PrismaticJoint_dishwasher_2_down"]
 DISHWASHER_DOOR_BODY = "E_door_4"
@@ -181,7 +176,10 @@ DISHWASHER_UPPER_RACK_BODY = "E_shelf_03"
 
 DISHWASHER_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path=DISHWASHER_USD_PATH,
+        # Placeholder: the sole consumer (inspect_scene.py) authors the passive-door derived
+        # USD itself via usd_prep.make_dishwasher_rl_usd and overwrites spawn.usd_path before
+        # spawning — authoring it here at import time would tax every live-path process.
+        usd_path=_DISHWASHER_SRC_USD,
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             fix_root_link=True,
             enabled_self_collisions=False,

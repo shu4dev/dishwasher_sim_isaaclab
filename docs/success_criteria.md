@@ -1,4 +1,4 @@
-# Placement success criteria (v0 mug + multi-object v1)
+# Placement success criteria (RACK_GEN v4)
 
 Defined for OMPL placing the carried object at a slot in the dishwasher's lower rack.
 Frames: robot-base frame, meters, Z-up, XYZW quaternions.
@@ -11,9 +11,9 @@ basket); each object class declares a placement mode in `config.OBJECTS` and
 
 | mode | classes | slot definition | evaluated as |
 |---|---|---|---|
-| `floor_stand` | mug, cup, tumbler, pitcher, bowl (v4 — bowls stand) | v0 standing cell on the wire-floor grid (`derive_slots_from_rack`: footprint cells, `SLOT_RIM_INSET_M` inset, `SLOT_GRID_PITCH_M` pitch) | lateral ≤ `SLOT_TOL_LATERAL_M`, axis-vs-z tilt ≤ `SLOT_TOL_TILT_DEG`, bottom within 2 cm of the floor |
+| `floor_stand` | mug, cup, tumbler, bowl (v4 — bowls stand) | v0 standing cell on the wire-floor grid (`derive_slots_from_rack`: footprint cells, `SLOT_RIM_INSET_M` inset, `SLOT_GRID_PITCH_M` pitch) | lateral ≤ `SLOT_TOL_LATERAL_M`, axis-vs-z tilt ≤ `SLOT_TOL_TILT_DEG`, bottom within 2 cm of the floor |
 | `plate_slot` | plate, saucer, lid | one slot per robot-bank gap (v4: 3 gaps at 40 mm pitch, no tie wire; the 11-gap rear bank is fill-only); disc face normal along the pitch direction, leaned +7° like the tines, bottom edge seated on the bank floor bar | face-normal deviation ≤ 12° (flip-insensitive), off-gap drift ≤ 12 mm, center height within 2 cm of nominal |
-| `bowl_lean` | — (unused since RACK_GEN v4: the lean fixture is gone — a gripper carrying a rim-edge bowl stabs the rack at every hover of the 48° lean, so bowls stand via `floor_stand`) | lean positions against the bowl tines over the drinkware slope (opening down-slope at ~48°) | axis within 20° of the lean cone, lateral ≤ 4 cm, height within 6 cm |
+| `bowl_lean` | — (removed with RACK_GEN v4: the lean fixture is gone — a gripper carrying a rim-edge bowl stabs the rack at every hover of the 48° lean, so bowls stand via `floor_stand`; the mode's code was deleted, see [known_limitations.md](known_limitations.md)) | — | — |
 | `basket_drop` | fork, spoon, knife, serving_spoon | one slot per basket bay; the goal is a release hover 60 mm above the bay, head-down — gravity inserts | settled bbox center inside the bay volume, below the basket top |
 
 Fill-only modes (`upside_down`, `stem_scallop`, `flat_lay`) are exercised by the capacity
@@ -46,7 +46,7 @@ fill (`scripts/setup/capacity_fill.py`), which gates per-item settle stability
 |---|---|
 | `no-goal-config` | goal generation produced zero collision-free IK configs for the slot (funnel logged: pose samples → IK branches → limit filter → collision filter) |
 | `grasp-fault` | the visible close did not land in the calibrated pad-force band (or something else touched the mug) |
-| `planner-timeout` | RRT-Connect found no path within `PLAN_TIME_BUDGET_S` (5 s) |
+| `planner-timeout` | RRT-Connect found no path within `PLAN_TIME_BUDGET_S` (20 s) |
 | `execution-collision` | an unexpected contact, mug external force, or pad-force spike fired while tracking the path |
 | `release-fault` | the jaws opened at the goal but pad forces did not vanish |
 | `retract-collision` | contact ≥ `RETRACT_GRAZE_MAX_N` (2 N) while retracting the opened tool (lighter brushes are recorded as `retract: grazed …` and judged by the final window — the placed mug settles a few mm off-center while the jaws have ~2.6 mm/side clearance) |
@@ -248,7 +248,7 @@ its grid actually has:
 |---|---|---|
 | `floor_stand` | 3 depth × 5 lateral | `near_centre`, `mid_left1`, `far_right2` |
 | `plate_slot` | 3 robot-bank gaps (lateral) | `gap_left1`, `gap_centre`, `gap_right1` |
-| `bowl_lean` | (unused in v4 — bowls use the `floor_stand` grid) | — |
+| `bowl_lean` | (removed in v4 — bowls use the `floor_stand` grid) | — |
 | `basket_drop` | 3 bays (lateral — the v4 basket splits along x) | `gap_left1`, `gap_centre`, `gap_right1` |
 
 Names are ordinal within the RACK, so they are invariant to how far it is pulled out; which
@@ -263,7 +263,7 @@ These bound what an episode can be asked to do, and are measured rather than ass
 
 | ceiling | value | why |
 |---|---|---|
-| pickable classes | 3 of 15 — `mug`, `cup`, `tumbler` | only the `rim_diam` grasp family has a calibrated countertop pick; `plate`/`bowl`/`fork` are `START_WELDED` and skip the pick entirely |
+| pickable classes | 3 of 14 — `mug`, `cup`, `tumbler` | only the `rim_diam` grasp family has a calibrated countertop pick; `plate`/`bowl`/`fork` are `START_WELDED` and skip the pick entirely |
 | robot destinations | **13** (v3: 6) | floor 5 of 15 cells (ids 0, 1, 5, 6, 7) + plate gaps 2 of 3 (ids 1, 2) + bowl cells 3 of 15 (ids 0, 5, 6) + basket 3 of 3 bays; every other slot funnels to zero goal configs on collision |
 | simultaneous placements | mode-dependent | plate gaps and basket bays are disjoint fixtures; bowl cells ARE floor cells and the 60 mm `SLOT_GRID_PITCH_M` grid deliberately *overlaps*, so a mixed load shares the 5 floor cells — the sequencer's occupancy check, not a fixed count, bounds an episode |
 

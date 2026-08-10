@@ -42,7 +42,7 @@ def test_spec_sanity(name):
     assert spec.height_m > 0.0 and spec.rim_radius_m > 0.0
     assert tuple(spec.axis_obj) in ((0.0, 1.0, 0.0), (0.0, 0.0, 1.0), (1.0, 0.0, 0.0))
     assert spec.placement.mode in (
-        "floor_stand", "plate_slot", "bowl_lean", "basket_drop",
+        "floor_stand", "plate_slot", "basket_drop",
         "upside_down", "stem_scallop", "flat_lay",
     )
     assert spec.placement.rack in ("lower", "upper", "basket")
