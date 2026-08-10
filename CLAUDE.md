@@ -51,8 +51,16 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m 
 scripts/run_kit.sh scripts/experiment/run_task.py --headless --enable_cameras \
     --scenario both_in --spawn "cup=1,tumbler=1,fork=2" --seed 1 --run_id bothin_load
 
+# the same episode on the Bosch 800 twin at the A2-winner mount (v2; caches ship in the
+# public archive — restore first, never rebake what the archive already carries)
+scripts/run_kit.sh scripts/experiment/run_task.py --headless --enable_cameras \
+    --machine bosch800 --placement side_winner --scenario both_in \
+    --spawn "cup=1,tumbler=1" --seed 1 --run_id bosch_load
+
 # bake a machine state's collision caches (what run_task.py prints when a cache is missing)
 scripts/setup/build_state.py --state placement --classes mug,cup,tumbler
+# Bosch states take the same flags (+ --skip_goals when only the sweep needs the world)
+scripts/setup/build_state.py --machine bosch800 --placement side_winner --state placement --classes cup
 
 # entry points: scripts/ is split by phase (see README Usage)
 #   setup/      kit_smoke, inspect_scene, check_scene, calibrate_grasp, freeze_calibration,
@@ -93,6 +101,16 @@ crashes or silent import shadowing, not clean errors:
 it editable). Full module tree: `docs/architecture.md`. Load-bearing traps, encoded in the
 modules' docstrings and not to be "simplified" away:
 
+- `config.py` machine selector (v2) — `apply_machine("bosch800")` swaps the world to the
+  Bosch 800 twin (self-authored USD, own cache root `assets/cache/machines/bosch800/`, own
+  scenarios incl. `third_out`/`middle_out`, per-machine TASK/planner/camera overrides);
+  `apply_base_placement("side_winner")` is the A2-measured mount. Order matters: machine →
+  object → scenario → placement, all BEFORE scene imports. The v1 baseline restores
+  byte-stable (tested against the frozen manifest hash). The legacy mug is EXCLUDED from
+  Bosch studies (`config.reference_class()` — its pinch gate fails off the v1 base
+  reference; root-cause open). Media scripts need Fabric ON (`use_fabric=False` renders
+  authored poses while physics moves — extraction keeps it off on purpose). Every Bosch
+  number traces to `docs/bosch800_source_data.md` (`estimated` rows = Stage-B calipers).
 - `robots.py` — `articulation_root_prim_path="/root_joint"` (the asset has a second, disabled
   ArticulationRootAPI on the gripper subtree); gripper armature 0.001 + damping 0.05 (the
   near-massless mimic-joint finger cluster resonates and explodes without them). Only

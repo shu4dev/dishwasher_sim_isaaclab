@@ -220,6 +220,25 @@ validates every cache's `config_hash` against the current `config.py`, and runs 
 suite. `assets/`, `media/`, `results/` are gitignored; only curated figures under
 `docs/figures/` are tracked.
 
+**The archive is the fast path for BOTH machines.** Since the v2 release it also ships the
+complete **Bosch 800 digital-twin world**: the self-authored machine USDs
+(`assets/machines/bosch800/`), collision caches for all five Bosch rack states baked at the
+measured winner mount (`assets/cache/machines/bosch800/`), the mount-sweep scorecards
+(`results/base_sweep/bosch800/`), and the first recorded episodes. After a restore, a Bosch
+episode runs immediately — no baking:
+
+```bash
+scripts/run_kit.sh scripts/experiment/run_task.py --headless --enable_cameras \
+    --machine bosch800 --placement side_winner --scenario both_in \
+    --spawn "cup=1,tumbler=1" --seed 1 --run_id bosch_repro
+```
+
+`--machine bosch800` switches the whole stack (machine USD, caches, cameras, scenarios) via
+`config.apply_machine`; `--placement side_winner` is the A2-measured UR5e mount (side-elevated,
+x +0.475, y −0.525, z 0.400, yaw +101.25°). The same two flags work on every setup script
+(`build_state`, `extract_geometry`, `parity_check`, `goal_configs`, `base_pose_sweep`).
+Bosch numbers and their provenance: [docs/bosch800_source_data.md](docs/bosch800_source_data.md).
+
 ### 2.4 Rebaking after a config change
 
 The shipped caches serve reproduction as-is. If you change any hashed config value (base
