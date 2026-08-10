@@ -211,7 +211,7 @@ redistributed. One command restores everything, no token needed:
 
 ```bash
 /workspace/isaaclab/env_isaaclab/bin/python scripts/tools/restore_assets.py \
-    --repo <HF_USER>/dishsim-assets --with_media
+    --repo shu4dev/dishsim-assets --with_media
 ```
 
 The restore downloads the archive (built props, every geometry cache — the ~1.5 h-of-Kit
