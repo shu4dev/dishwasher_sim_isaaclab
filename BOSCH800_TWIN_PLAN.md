@@ -1,5 +1,16 @@
 # Bosch 800 digital twin — Stage A plan (portable)
 
+> **STATUS 2026-08-10, end of day (added for machine-portability — this file survived the
+> last instance change when nothing else did):** A0–A2 COMPLETE, A3 UNDERWAY. A2 verdict:
+> UR5e at `side_winner` (x +0.475, y −0.525, z 0.400, yaw +101.25°) meets all four
+> criteria. A3 landed: first full episode CLEARED (`bosch_ep2`: 560 mm pull + cup +
+> tumbler placed 2/2) and the plate is NO LONGER PATH-BLOCKED (`bosch_plate_rematch`:
+> planned in 16 s vs the v1 180 s timeout; failed only lateral settle 14.5 vs 12 mm).
+> Assets/results archived: HF `shu4dev/dishsim-assets` tag `20260810_99e5cb9`.
+> A3 remaining: plate settle tuning (release vs the 50 mm pitch), real-scale dishes
+> (§A0 shortlist), Bosch capacity fill, legacy-mug anomaly root-cause (excluded via
+> `config.reference_class`), middle-rack thinness (RackMatic-low lever), then Stage B.
+
 Written 2026-08-10. Self-contained execution plan for re-anchoring `dishwasher_sim_isaaclab`
 from the fictional ArtVIP compact machine to a **Bosch 800 Series 24″ built-in** digital
 twin, plus a UR5e mount-feasibility study. Import this file to the executing instance; a
