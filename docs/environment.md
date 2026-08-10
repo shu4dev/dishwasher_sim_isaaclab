@@ -88,8 +88,9 @@ Notable findings in the 6.0 asset library:
 - `Props/YCB/Axis_Aligned_Physics/` contains **only** 003_cracker_box, 004_sugar_box,
   005_tomato_soup_can, 006_mustard_bottle. The mug (025) and bowl (024) exist only in the plain
   `Axis_Aligned/` folder **without** physics APIs (and Isaac Lab's spawner cannot add a missing
-  `RigidBodyAPI`). This project derives a local physics-enabled mug USD instead
-  (`scripts/setup/make_prop_physics_usd.py`).
+  `RigidBodyAPI`). The project originally derived a local physics mug USD from that bucket
+  asset; since the 2026-08-10 public-asset migration the mug builds from the public YCB
+  google_16k scan instead (see `docs/asset_survey.md`).
 
 > **Bucket drift warning:** the in-tree Isaac Lab asset configs and the live 6.0 S3 bucket are
 > slightly out of sync (e.g. `panda_instanceable.usd` no longer exists) — every asset URL used

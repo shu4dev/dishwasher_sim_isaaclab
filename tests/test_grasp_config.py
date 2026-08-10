@@ -61,11 +61,11 @@ def test_grasp_aperture_within_joint_limits():
 
 @needs_calibration
 def test_grasp_chain_maps_rim_center_to_tcp_axis():
-    # the documented derivation: rim-center axis point (-0.011, 0.0407, 0)_obj lands on the
+    # the documented z-up derivation: the rim-center axis point (u, v, h2)_obj lands on the
     # tool axis at z = GRASP_RIM_TCP_Z_M
     T_tcp_obj = make_T(config.GRASP_TCP_OBJ_POS, config.GRASP_TCP_OBJ_QUAT)
     rim_center_obj = np.array(
-        [config.OBJECT_BODY_CENTER_XZ[0], config.OBJECT_BBOX_HALF[1], config.OBJECT_BODY_CENTER_XZ[1], 1.0]
+        [config.OBJECT_BODY_CENTER_XZ[0], config.OBJECT_BODY_CENTER_XZ[1], config.OBJECT_BBOX_HALF[2], 1.0]
     )
     p_tcp = (T_tcp_obj @ rim_center_obj)[:3]
     assert np.allclose(p_tcp, (0.0, 0.0, config.GRASP_RIM_TCP_Z_M), atol=1e-6), p_tcp

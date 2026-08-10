@@ -9,7 +9,7 @@ trimesh pieces in the object's canonical frame (Z-up for drinkware/containers, l
 for utensils, origin at the bbox center). The pieces serve three consumers with zero
 decomposition slop:
 
-- ``scripts/setup/build_object_assets.py`` authors them as per-part USD mesh prims, each with a
+- The authoring pipeline (``build_object_assets.py``, in git history) authored them as per-part USD mesh prims, each with a
   convex-hull collider (PhysX side);
 - ``scripts/setup/decompose_meshes.py`` writes them verbatim as the FCL pieces (no CoACD — CoACD
   would seal thin open shells like the glass walls);

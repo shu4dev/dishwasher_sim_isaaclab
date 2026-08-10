@@ -46,10 +46,11 @@ rack-state tie-break in `config.resolve_rack_state`; no v4 flow places in it.
 
 ## Capacity-fill realism edges
 
-- A saucer holds through the rack stow only in the cane-braced end gap; even there it parks at
-  3.9° drift against the 3.0° stability gate in some runs (the capacity script's parking
-  mechanism handles this honestly). Mid-gap saucers tip 32–42° when the rack accelerates —
-  v3's apparent stability came from the old basket bracing them from below.
+- **The saucer class is retired from the fill** (it stays in the object library). Measured
+  over four fills: mid-gap saucers slip 21–26 mm / 32–42° during the rack stow (v3's apparent
+  stability came from the old basket bracing them from below), and even the candy-cane-braced
+  end gap is marginal — parked at 3.9° drift in one run, tipped 46° at stow in another.
+  Capacity trades three saucers for a reliably closable rack.
 - The wine-glass stemware lie-in (a physics stretch goal) has never settled within the
   stability gate; both glasses park in every run.
 

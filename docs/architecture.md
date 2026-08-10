@@ -10,8 +10,6 @@ dishwasher_sim_isaaclab/
 │   │   ├── kit_smoke.py              [dependency + headless-capture gate]
 │   │   ├── inspect_scene.py          [articulation survey -> docs/joint_report.md; also authors
 │   │   │                              the passive-door derived USD it inspects]
-│   │   ├── make_prop_physics_usd.py  [Isaac-bucket prop -> physics USD (the mug)]
-│   │   ├── build_object_assets.py    [YCB scans + procedural props -> the object library]
 │   │   ├── check_scene.py            [scene verification; --measure derives the pad map]
 │   │   ├── calibrate_grasp.py        [per-object pinch calibration (force staircase)]
 │   │   ├── freeze_calibration.py     [freeze measured constants into config.OBJECTS]
@@ -81,7 +79,7 @@ dishwasher_sim_isaaclab/
 │       ├── prm.py                    [probabilistic roadmap (single-goal here)]
 │       └── registry.py               [name -> class; make_planner(); available()]
 │
-├── tests/                            [455 cases across 27 files; venv pytest, no Kit]
+├── tests/                            [435 cases across 25 files; venv pytest, no Kit]
 ├── docs/                             [environment, success criteria, measured reports]
 ├── assets/  media/  results/         [generated, gitignored]
 ├── requirements-planning.txt         [pinned planning-venv deps (measured working set)]

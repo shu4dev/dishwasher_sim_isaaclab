@@ -7,9 +7,10 @@ page covers the object/mode/state extension workflows.
 
 1. Add an `ObjectSpec` to `config.OBJECTS` — source (`ycb16k` / `procedural`), scale, mass,
    a `GraspSpec` (family + contact width) and a `PlacementSpec` (mode + rack).
-2. Build the asset: `scripts/run_kit.sh scripts/setup/build_object_assets.py --objects <name>`.
-   It prints the *measured* dimensions and fails if they disagree with the registry by >2 mm —
-   freeze the printed block into the spec.
+2. Build the asset. The one-time authoring pipeline (`build_object_assets.py`, retired with
+   the public-asset release) lives in git history — restore it from there for new classes.
+   It downloads/generates the source mesh, prints the *measured* dimensions and fails if they
+   disagree with the registry by >2 mm — freeze the printed block into the spec.
 3. Measure the pinch: `setup/check_scene.py --measure` for the pad map, then
    `setup/calibrate_grasp.py --object <name>`.
 4. Freeze the result: `setup/freeze_calibration.py --object <name>`.

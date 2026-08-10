@@ -17,7 +17,7 @@
     <td align="center">
       <img src="docs/figures/loaded_iso.png" width="720" alt="fully loaded dishwasher"/>
       <br/>
-      <code>scripts/setup/capacity_fill.py</code> — 30 items placed, 27 settle stably, racks still close
+      <code>scripts/setup/capacity_fill.py</code> — 29 items placed, 27 settle stably, racks still close
     </td>
   </tr>
 </table>
@@ -52,7 +52,7 @@ Work is organised in three phases, mirrored by the layout of `scripts/`:
     <td align="center">
       <img src="docs/figures/object_library.png" width="300" alt="object library"/>
       <br/>
-      <code>setup/build_object_assets.py</code>
+      asset pipeline (git history)
       <br/>
       Kitchen-object library
     </td>
@@ -131,13 +131,14 @@ capture of the same trial with perfect frame alignment.
 Sourced from YCB scans or generated procedurally, then **scaled to fit** — the machine is
 compact (lower rack 366 × 287 mm, 154 mm inter-rack clearance, 30 mm tine pitch), so a
 full-size dinner plate cannot nest between the tines; the plate here is scaled to 141 mm
-across. Each `scale` below documents the factor against its source asset, and
-`setup/build_object_assets.py` re-measures the result and refuses to write an asset that
-disagrees with the registry.
+across. Each `scale` below documents the factor against its source asset; the authoring
+pipeline re-measured every built asset and refused to write one that disagreed with the
+registry by more than 2 mm (the pipeline was retired with the public-asset release — it lives
+in git history, and the archive ships its outputs).
 
 | Class | Source | Scale | Placement mode | Rack |
 |---|---|---|---|---|
-| `mug` | Isaac YCB `025_mug` | 1.00 | `floor_stand` | lower |
+| `mug` | YCB `025_mug` | 0.85 | `floor_stand` | lower |
 | `plate` | YCB `029_plate` | 0.54 | `plate_slot` | lower |
 | `saucer` | YCB `029_plate` | 0.42 | `plate_slot` | lower |
 | `bowl` | YCB `024_bowl` | 0.68 | `floor_stand` | lower |
@@ -200,41 +201,47 @@ resolves Python to it, which is also why `run_kit.sh` has to re-export the Kit e
 archive tooling (§2.4) additionally needs
 `huggingface_hub requests pyyaml filelock tqdm fsspec` (unpinned).
 
-### 2.3 Assets
+### 2.3 Assets (public archive — the one-command path)
+
+Every asset this project uses is publicly redistributable with attribution (see §8): the
+ArtVIP dishwasher (Apache-2.0), YCB-scan-derived objects incl. the mug (YCB dataset terms),
+and this project's own procedural props, racks and geometry caches. The robot USD is the one
+exception by design — it is fetched from NVIDIA's public asset bucket at spawn time and never
+redistributed. One command restores everything, no token needed:
 
 ```bash
-# dishwasher asset (~85 MB) + derived USDs + the measured joint report
+/workspace/isaaclab/env_isaaclab/bin/python scripts/tools/restore_assets.py \
+    --repo <HF_USER>/dishsim-assets --with_media
+```
+
+The restore downloads the archive (built props, every geometry cache — the ~1.5 h-of-Kit
+part — derived dishwasher USDs, recorded results), re-downloads the ArtVIP originals,
+validates every cache's `config_hash` against the current `config.py`, and runs the test
+suite. `assets/`, `media/`, `results/` are gitignored; only curated figures under
+`docs/figures/` are tracked.
+
+### 2.4 Rebaking after a config change
+
+The shipped caches serve reproduction as-is. If you change any hashed config value (base
+pose, rack parameters, grasp transform), the affected caches invalidate loudly and are
+rebuilt with the pipeline (the runner prints the exact command on a cache miss):
+
+```bash
+./scripts/setup/build_state.py --state placement --classes mug,cup,tumbler,plate,bowl,fork
+```
+
+If you are rebuilding the world from nothing instead of restoring, first fetch the ArtVIP
+source and derive the scene report:
+
+```bash
 scripts/run_kit.sh -c "from huggingface_hub import snapshot_download; \
   snapshot_download(repo_id='X-Humanoid/ArtVIP', repo_type='dataset', \
   allow_patterns=['Articulated_objects/major_appliances/dishwasher/**'], local_dir='assets/artvip')"
 scripts/run_kit.sh scripts/setup/inspect_scene.py --headless --test_door
-
-# object library: the mug from the Isaac asset bucket, the rest from YCB scans + procedural
-scripts/run_kit.sh scripts/setup/make_prop_physics_usd.py --object 025_mug
-scripts/run_kit.sh scripts/setup/build_object_assets.py
 ```
 
-`assets/`, `media/`, `results/` are gitignored; only curated figures under `docs/figures/`
-are tracked. The asset archive must stay **private** (NVIDIA EULA + YCB dataset terms).
-
-### 2.4 Fast path: restore a prebuilt archive
-
-If you have access to the private asset archive (a Hugging Face dataset holding the built
-props and every geometry cache), this replaces §2.3 and ~1.5 h of cache rebuilds:
-
-```bash
-# authenticate once with a token that can read the private dataset
-/workspace/isaaclab/env_isaaclab/bin/python -m huggingface_hub.commands.huggingface_cli \
-    login --token hf_xxx
-/workspace/isaaclab/env_isaaclab/bin/python scripts/tools/restore_assets.py --with_media
-```
-
-> **Note:** the venv installs `huggingface_hub` as a library, not a console script, so
-> `huggingface-cli` is not on `PATH` — invoke it as the module above. Pass `--token`
-> explicitly; the interactive prompt raises `EOFError` without a TTY.
-
-The restore re-downloads the ArtVIP originals, validates every restored cache's
-`config_hash` against the current `config.py`, and runs the test suite.
+(The one-time object-library authoring scripts were retired with the public-asset release —
+they live in git history; the archive ships their outputs.)
 
 ### 2.5 Verify the install
 
@@ -244,7 +251,7 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m 
 ```
 
 `kit_smoke.py` proves the planning stack imports *inside* the Kit process and that headless
-camera capture produces non-black frames. The suite is **455 test cases across 27 files**, all
+camera capture produces non-black frames. The suite is **435 test cases across 25 files**, all
 Kit-free.
 
 > **Note:** `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is required — the system site-packages carry
@@ -256,24 +263,19 @@ The end-to-end path from a fresh setup to the Results table in §5. Venv scripts
 `$PY = /workspace/isaaclab/env_isaaclab/bin/python`.
 
 ```bash
-# 1. install + assets: §2.1–2.3 (or the §2.4 restore, which also bakes nothing — it ships
-#    the caches prebuilt and validated; skip step 2 in that case)
+# 1. install (§2.1–2.2), then restore the public archive (§2.3) — it ships every collision
+#    cache prebuilt and validated, so there is nothing to bake for reproduction
 
-# 2. bake the collision caches the experiments load (~1–1.5 h total, one-time)
-./scripts/setup/build_state.py --state both_out --classes mug
-./scripts/setup/build_state.py --state both_in  --classes mug
-./scripts/setup/build_state.py --state placement --classes mug,cup,tumbler,plate,bowl,fork
-
-# 3. the v0 single-object baseline: mug into the lower rack, both racks out.
-#    v4-feasible mug slots are {0, 5, 6} (near_left2, mid_left2, mid_left1)
+# 2. the v0 single-object baseline: mug into the lower rack, both racks out.
+#    v4-feasible mug slots are {0, 1, 5, 6, 7} — ids 1 and 7 marginally (64-sample funnels)
 scripts/run_kit.sh scripts/experiment/run_trials.py --headless \
     --scenario both_out --object mug --slots 0,6 --seeds 0 --run_id repro_v0
 
-# 4. a multi-object episode from the stowed machine (rack pull + picks + basket drops)
+# 3. a multi-object episode from the stowed machine (rack pull + picks + basket drops)
 scripts/run_kit.sh scripts/experiment/run_task.py --headless --enable_cameras \
     --scenario both_in --spawn "cup=1,tumbler=1,fork=2" --seed 1 --run_id repro_episode
 
-# 5. the capacity fill (the hero figure) and the metrics
+# 4. the capacity fill (the hero figure) and the metrics
 scripts/run_kit.sh scripts/setup/capacity_fill.py --headless --enable_cameras
 $PY scripts/evaluation/compute_metrics.py --all
 ```
@@ -297,7 +299,7 @@ scripts/run_kit.sh scripts/setup/parity_check.py --headless --scenario placement
 # placement slots + IK goal sets that experiments plan to
 scripts/run_kit.sh scripts/setup/goal_configs.py --headless --enable_cameras --object mug
 
-# a fully-loaded machine: 30-item deterministic fill + rack-closability check
+# a fully-loaded machine: 29-item deterministic fill + rack-closability check
 scripts/run_kit.sh scripts/setup/capacity_fill.py --headless --enable_cameras
 ```
 
@@ -414,10 +416,10 @@ rack at the front base placement.
 
 | Claim | Run / artifact | Evidence |
 |---|---|---|
-| The **v0 single-object baseline reproduces**: 2/2 mug trials succeed (slots 0 and 6, lateral err 3.3 / 8.5 mm, tilt ≤ 0.01°, plans 3.3 / 3.9 s) | `freeze_v4` | `results/experiments/freeze_v4/`, `media/trials/` |
+| The **v0 single-object baseline reproduces on the public-asset mug**: 2/2 mug trials succeed (slots 0 and 6, lateral err 8.1 / 0.8 mm, tilt 0°, weld ≤ 0.3 mm, plans 1.1 / 2.4 s) | `repro_v0_085` | `results/experiments/repro_v0_085/`, `media/trials/` |
 | **Reachability success bar met at the front base pose** — plate 2/3 gaps, bowl 3 cells, fork 3/3 bays, floor 5 cells, pick band 0.20 m: a 420-candidate base-pose sweep's winner matches front on every slot criterion and only deepens the pick band (0.40 m), so the front placement was kept | `results/base_sweep/` | `stage4_final.json`, `winner.json`, heatmaps in `media/base_sweep/`; table in [docs/success_criteria.md](docs/success_criteria.md) |
-| **Capacity fill is closable**: 30 items planned, 27 settle stably, 0 displaced during the stow | `results/fill/capacity.json` | `media/fill/` (timelapse, orbit, stills); mechanisms documented in `fill_plan.py` |
-| **Stowed-machine episode**: the robot pulls the lower rack out (error < 1 µm) and places the cup and tumbler with genuine countertop picks (2/4 — the two forks fail on transit contact, an open item) | `bothin_v4` | `results/experiments/bothin_v4/episodes/ep001.json`, `media/task/bothin_v4/ep001.mp4` |
+| **Capacity fill is closable**: 29 items planned, 27 settle stably, 0 displaced during the stow (the 2 parked are the wine-glass stemware stretch goal) | `results/fill/capacity.json` | `media/fill/` (timelapse, orbit, stills); mechanisms documented in `fill_plan.py` |
+| **Stowed-machine episode**: the robot pulls the lower rack out (error < 1 µm) and places the cup and tumbler with genuine countertop picks (2/4 — the two forks fail on transit contact, an open item) | `bothin_085` | `results/experiments/bothin_085/episodes/ep001.json`, `media/task/bothin_085/ep001.mp4` |
 | **First robot bowl placement** — weld-acquired, carried, released, verdict pass; needed `--planner_param budget_s=60` | `platebowl_v4_b60` | `results/experiments/platebowl_v4_b60/episodes/ep000.json`, `media/task/platebowl_v4_b60/ep000.mp4` |
 | **Negative result:** plate placement is path-blocked — goal configs exist in both feasible gaps but RRT-Connect finds no path even at a 180 s budget | `plate_b180` | `results/experiments/plate_b180/episodes/ep000.json`; analysis in [docs/known_limitations.md](docs/known_limitations.md) |
 

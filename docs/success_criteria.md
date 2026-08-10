@@ -254,7 +254,8 @@ its grid actually has:
 Names are ordinal within the RACK, so they are invariant to how far it is pulled out; which
 slots are *feasible* is not, and is measured per state. The five feasible cup∩tumbler
 `floor_stand` slots in v4 are `near_left2`, `near_left1`, `mid_left2`, `mid_left1`,
-`mid_centre` (mug reaches 4 of them — all but `near_left1`; bowls stand in `near_left2`,
+`mid_centre` (the 0.85-scaled mug reaches all five, `near_left1`/`mid_centre` marginally;
+bowls stand in `near_left2`,
 `mid_left2`, `mid_left1`).
 
 ### Measured capacity ceilings

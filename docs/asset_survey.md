@@ -27,8 +27,11 @@ Decisions:
 
 ## YCB mug derivation
 
-`Props/YCB/Axis_Aligned_Physics/` in the 6.0 asset library only contains 4 objects (cracker box,
-sugar box, soup can, mustard bottle) — no mug/bowl. `scripts/setup/make_prop_physics_usd.py` derives
-`assets/props/025_mug_physics.usd` from the plain `Axis_Aligned/025_mug.usd`: `RigidBodyAPI` +
-`MassAPI` (0.118 kg) on the root prim, convex-decomposition collision on the mesh, textures
-co-located. Verified: schemas present on reopen.
+Historical: the mug originally derived from NVIDIA's `Props/YCB/Axis_Aligned/025_mug.usd`
+(the 6.0 bucket's `Axis_Aligned_Physics/` folder has no mug, and Isaac Lab's spawner cannot
+add a missing `RigidBodyAPI`) via a local physics-USD derivation script. That NVIDIA-derived
+asset could not be redistributed, so the 2026-08-10 public-asset migration rebuilt the mug
+from the **public YCB google_16k `025_mug` scan** at scale 0.85 (the unscaled scan's 93 mm
+flared lip exceeds the 85 mm jaw; at 0.85 the lip is 79.1 mm — the proven self-centering
+rim-pinch geometry). The derivation script lives in git history; the archive ships
+`assets/props/025_mug_physics.usd` (YCB-derived, redistributable with the YCB citation).

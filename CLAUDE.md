@@ -11,7 +11,7 @@ an articulated ArtVIP dishwasher (door locked open at 90°, procedural RACK_GEN 
 3-bay cutlery basket). OMPL (RRT-Connect, 6-D joint space) plans against a standalone Kit-free
 FCL collision world (`src/dishsim/collision_world.py`); the carried object rides a calibrated
 contact pinch with a hidden wrist weld bearing the load; placement stability is verified per
-mode. `scripts/setup/capacity_fill.py` physically settles a full 30-item load. The old RL
+mode. `scripts/setup/capacity_fill.py` physically settles a full 29-item load. The old RL
 door-opening pipeline lives on the `archive/rl-door-opening` branch. See the README for the
 full overview and `docs/architecture.md` for the code tree.
 
@@ -44,9 +44,6 @@ Pure planning work uses the venv python directly. Run from this project root:
 # scene inspection: regenerates docs/joint_report.md, stability + passive-door tests
 scripts/run_kit.sh scripts/setup/inspect_scene.py --headless --test_door
 
-# derive the physics-enabled YCB plate (mug fallback: --object 025_mug)
-scripts/run_kit.sh scripts/setup/make_prop_physics_usd.py --object 029_plate
-
 # planning-stack tests (venv, no Kit; plugin autoload off — hydra's plugin breaks outside Kit)
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m pytest tests/
 
@@ -58,10 +55,11 @@ scripts/run_kit.sh scripts/experiment/run_task.py --headless --enable_cameras \
 scripts/setup/build_state.py --state placement --classes mug,cup,tumbler
 
 # entry points: scripts/ is split by phase (see README Usage)
-#   setup/      kit_smoke, inspect_scene, make_prop_physics_usd, build_object_assets,
-#               check_scene, calibrate_grasp, freeze_calibration, extract_geometry,
-#               decompose_meshes, parity_check, goal_configs, preview_rack, capacity_fill,
-#               build_state, reach_map, base_pose_sweep (completed study)
+#   setup/      kit_smoke, inspect_scene, check_scene, calibrate_grasp, freeze_calibration,
+#               extract_geometry, decompose_meshes, parity_check, goal_configs, preview_rack,
+#               capacity_fill, build_state, reach_map, base_pose_sweep (completed study)
+#               (asset authoring — build_object_assets, make_prop_physics_usd — retired to
+#               git history with the public-asset release; the archive ships their outputs)
 #   experiment/ run_trials (single object, FROZEN), run_task (episodes)
 #               --planner selects the algorithm for both
 #   evaluation/ compute_metrics, render_videos, verify_replay, plan_visual

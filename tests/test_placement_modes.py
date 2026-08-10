@@ -97,14 +97,11 @@ def test_evaluate_placement_floor_stand_matches_v0():
     T_slot = np.eye(4)
     T_slot[:3, 3] = (0.55, 0.0, -0.15)
     slot = placement.SlotFrame(0, T_slot, 0.117, "derived")
-    # perfect standing pose: mug axis (+y_obj) up, bottom on the floor
-    from scipy.spatial.transform import Rotation
-
+    # perfect standing pose: the z-up scan mug stands as-authored, bottom on the floor
     T = np.eye(4)
-    T[:3, :3] = Rotation.from_euler("x", np.pi / 2).as_matrix()
     u, v = config.OBJECT_BODY_CENTER_XZ
-    p_bottom_obj = np.array([u, -config.OBJECT_BBOX_HALF[1], v])
-    T[:3, 3] = T_slot[:3, 3] - T[:3, :3] @ p_bottom_obj
+    p_bottom_obj = np.array([u, v, -config.OBJECT_BBOX_HALF[2]])
+    T[:3, 3] = T_slot[:3, 3] - p_bottom_obj
     ev = placement.evaluate_placement(slot, T)
     assert ev["ok"] and ev["lateral_m"] < 1e-6 and ev["tilt_deg"] < 1e-4
 

@@ -4,13 +4,13 @@
 
 """Restore archived assets/media on a fresh instance (counterpart of scripts/tools/archive_assets.py).
 
-Downloads the tarballs from the private HF dataset (or takes local paths), safe-extracts
+Downloads the tarballs from the public HF dataset (or takes local paths), safe-extracts
 them into the project root, re-downloads the ArtVIP originals (the derived dishwasher
 ``.usda`` layers reference that tree), and validates every restored geometry cache's
 ``config_hash`` stamp against the current ``config.py`` before declaring success.
 
-Prerequisites on a fresh box: the planning venv (README setup step 1) and, for private-repo
-download, ``huggingface-cli login``.
+Prerequisites on a fresh box: the planning venv (README setup step 1). The public dataset
+downloads without a token (``huggingface-cli login`` is only needed for a private mirror).
 
     env_isaaclab/bin/python scripts/tools/restore_assets.py [--repo <id>] [--with_media]
     env_isaaclab/bin/python scripts/tools/restore_assets.py --local outputs/archive/dishsim_assets_<tag>.tar.gz

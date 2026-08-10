@@ -96,12 +96,12 @@ goal funnels):
 
 | destination | reachable | why |
 |---|---|---|
-| rack floor (`floor_stand`) | 5 of 15 cells (cup∩tumbler; mug 4, bowl 3) | the left/centre-front block clears the machine mouth; the far column and right edge funnel to zero on collision |
+| rack floor (`floor_stand`) | 5 of 15 cells (cup∩tumbler; mug 5, bowl 3) | the left/centre-front block clears the machine mouth; the far column and right edge funnel to zero on collision |
 | plate bank (`plate_slot`) | 2 of 3 robot gaps | the centre-most gap sits behind the measured arm-access boundary (~rack x ≥ 0.28 alive) |
 | cutlery basket (`basket_drop`) | 3 of 3 bays | fork/knife/spoon — weld-acquired, not picked |
 
 So the v4 rack offers **13 robot destinations** (v3: 6) — 2 plate gaps + 3 bowl cells + 3
 basket bays + 5 floor cells, with bowl cells drawn from the floor cells, so a mixed load shares
 them. The floor placements are genuine countertop picks. For contrast, `capacity_fill.py`
-*teleports* 30 items in and 27 settle stably: the rack's own capacity is still larger than what
+*teleports* 29 items in and 27 settle stably: the rack's own capacity is still larger than what
 this arm can reach into it.

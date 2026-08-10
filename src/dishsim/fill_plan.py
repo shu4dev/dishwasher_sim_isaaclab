@@ -14,10 +14,10 @@ layout bug fails fast in the venv, not after a Kit boot.
 
 Layout (compact 6-place-setting machine, RACK_GEN v4):
 
-- **Lower rack**: 7 dinner plates + 1 saucer + the spatula in the rear fill bank's 11 gaps
-  (vertical discs, 7 deg lean); one bowl standing upright in the open zone (the v4 lean
-  fixture is gone — the robot and the fill both stand bowls); cutlery basket bays: 4 forks /
-  3 spoons / 3 knives, leaning +8 deg.
+- **Lower rack**: 7 dinner plates + the spatula in the rear fill bank's 11 gaps (vertical
+  discs, 7 deg lean; saucers are retired from the fill — they tip during rack stows); one
+  bowl standing upright in the open zone (the v4 lean fixture is gone — the robot and the
+  fill both stand bowls); cutlery basket bays: 4 forks / 3 spoons / 3 knives, leaning +8 deg.
 - **Upper rack**: 1 mug + cups + tumblers upside-down in the two open zones (greedy lattice
   packing, FCL-pruned); 2 wine glasses attempting the stemware lie-in over the right slope
   strip (a physics stretch goal scripts/setup/capacity_fill.py settles); serving spoon flat
@@ -126,23 +126,22 @@ def _lower_items() -> list[tuple[str, int, np.ndarray, str]]:
     items: list[tuple[str, int, np.ndarray, str]] = []
 
     # -- REAR fill bank (v4: plate_bank2 — the robot bank's 3 gaps are the robot's): 11 gaps;
-    # 1 saucer in the cane-braced end gap, 7 dinner plates right of center, spatula in the
-    # last gap. A leaning disc always spans its full diameter in rack depth (the disc plane
-    # contains y), so dinner plates seat FORWARD: bottom edge on the y~0.197 bank bar, disc
-    # reaching through both tine rows without crossing the rear wall. The saucer sits deeper
-    # (center y 0.222). A plate's 71 mm reach braces across both tine rows (and, over the
-    # robot bank's x-span 0.225-0.345, on its rear tine row too) and survives the stow — a
-    # saucer's 55 mm reach does NOT: v3's outer-gap saucers were braced by the old basket
-    # sitting under the bank, and without it a mid-gap saucer tips when the rack accelerates
-    # (measured over two fills: every mid-gap saucer slipped 21-26 mm / 32-42 deg on stow;
-    # only the end gap, where the candy-cane hook arcs in as a lateral brace, holds one —
-    # and only with no wobbling saucer neighbor during the settle). Two saucers traded for
-    # a closable rack.
+    # 7 dinner plates right of center, spatula in the last gap, NO saucers. A leaning disc
+    # always spans its full diameter in rack depth (the disc plane contains y), so dinner
+    # plates seat FORWARD: bottom edge on the y~0.197 bank bar, disc reaching through both
+    # tine rows without crossing the rear wall. A plate's 71 mm reach braces across both tine
+    # rows (and, over the robot bank's x-span 0.225-0.345, on its rear tine row too) and
+    # survives the stow — a saucer's 55 mm reach does NOT: v3's outer-gap saucers were braced
+    # by the old basket sitting under the bank, and without it saucers tip when the rack
+    # accelerates (measured over four fills: mid-gap saucers slip 21-26 mm / 32-42 deg on
+    # stow; even the candy-cane-braced end gap is marginal — parked at 3.9 deg drift in one
+    # run, tipped 46 deg at stow in another). The saucer class is retired from the fill;
+    # capacity trades three saucers for a reliably closable rack.
     p2 = {**p, **p["plate_bank2"]}
     xs = np.asarray(rack_gen._plate_tine_xs(p2))
     gaps = (xs[:-1] + xs[1:]) / 2.0
     lean = float(p2["plate_tine_lean_deg"])
-    saucer_gaps, plate_gaps, spatula_gap = [0], [3, 4, 5, 6, 7, 8, 9], 10
+    plate_gaps, spatula_gap = [3, 4, 5, 6, 7, 8, 9], 10
     # vertical disc between adjacent tines: face NORMAL along rack +x (the 30 mm pitch
     # direction), disc plane in yz, leaned +7 deg toward the rear guard like the tines
     R_disc = _rot("x", -lean) @ _rot("y", 90.0)
@@ -160,11 +159,8 @@ def _lower_items() -> list[tuple[str, int, np.ndarray, str]]:
         return T
 
     plate = config.OBJECTS["plate"]
-    saucer = config.OBJECTS["saucer"]
     for k, gi in enumerate(plate_gaps):
         items.append(("plate", k, disc_T(plate, gaps[gi], 0.197), "plate_bank"))
-    for k, gi in enumerate(saucer_gaps):
-        items.append(("saucer", k, disc_T(saucer, gaps[gi], 0.2153), "plate_bank"))
 
     # spatula standing in the last gap like a plate (thin side along x), leaned 15 deg back
     spat = config.OBJECTS["spatula"]
@@ -223,13 +219,11 @@ def _upper_items() -> list[tuple[str, int, np.ndarray, str]]:
     z_floor = rack_gen.floor_top_z(p)
     items: list[tuple[str, int, np.ndarray, str]] = []
 
-    # circular footprint radius per drinkware item: the widest BODY radial (the mug's belly
-    # is 46.5 mm — wider than its 39.9 mm rim); the handle stays outside this circle — its
-    # yaw is chosen below and the FCL validation checks the true mesh
+    # circular footprint radius per drinkware item: the widest BODY radial (the mug's belly,
+    # its bbox y-half — the handle runs along x and stays outside this circle; its yaw is
+    # chosen below and the FCL validation checks the true mesh)
     def foot_r(spec):
-        if tuple(spec.axis_obj) == (0.0, 1.0, 0.0):  # Y-up mug: radial extents are x/z
-            return float(spec.bbox_half[2])
-        return float(spec.rim_radius_m)
+        return float(max(spec.rim_radius_m, spec.bbox_half[1]))
 
     # zone B (x-high) is clipped for the packer: x <= 0.290 (the wine-glass lie-in claims the
     # strip toward the right slope shelf) and y <= 0.168 (the upside-down bowl overhangs the
@@ -347,17 +341,10 @@ def plan_full_load(cache_dir: str | None = None) -> list[PlannedItem]:
 
 
 def _item_mesh(name: str) -> trimesh.Trimesh:
-    path = os.path.join(config.ASSETS_DIR, "props", "meshes", f"{name}.obj")
-    if name == "mug" and not os.path.exists(path):
-        # the mug ships as a USD-only asset; its true body-frame mesh lives in the baseline
-        # geometry cache (extracted by scripts/setup/extract_geometry.py) — a bbox stand-in would false-positive
-        # the handle spacing checks
-        cache_obj = os.path.join(config.CACHE_DIR, "meshes", "object.obj")
-        if os.path.exists(cache_obj):
-            return trimesh.load(cache_obj, force="mesh")
-        spec = config.OBJECTS["mug"]
-        return trimesh.creation.box(extents=[2 * h for h in spec.bbox_half])
-    return trimesh.load(path, force="mesh")
+    # every class (incl. the mug since the 2026-08-10 YCB-scan migration) ships a Kit-free
+    # body-frame OBJ beside its physics USD
+    return trimesh.load(os.path.join(config.ASSETS_DIR, "props", "meshes", f"{name}.obj"),
+                        force="mesh")
 
 
 def validate_plan(items: list[PlannedItem], cache_dir: str | None = None) -> dict:

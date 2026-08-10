@@ -5,8 +5,11 @@
 """Archive the generated (gitignored) artifacts so a fresh instance restores in minutes.
 
 Builds manifest-stamped tarballs under ``outputs/archive/`` and optionally uploads them to
-a PRIVATE Hugging Face dataset repo (the archive contains NVIDIA-EULA-derived USDs and
-YCB-derived assets — never make it public):
+a PUBLIC Hugging Face dataset repo. Everything archived is redistributable with attribution:
+ArtVIP-derived USDs (Apache-2.0), YCB-derived meshes (YCB dataset terms, cited in the
+README), and this project's own procedural assets and caches. The NVIDIA-EULA-encumbered
+mug was replaced by the public YCB ``025_mug`` scan in the 2026-08-10 migration; the robot
+USD is runtime-fetched from NVIDIA's bucket and never archived.
 
 - ``dishsim_assets_<date>_<sha>.tar.gz`` — built prop USDs/textures/meshes/parts
   (``assets/props`` minus the re-downloadable ``_download/``), every geometry cache
@@ -37,7 +40,7 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 ARCHIVE_DIR = os.path.join(PROJECT_ROOT, "outputs", "archive")
 
 parser = argparse.ArgumentParser(description="Archive generated assets/media to tarballs (+ HF).")
-parser.add_argument("--upload", action="store_true", help="Upload to the private HF dataset repo.")
+parser.add_argument("--upload", action="store_true", help="Upload to the public HF dataset repo.")
 parser.add_argument("--repo", type=str, default=None,
                     help="HF dataset repo id (default: <whoami>/dishsim-assets).")
 parser.add_argument("--skip_media", action="store_true", help="Build/upload only the assets tarball.")
@@ -121,13 +124,7 @@ def upload(paths: list[str], tag: str) -> None:
     api = HfApi()
     user = api.whoami()["name"]
     repo = args.repo or f"{user}/dishsim-assets"
-    api.create_repo(repo_id=repo, repo_type="dataset", private=True, exist_ok=True)
-    # never trust exist_ok alone on privacy: a pre-existing PUBLIC repo must not receive
-    # EULA-derived content
-    info = api.repo_info(repo_id=repo, repo_type="dataset")
-    if not info.private:
-        raise SystemExit(f"[FAIL] {repo} exists but is PUBLIC — the archive contains "
-                         "NVIDIA-EULA/YCB-derived assets and must stay private.")
+    api.create_repo(repo_id=repo, repo_type="dataset", private=False, exist_ok=True)
     for p in paths:
         print(f"[INFO] uploading {os.path.basename(p)} ...")
         api.upload_file(path_or_fileobj=p, path_in_repo=os.path.basename(p),
@@ -136,7 +133,7 @@ def upload(paths: list[str], tag: str) -> None:
                                     for p in paths}}
     api.upload_file(path_or_fileobj=json.dumps(latest, indent=2).encode(),
                     path_in_repo="latest.json", repo_id=repo, repo_type="dataset")
-    print(f"[INFO] uploaded to https://huggingface.co/datasets/{repo} (private)")
+    print(f"[INFO] uploaded to https://huggingface.co/datasets/{repo} (public)")
     print(f"[INFO] restore on a fresh instance:\n"
           f"    env_isaaclab/bin/python scripts/tools/restore_assets.py --repo {repo} --with_media")
 

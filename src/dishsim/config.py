@@ -276,9 +276,9 @@ WELD_ACQUIRE_FAMILIES = ("edge_pinch", "rim_edge", "handle_pinch")
 # Grasp aperture = theta_touch + delta, measured by `scripts/setup/calibrate_grasp.py` (staircase
 # ramp onto the welded mug: theta_touch is the first sustained pad contact, delta a small
 # over-command chosen so the steady pad force lands mid-band; the finger drive's
-# effort_limit_sim=10 caps the squeeze). Measured 2026-07-31 (PASS run, rim_z -0.020):
-# theta_touch 0.055, steady pad force 5.14 N mean at this setting.
-GRIPPER_APERTURE_GRASP_RAD: float | None = 0.058
+# effort_limit_sim=10 caps the squeeze). Measured 2026-08-10 (PASS run, rim_z -0.020 on the
+# 0.85-scaled public YCB scan mug): theta_touch 0.100, steady pad force 5.42 N at this setting.
+GRIPPER_APERTURE_GRASP_RAD: float | None = 0.106
 # Mimic-consistent drive targets for the two stiff (k=10) `.*_inner_finger_joint` actuators:
 # leaving their targets at 0 while finger_joint closes makes them fight the mimic constraint
 # and contaminates the measured pad force. Signs are measured live by the calibration script
@@ -309,15 +309,17 @@ T_WRIST3_TCP_QUAT: tuple[float, float, float, float] | None = (-0.5, -0.5, -0.5,
 OBJECT_NAME = "025_mug"
 OBJECT_USD = os.path.join(ASSETS_DIR, "props", "025_mug_physics.usd")
 OBJECT_MASS_KG = 0.118
-# Measured from the mesh (2026-07-29): the "Axis_Aligned" asset lies ON ITS SIDE — the mug AXIS
-# runs along OBJECT +Y (opening/rim at y = +0.0407, closed bottom at y = -0.0407), the handle
-# points along +X, and the body circle in the xz-plane is centered at (x, z) = (-0.0110, 0.0)
-# with outer radius 0.0399. Bbox: +-(0.0585, 0.0407, 0.0465), origin at bbox center.
-OBJECT_BBOX_HALF = (0.0585, 0.0407, 0.0465)
-OBJECT_AXIS_OBJ = (0.0, 1.0, 0.0)  # mug "up" (bottom -> opening) in the object frame
-OBJECT_BODY_CENTER_XZ = (-0.0110, 0.0)
-OBJECT_RIM_RADIUS_M = 0.0399
-OBJECT_HEIGHT_M = 0.0813
+# Measured from the mesh (2026-08-10, public YCB google_16k scan at scale 0.85): the scan
+# stands Z-UP — the mug AXIS runs along OBJECT +Z (opening/rim at z = +0.0346, closed bottom
+# at z = -0.0346), the handle points along +X, and the body circle in the xy-plane is
+# centered at (x, y) = (-0.0099, 0.0). The pinch lands ON the flared lip (radius 0.0390 —
+# the self-centering v0-style rim grip; unscaled, the 93 mm lip exceeds the 85 mm jaw).
+# Bbox: +-(0.0497, 0.0396, 0.0346), origin at bbox center.
+OBJECT_BBOX_HALF = (0.0497, 0.0396, 0.0346)
+OBJECT_AXIS_OBJ = (0.0, 0.0, 1.0)  # mug "up" (bottom -> opening) in the object frame
+OBJECT_BODY_CENTER_XZ = (-0.0099, 0.0)
+OBJECT_RIM_RADIUS_M = 0.0390
+OBJECT_HEIGHT_M = 0.0691
 
 # Carry pose ("grasp" transform): the mug rides UPRIGHT in a calibrated contact pinch — its
 # rim band between the inner-finger pads, handle on the jaw-free axis, the hidden wrist weld
@@ -332,17 +334,17 @@ OBJECT_HEIGHT_M = 0.0813
 # construction). The pinch regime is different: the jaws stop AT the mug surface
 # (jaw ~ 79.8 mm, theta ~ 0.05-0.15 rad), so the sweep never drives through the wall and the
 # pad force is bounded by the calibrated band below.
-# Derivation:
-#   R: z_tcp = -y_obj (upright carry, opening toward the gripper), x_tcp = +x_obj  == Rx(-90)
-#   t: rim-center axis point (-0.011, 0.0407, 0)_obj maps to (0, 0, GRASP_RIM_TCP_Z_M)_tcp
-# Measured 2026-07-31 (scripts/setup/calibrate_grasp.py PASS: zero contact at open, band held
-# at hold, weld error 1.3 mm under load, forces vanish on open).
+# Derivation (z-up scan frame at scale 0.85, 2026-08-10 — grasp_transform's z-up branch):
+#   R: z_tcp = -z_obj (upright carry, opening toward the gripper)  == Rx(180)
+#   t: rim-center axis point (-0.0099, 0.0, 0.0346)_obj maps to (0, 0, GRASP_RIM_TCP_Z_M)_tcp
+# Measured 2026-08-10 (scripts/setup/calibrate_grasp.py PASS at rim_z -0.020: zero contact at
+# open, band held at hold, weld error 0.39 mm, forces vanish on open).
 GRASP_RIM_TCP_Z_M: float | None = -0.0200
 PAD_ENGAGEMENT_M = 0.012  # pad contact-patch center below the rim edge (design choice)
 GRASP_TCP_OBJ_POS: tuple[float, float, float] | None = (
-    None if GRASP_RIM_TCP_Z_M is None else (0.011, 0.0, GRASP_RIM_TCP_Z_M + 0.0407)
+    None if GRASP_RIM_TCP_Z_M is None else (0.0099, 0.0, GRASP_RIM_TCP_Z_M + 0.0346)
 )
-GRASP_TCP_OBJ_QUAT = (-0.70710678, 0.0, 0.0, 0.70710678)  # Rx(-90 deg), XYZW
+GRASP_TCP_OBJ_QUAT = (1.0, 0.0, 0.0, 0.0)  # Rx(180 deg), XYZW
 
 # ---------------------------------------------------------------------------------------------
 # grip contact gates (calibrated by scripts/setup/calibrate_grasp.py, used by Phases C/D/F)
@@ -350,13 +352,13 @@ GRASP_TCP_OBJ_QUAT = (-0.70710678, 0.0, 0.0, 0.70710678)  # Rx(-90 deg), XYZW
 # The object_contact sensor's filter list resolves per-partner forces; the two inner-finger
 # pads are the only bodies allowed (required, in fact) to touch the carried mug while gripping.
 GRIP_PAD_BODIES = ("left_inner_finger", "right_inner_finger")
-# Steady per-pad pinch-force band [N] while holding still (frozen 2026-07-31 from the
-# calibration force-vs-theta curve: steady 5.14 N mean, per-pad [2.47, 7.82] N — the mild
-# asymmetry is the handle-side mass/gearing bias; band = steady/3 .. 3x steady).
-GRIP_FORCE_MIN_N = 1.7
-GRIP_FORCE_MAX_N = 15.4
-# Dynamic per-pad allowance [N] during arm motion (frozen 2026-07-31: check_scene wiggle
-# peak 8.03 N at +-0.25 rad wrist wiggle, x1.5 margin).
+# Steady per-pad pinch-force band [N] while holding still (frozen 2026-08-10 from the
+# calibration force-vs-theta curve on the 0.85-scaled public YCB scan mug: steady 5.42 N
+# mean, per-pad [8.47, 2.38] N — the asymmetry is the handle-side mass/gearing bias;
+# band = steady/3 .. 3x steady).
+GRIP_FORCE_MIN_N = 1.8
+GRIP_FORCE_MAX_N = 16.3
+# Dynamic per-pad allowance [N] during arm motion (freeze rule: max(12, 2x steady)).
 GRIP_FORCE_EXEC_MAX_N = 12.0
 RETRACT_DIST_M = 0.08  # post-release tool-axis retract before the final evaluation window
 # The placed mug settles up to ~6 mm off the release point while the withdrawing jaws have
@@ -894,8 +896,9 @@ TASK: dict = {
 # Scale factors: the ArtVIP dishwasher is compact (lower rack 0.366 x 0.287 m, 154 mm
 # inter-rack clearance, 30 mm tine pitch) — real-size dinner plates cannot fit, so every
 # sourced object is scaled to rack-proportional size. `scale` documents that factor against
-# the source asset; dims below are the TARGET scaled dims, re-measured and frozen by
-# scripts/setup/build_object_assets.py (numeric-provenance rule).
+# the source asset; dims below are the TARGET scaled dims, re-measured and frozen by the
+# asset authoring pipeline (build_object_assets.py, retired to git history with the
+# public-asset release — the numeric-provenance rule).
 #
 # Masses are design choices for the scaled objects (ceramic/steel/plastic at that size), not
 # volume-scaled YCB masses (which would be unrealistically light); the mug mass is measured.
@@ -981,32 +984,32 @@ OBJECTS: dict[str, ObjectSpec] = {
     # ---- the frozen v0 mug (measured 2026-07-29/31; do not edit) ------------------------------
     "mug": ObjectSpec(
         name="mug",
-        source="isaac_ycb",
+        source="ycb16k",
         source_id="025_mug",
-        scale=1.0,
-        mass_kg=0.118,
-        bbox_half=(0.0585, 0.0407, 0.0465),
-        axis_obj=(0.0, 1.0, 0.0),  # legacy Axis_Aligned asset lies on its side
-        body_center_uv=(-0.0110, 0.0),
-        rim_radius_m=0.0399,
-        height_m=0.0813,
+        # 0.85: the unscaled scan's flared lip is 93 mm — wider than the 85 mm jaw, which
+        # blocks a top-down pick outright (and the wall-pinch fallback measured ~0 tolerance
+        # margin: 0.4 N pad contact in real picks vs the 10 N calibrated hold). At 0.85 the
+        # lip is 79.1 mm — the proven self-centering v0 rim-pinch geometry (old rim: 79.8 mm).
+        scale=0.85,
+        mass_kg=0.072,  # 0.118 x 0.85^3 (volume scaling)
+        bbox_half=(0.0497, 0.0396, 0.0346),
+        axis_obj=(0.0, 0.0, 1.0),  # google_16k scan stands Z-up (handle along x)
+        body_center_uv=(-0.0099, 0.0),
+        # The pinch lands ON the flared lip (self-centering, like v0): rim = lip radius.
+        rim_radius_m=0.0390,
+        height_m=0.0691,
         grasp=GraspSpec(
             family="rim_diam",
-            grasp_width_m=0.0798,  # 2 * rim radius
-            rim_tcp_z_m=-0.0200,
-            aperture_rad=0.058,
-            force_min_n=1.7,
-            force_max_n=15.4,
-            force_exec_max_n=12.0,
-        ),
+            grasp_width_m=0.0780,  # 2 * rim (lip) radius — the self-centering v0-style pinch
+            rim_tcp_z_m=-0.0200, aperture_rad=0.106, force_min_n=1.8, force_max_n=16.3, force_exec_max_n=12.0,),
         placement=PlacementSpec(mode="floor_stand", rack="lower"),
         coacd={"threshold": 0.03, "max_convex_hull": 32},
-        countertop_poses_w=(((0.665, -0.185, 0.5307), 0.0), ((0.665, -0.105, 0.5307), 0.0)),
+        countertop_poses_w=(((0.665, -0.185, 0.5246), 0.0), ((0.665, -0.105, 0.5246), 0.0)),
         robot_demo=True,
         cache_name="025_mug",
         usd_basename="025_mug_physics.usd",
     ),
-    # ---- YCB google_16k dishware (scaled to fit; dims frozen from scripts/setup/build_object_assets.py measurement) -----
+    # ---- YCB google_16k dishware (scaled to fit; dims frozen from the authoring-pipeline measurement) -----
     "plate": ObjectSpec(
         name="plate",
         source="ycb16k",
