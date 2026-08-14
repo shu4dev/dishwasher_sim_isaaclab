@@ -79,10 +79,26 @@ parser.add_argument("--cost_fn", type=str, default=None,
                     help="Pick-order heuristic (see dishsim.task.cost.available_costs()).")
 parser.add_argument("--allow_stacking", action="store_true",
                     help="Stage B: permit overlapping/stacked spawn poses.")
+parser.add_argument("--full_load", type=str, nargs="?", const="__default__", default=None,
+                    metavar="PLAN",
+                    help="Run the multi-phase FULL-LOAD episode from a capacity-plan artifact "
+                         "(default path: results/capacity/<machine>/<placement>/"
+                         "full_load_plan.json; generate with scripts/setup/plan_full_load.py). "
+                         "Items spawn on the counter in restock waves; racks move by scripted "
+                         "drive transitions between loading phases.")
+parser.add_argument("--phases", type=str, default=None, metavar="SPEC",
+                    help="Explicit multi-phase composition (debug path, slots assigned at "
+                         "runtime), e.g. 'placement:cup=2;third_out:fork=1'. States must be "
+                         "internal (no rack action).")
+parser.add_argument("--orbit", action="store_true",
+                    help="Write a closing 360-degree orbit clip (phase mode, needs "
+                         "--enable_cameras).")
 parser.add_argument("--out", type=str, default=None, help="Run directory.")
 parser.add_argument("--run_id", type=str, default=None, help="Run name.")
 parser.add_argument("--media", type=str, default=None, help="Media directory.")
-parser.add_argument("--video_stride", type=int, default=2, help="Capture every Nth physics step.")
+parser.add_argument("--video_stride", type=int, default=None,
+                    help="Capture every Nth physics step (default: 2, or 4 in phase mode — "
+                         "full-load episodes run 5-10x longer).")
 parser.add_argument("--video_camera", type=str, default=None,
                     help="Camera the episode MP4 is written from (default: config.TASK).")
 AppLauncher.add_app_launcher_args(parser)
@@ -98,11 +114,66 @@ from isaaclab.sim import SimulationContext  # noqa: E402
 from isaaclab_physx.physics import PhysxCfg  # noqa: E402
 
 from dishsim import config  # noqa: E402
+from dishsim.task import phases as tphases  # noqa: E402  (Kit-free: config + numpy only)
 
 if args_cli.machine:
     config.apply_machine(args_cli.machine)  # first: it resets scenario + base placement
 if args_cli.placement:
     config.apply_base_placement(args_cli.placement)
+
+
+def _resolve_phases():
+    """Phase mode: the ordered loading phases, resolved before the scenario is."""
+    if args_cli.full_load is None and not args_cli.phases:
+        return None, None
+    if args_cli.full_load is not None and args_cli.phases:
+        raise SystemExit("[FAIL] --full_load and --phases are mutually exclusive")
+    clashes = [f for f, v in (("--spawn", args_cli.spawn), ("--n_objects", args_cli.n_objects),
+                              ("--classes", args_cli.classes),
+                              ("--rack_lower_m", args_cli.rack_lower_m),
+                              ("--rack_upper_m", args_cli.rack_upper_m)) if v is not None]
+    if clashes:
+        raise SystemExit(f"[FAIL] {clashes} are meaningless in phase mode — the plan/spec "
+                         f"fixes the composition and the phase states fix the racks")
+    if args_cli.full_load is not None:
+        path = args_cli.full_load
+        if path == "__default__":
+            path = os.path.join(PROJECT_ROOT, "results", "capacity", config.MACHINE,
+                                config.BASE_PLACEMENT, "full_load_plan.json")
+        if not os.path.exists(path):
+            raise SystemExit(
+                f"[FAIL] no full-load plan at {path} — generate it with:\n"
+                f"  scripts/setup/plan_full_load.py --machine {config.MACHINE} "
+                f"--placement {config.BASE_PLACEMENT}")
+        return tphases.load_full_load_plan(
+            path, machine=config.MACHINE, base_placement=config.BASE_PLACEMENT), path
+    try:
+        spec = tphases.parse_phases_arg(args_cli.phases)
+    except ValueError as exc:
+        raise SystemExit(f"[FAIL] {exc}")
+    counters: dict = {}
+    out = []
+    for state, counts in spec:
+        items = []
+        for cls in sorted(counts):
+            for _ in range(counts[cls]):
+                n = counters.get(cls, 0)
+                counters[cls] = n + 1
+                fam = config.OBJECTS[cls].grasp.family
+                items.append(tphases.PhaseItem(
+                    item_id=f"{cls}_{n:02d}", object_class=cls, instance=n, slot_id=-1,
+                    slot_name="", mode=config.effective_placement_mode(cls),
+                    acquire="weld" if fam in config.WELD_ACQUIRE_FAMILIES else "pick"))
+        out.append(tphases.Phase(state, items))
+    return out, None
+
+
+#: Phase mode: ordered loading phases (None = the classic single-phase episode), and the plan
+#: artifact they came from (None for --phases).
+PHASE_LIST, FULL_LOAD_PLAN_PATH = _resolve_phases()
+if args_cli.video_stride is None:
+    args_cli.video_stride = 4 if PHASE_LIST is not None else 2
+
 
 def _resolve_scenario() -> str:
     """Machine state from --scenario, per-rack metres, or config — resolved before Kit boots."""
@@ -118,7 +189,12 @@ def _resolve_scenario() -> str:
         raise SystemExit(f"[FAIL] {exc}")
 
 
-SCENARIO = _resolve_scenario()
+if PHASE_LIST is not None and args_cli.scenario is None:
+    # phase mode starts the machine directly in the first loading phase's state unless an
+    # explicit prologue scenario (e.g. both_in for the robot rack pull) is requested
+    SCENARIO = PHASE_LIST[0].state
+else:
+    SCENARIO = _resolve_scenario()
 
 
 def _post_action_state(scenario: str) -> str:
@@ -146,6 +222,12 @@ POST_STATE = _post_action_state(SCENARIO)
 #: The rack action to run before any picking, or ``None`` when the racks start pre-positioned.
 RACK_ACTION = config.state_params(SCENARIO).get("rack_action")
 
+if PHASE_LIST is not None and POST_STATE != PHASE_LIST[0].state:
+    raise SystemExit(
+        f"[FAIL] --scenario {SCENARIO!r} leaves the machine in {POST_STATE!r} but the first "
+        f"loading phase is {PHASE_LIST[0].state!r} — a prologue scenario must act into the "
+        f"first phase's state")
+
 config.apply_scenario(SCENARIO)
 
 from dishsim import placement  # noqa: E402
@@ -159,9 +241,12 @@ from dishsim.planners import make_planner  # noqa: E402
 from dishsim.task import layout as tlayout  # noqa: E402
 from dishsim.task import rack as task_rack  # noqa: E402
 from dishsim.task import recovery as trecovery  # noqa: E402
+from dishsim.task import slotting as tslotting  # noqa: E402
 from dishsim.task import support as tsupport  # noqa: E402
 from dishsim.task.grasp import GraspFinder  # noqa: E402
-from dishsim.task.episode import EpisodeResult, write_episode  # noqa: E402
+from dishsim.task.episode import (  # noqa: E402
+    EPISODE_SCHEMA_VERSION, EpisodeResult, full_load_status, merge_wave_results, write_episode,
+)
 from dishsim.task.motion import MotionService  # noqa: E402
 from dishsim.task.primitives import GraspProfile, PickPlace  # noqa: E402
 from dishsim.task.sequencer import TaskItem, TaskSequencer  # noqa: E402
@@ -172,6 +257,8 @@ TRIAL_SCHEMA_VERSION = 1
 
 
 def main() -> int:
+    if PHASE_LIST is not None:
+        return _run_full_load_episode()
     if RACK_ACTION is not None:
         print(f"[INFO] scenario {SCENARIO!r} starts with a rack action "
               f"({RACK_ACTION['mode']} {RACK_ACTION['joint']} -> {RACK_ACTION['to']} m); "
@@ -296,10 +383,13 @@ def main() -> int:
         config.apply_scenario(POST_STATE)
 
     # Per-piece cluster whenever any pooled class needs a thin insertion: the merged gripper+
-    # payload hull is a single convex wedge that provably cannot enter a cutlery bay or a 30 mm
-    # tine gap. Merged is 3x faster and strictly conservative, so it stays the default for pools
-    # that only stand things on the rack floor.
-    merged = not any(config.OBJECTS[c].placement.mode in ("basket_drop", "plate_slot")
+    # payload hull is a single convex wedge that provably cannot enter a cutlery bay, a 30 mm
+    # tine gap, or a third-rack tray channel. Merged is 3x faster and strictly conservative, so
+    # it stays the default for pools that only stand things on the rack floor. The EFFECTIVE
+    # mode decides — on the Bosch a fork reroutes basket_drop -> flat_lay_third and must keep
+    # the per-piece cluster through that reroute.
+    merged = not any(config.effective_placement_mode(c) in
+                     ("basket_drop", "plate_slot", "flat_lay_third")
                      for c in classes_pool)
     cache_dir = config.scenario_cache_dir(POST_STATE, object_name=config.reference_class())
     with config.active_object(config.reference_class()):
@@ -714,6 +804,7 @@ def main() -> int:
     )
     with open(os.path.join(PROJECT_ROOT, "results", "experiments", "LATEST"), "w") as f:
         f.write(run_id + "\n")
+    _write_manifest(run_dir, run_id, planner)
 
     print(f"[INFO] episode {result.episode_id}: status={result.status} "
           f"placed={result.n_placed}/{len(result.classes)} order={[p.item_id for p in result.picks]}")
@@ -730,71 +821,681 @@ def main() -> int:
     return 0 if result.status == "cleared" else 1
 
 
-def _assign_slots(items, slots_by_class, goal_sets, slot_names_by_class) -> dict:
-    """Assign each item a destination slot: feasible, unused, and not overlapping another item.
+#: Rack body that a phase's placed items ride through the NEXT scripted transition — the rack
+#: that was extended (and loaded) in that state.
+_PHASE_RIDER_BODY = {"placement": "E_shelf_1_04", "middle_out": "E_shelf_03",
+                     "third_out": "E_shelf_third", "placement_open": "E_shelf_1_04"}
 
-    Two independent scarcities bite here, and both are measured rather than assumed.
+#: Parking grid for not-yet-spawned wave items, well outside the workspace on the ground
+#: plane (the capacity_fill idiom).
+def _park_pose_w(k: int):
+    return (-2.0 - 0.35 * (k % 6), -1.5 + 0.35 * (k // 6), 0.10), (0.0, 0.0, 0.0, 1.0)
 
-    **Reachability.** Only a few slots have any goal configurations at all — on the current rack
-    4 of 15, clustered at the front, because the rear cells sit where the carried object cannot
-    be brought in without hitting the machine. Empty goal sets there are expected signal
-    (docs/success_criteria.md), not a bug.
 
-    **Overlap.** The slot grid is an *overlapping candidate* grid, laid out at
-    ``SLOT_GRID_PITCH_M`` = 60 mm for a task that places ONE object per trial and wants dense
-    coverage. Two objects assigned to adjacent candidates would be told to occupy the same
-    space. Compatibility is therefore checked against each class's body radius
-    (``rim_radius_m`` — the standing circle, not the bbox diagonal, so a mug's handle does not
-    veto a neighbour it would simply be turned away from).
+def _run_full_load_episode() -> int:  # noqa: PLR0915 — one episode, top to bottom, like main()
+    """The multi-phase FULL-LOAD episode: per loading phase, restock the counter in waves and
+    clear it; between phases the racks move by scripted drive transitions while placed items
+    ride. Composition and (in ``--full_load`` mode) destination slots come from the capacity
+    plan, so the episode attempts exactly the jointly-certified load.
 
-    **Preference.** ``TASK["type_slots"]`` gives an ORDERED list of slot NAMES per object type.
-    Order is a preference, not a permission: it decides which slot a type reaches for first,
-    never whether a slot is legal. Legality is still a non-empty goal set plus no overlap with an
-    already-assigned slot, so a named slot that is infeasible for this class, or already taken,
-    is skipped rather than failing the object.
+    Differences from the single-phase ``main()`` path, by design:
 
-    Items are served most-constrained-first, the standard heuristic, and that stays load-bearing
-    even with explicit lists — a list makes a type MORE constrained, not less. Measured: the mug
-    can use 2 slots and the cup 4, so serving the mug first gets both placed; reverse it and the
-    cup takes the mug's slot and the mug gets nothing. Items left without a slot are returned
-    absent, and the caller reports them rather than silently dropping them.
+    - the episode record is FLUSHED after every wave and phase (atomic rewrite) and trials are
+      written at each phase end — a 60+ minute run that dies mid-phase stays analyzable;
+    - the trajectory recorder is segmented per phase (fresh ``begin``/``end`` around each) so
+      the 40k-step buffer never overflows and each phase owns an ``.npz``;
+    - a failed transition DEGRADES the episode (remaining phases skipped, placed items kept)
+      instead of erroring — earlier phases' picks planned against their own worlds and stay
+      valid evidence;
+    - a wave whose layout cannot settle reachable is skipped (items reported unplaced), not
+      fatal.
     """
-    type_slots = config.TASK.get("type_slots") or {}
-    feasible, sources = {}, {}
-    for it in items:
-        cls = it.object_class
-        mode = config.OBJECTS[cls].placement.mode
-        names = type_slots.get(cls)
-        pool = config.TASK["slot_pools"].get(mode)
-        # `is not None`, not truthiness: an EMPTY list is a deliberate "this type has nowhere to
-        # go", and must not silently fall through to every slot in the rack.
-        if names is not None:
-            by_name = slot_names_by_class[cls]
-            unknown = [n for n in names if n not in by_name]
-            if unknown:
-                raise SystemExit(
-                    f"[FAIL] TASK['type_slots'][{cls!r}] names {unknown}, which do not exist for "
-                    f"placement mode {mode!r}. Valid names: {sorted(by_name)}")
-            ids, sources[it.item_id] = [by_name[n] for n in names], "type_slots"
-        elif pool is not None:
-            ids, sources[it.item_id] = list(pool), "slot_pools"
-        else:
-            ids, sources[it.item_id] = sorted(slots_by_class[cls]), "all"
-        feasible[it.item_id] = [s for s in ids if len(goal_sets[cls].get(s, ())) > 0]
+    phase_states = [ph.state for ph in PHASE_LIST]
+    all_items = [(pi, it) for pi, ph in enumerate(PHASE_LIST) for it in ph.items]
+    n_planned = len(all_items)
+    classes_pool = list(dict.fromkeys(it.object_class for _, it in all_items))
+    print(f"[INFO] FULL-LOAD episode: {n_planned} items over {len(PHASE_LIST)} phases "
+          + " -> ".join(f"{ph.state}({len(ph.items)})" for ph in PHASE_LIST))
+    print(f"[INFO] rough wall-time estimate: {n_planned * 4} min of picks + "
+          f"{(len(PHASE_LIST) - 1) * 2} min of transitions (measured per-item ~2-6 min)")
+    welded = sorted({it.object_class for _, it in all_items if it.acquire == "weld"})
+    if welded:
+        print(f"[INFO] {welded} are weld-ACQUIRED (no calibrated countertop pick); their "
+              f"success rate reports separately and is never summed with real picks")
 
-    margin = float(config.TASK["slot_separation_margin_m"])
-    out, taken = {}, []  # taken: (centre, radius) of slots already handed out
-    for it in sorted(items, key=lambda i: (len(feasible[i.item_id]), i.item_id)):
-        r = float(config.OBJECTS[it.object_class].rim_radius_m)
-        for sid in feasible[it.item_id]:
-            slot = slots_by_class[it.object_class][sid]
-            centre = slot.T_base_slot[:3, 3]
-            if any(float(np.linalg.norm(centre - c)) < (r + rr + margin) for c, rr in taken):
-                continue
-            taken.append((centre, r))
-            out[it.item_id] = slot
-            break
-    return out
+    planner_name = args_cli.planner or config.PLANNER
+    if planner_name not in available_planners():
+        print(f"[FAIL] unknown planner {planner_name!r} (choices: {available_planners()})")
+        return 1
+    planner_params = dict(config.PLANNER_PARAMS.get(planner_name, {}))
+    for item in args_cli.planner_param:
+        key, _, value = item.partition("=")
+        try:
+            planner_params[key.strip()] = json.loads(value)
+        except json.JSONDecodeError:
+            planner_params[key.strip()] = value
+    planner = make_planner(planner_name, **planner_params)
+
+    video_camera = args_cli.video_camera or config.TASK["video_camera"]
+    known_cameras = sorted(set(config.CAMERAS) | {"episode"})
+    if video_camera not in known_cameras:
+        print(f"[FAIL] unknown --video_camera {video_camera!r} (choices: {known_cameras})")
+        return 1
+
+    run_id = args_cli.run_id or (
+        f"fullload_{config.MACHINE}_"
+        f"{__import__('datetime').datetime.now(__import__('datetime').timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+    )
+    run_dir = args_cli.out or os.path.join(PROJECT_ROOT, "results", "experiments", run_id)
+    for sub in ("episodes", "trials", "trajectories"):
+        os.makedirs(os.path.join(run_dir, sub), exist_ok=True)
+    media_dir = args_cli.media or os.path.join(PROJECT_ROOT, "media", "task", run_id)
+    if args_cli.enable_cameras:
+        os.makedirs(media_dir, exist_ok=True)
+
+    # ---- cache pre-flight: the prologue state (reference class only) + every phase state ------
+    # The reference class supplies each state's WORLD (manifest + pieces) and nothing else, so
+    # it needs no baked goal sets — those bakes run --skip_goals on purpose. Classes that PLACE
+    # in a state need the full triplet.
+    ref = config.reference_class()
+    wanted = [(SCENARIO, [ref])] if RACK_ACTION is not None else []
+    for ph in PHASE_LIST:
+        wanted.append((ph.state, list(dict.fromkeys(
+            [ref, *sorted({it.object_class for it in ph.items})]))))
+    missing = []
+    for state, names in wanted:
+        placing = {it.object_class for ph in PHASE_LIST if ph.state == state
+                   for it in ph.items}
+        for name in names:
+            cdir = config.scenario_cache_dir(state, object_name=name)
+            needed = ["scene_state.json"]
+            if name in placing:
+                needed += [os.path.join("slots", "slots.json"),
+                           os.path.join("slots", "goal_sets.json")]
+            for rel in needed:
+                if not os.path.exists(os.path.join(cdir, rel)):
+                    missing.append((state, name, cdir, rel))
+                    break
+    if missing:
+        mp = (f" --machine {config.MACHINE}" if config.MACHINE != config.MACHINE_BASELINE_NAME
+              else "") + (f" --placement {config.BASE_PLACEMENT}"
+                          if config.BASE_PLACEMENT != "front" else "")
+        for state in dict.fromkeys(m[0] for m in missing):
+            names = [m[1] for m in missing if m[0] == state]
+            print(f"[FAIL] machine state {state!r} has no collision cache for {names}")
+            print(f"       bake it with:\n         scripts/setup/build_state.py{mp} "
+                  f"--state {state} --classes {','.join(names)}")
+        return 1
+
+    # ---- geometry: per-state worlds + per-class tables ---------------------------------------
+    # load_manifest asserts each cache's hash against the CURRENT config, so every state's
+    # artifacts load under its own applied scenario; the scene itself is built at SCENARIO.
+    #
+    # PLACEMENT plans against each class's OWN cache world, not the reference class's: a
+    # cache's gripper hulls are extracted at that class's grasp aperture, and judging a
+    # fork's flat-lay goals (fingers closed on the handle) in the cup world (fingers spread)
+    # phantom-blocks every config against the tray rims — measured 2026-08-14, 48/48 configs
+    # alive in the fork world, 0/48 in the cup world. The capacity planner certifies in
+    # per-class worlds; the runner must judge with the same geometry. The reference world
+    # remains the between-picks/transition view (HOME validity is measured in it).
+    ref_worlds, class_worlds = {}, {}
+    profiles, goal_sets, slots_by_class, slot_names_by_class = {}, {}, {}, {}
+    pieces_by_class: dict = {}  # CoACD pieces are state-independent; first profile wins
+    t_w3_ref = None
+
+    def _check_t_w3(world, label):
+        nonlocal t_w3_ref
+        t_w3 = np.array(world.manifest["t_wrist3_tcp"])
+        if t_w3_ref is None:
+            t_w3_ref = t_w3
+        assert np.allclose(t_w3, t_w3_ref, atol=1e-9), \
+            f"t_wrist3_tcp differs between phase caches ({label})"
+
+    for state in dict.fromkeys(phase_states):
+        config.apply_scenario(state)
+        ph_classes = sorted({it.object_class for pi, it in all_items
+                             if PHASE_LIST[pi].state == state})
+        merged = not any(config.effective_placement_mode(c) in
+                         ("basket_drop", "plate_slot", "flat_lay_third") for c in ph_classes)
+        with config.active_object(ref):
+            ref_worlds[state] = CollisionWorld(
+                cache_dir=config.scenario_cache_dir(state, object_name=ref),
+                self_check=True, object_attached=False, merged_cluster=merged)
+        _check_t_w3(ref_worlds[state], f"{state}/{ref}")
+        class_worlds[state] = {}
+        profiles[state], goal_sets[state] = {}, {}
+        slots_by_class[state], slot_names_by_class[state] = {}, {}
+        for name in ph_classes:
+            profiles[state][name] = GraspProfile.build(name, state)
+            pieces_by_class.setdefault(name, profiles[state][name].pieces)
+            with config.active_object(name):
+                class_worlds[state][name] = CollisionWorld(
+                    cache_dir=config.scenario_cache_dir(state, object_name=name),
+                    self_check=True, object_attached=False, merged_cluster=merged)
+            _check_t_w3(class_worlds[state][name], f"{state}/{name}")
+            cdir = config.scenario_cache_dir(state, object_name=name)
+            with open(os.path.join(cdir, "slots", "slots.json")) as f:
+                slots_by_class[state][name] = {s["slot_id"]: placement.SlotFrame.from_json(s)
+                                               for s in json.load(f)["slots"]}
+            with open(os.path.join(cdir, "slots", "goal_sets.json")) as f:
+                goal_sets[state][name] = {g["slot_id"]: np.array(g["configs"])
+                                          for g in json.load(f)["goal_sets"]}
+            slot_names_by_class[state][name] = placement.slot_names(
+                list(slots_by_class[state][name].values()))
+            usable = [k for k, v in goal_sets[state][name].items() if len(v)]
+            print(f"[INFO] {state}/{name:<8} slots with goal configs: {len(usable)}")
+    T_w3_tcp = t_w3_ref
+
+    def all_worlds(state):
+        return [ref_worlds[state], *class_worlds[state].values()]
+
+    def set_obstacle_all(state, item_id, pieces, T):
+        for w in all_worlds(state):
+            if w.has_object(item_id):
+                w.set_object_pose(item_id, np.asarray(T))
+            else:
+                w.add_object(item_id, pieces, np.asarray(T))
+
+    class _ClassWorldPick:
+        """Run each pick against the item's OWN cache world, then restore the reference view
+        and re-sync the handled item's obstacle across every world of the state (its class
+        world saw the clear/re-add during the pick; the others still hold the pre-pick
+        pose)."""
+
+        def __init__(self, inner, state):
+            self._inner, self._state = inner, state
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def __call__(self, item, candidate):
+            motion.world = class_worlds[self._state][item.object_class]
+            try:
+                return self._inner(item, candidate)
+            finally:
+                motion.world = ref_worlds[self._state]
+                set_obstacle_all(self._state, item.item_id,
+                                 pieces_by_class[item.object_class],
+                                 measured(item.item_id))
+
+    rack_world = None
+    if RACK_ACTION is not None:
+        config.apply_scenario(SCENARIO)
+        rack_cache = config.scenario_cache_dir(SCENARIO, object_name=ref)
+        with config.active_object(ref):
+            rack_world = CollisionWorld(cache_dir=rack_cache, self_check=True,
+                                        object_attached=False)
+    config.apply_scenario(SCENARIO)  # back to the state the SCENE is physically built in
+
+    def make_reach_fn(state, *, thorough=False):
+        """Per-phase pick-side feasibility (same semantics as main()'s reach_fn), judged in
+        the class's own cache world (its gripper hulls sit at that class's aperture).
+
+        ``thorough`` additionally demands a collision-free hover WITH the payload attached
+        for weld-acquire classes — the carry pose the acquisition snaps to. Hover-only checks
+        pass spawn draws whose post-acquire carry start then dies with "carry start
+        configuration is in collision" (measured on a bowl, phase_smoke7). Attach/detach per
+        call is too slow for layout's rejection loop, so the thorough variant runs only in
+        the once-per-item post-settle recheck, feeding the wave-resample machinery.
+        """
+        def reach_fn(object_class: str, T_base_obj: np.ndarray) -> bool:
+            prof = profiles[state][object_class]
+            world = class_worlds[state][object_class]
+            T_grasp = np.asarray(T_base_obj) @ T_inv(prof.T_tcp_obj)
+            T_hover = T_grasp.copy()
+            T_hover[2, 3] += config.PICK_HOVER_M
+            q_seed = np.array(config.HOME_Q)
+            hover = [q for q in ik_wrist3_all(T_hover @ T_inv(T_w3_tcp), q_seed=q_seed)
+                     if not world.in_collision(q)]
+            if not hover:
+                return False
+            if prof.acquire == "weld":
+                if not thorough:
+                    return True
+                world.attach_object(prof.pieces, T_w3_tcp @ prof.T_tcp_obj)
+                try:
+                    return any(not world.in_collision(q) for q in hover)
+                finally:
+                    world.detach_carried_object()
+            return any(not world.in_collision(q)
+                       for q in ik_wrist3_all(T_grasp @ T_inv(T_w3_tcp), q_seed=hover[0]))
+        return reach_fn
+
+    # ---- scene: every phase's items exist from the start, later waves parked off-workspace ---
+    sim = SimulationContext(
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg())
+    )
+    obj_specs = []
+    for k, (pi, it) in enumerate(all_items):
+        state = PHASE_LIST[pi].state
+        # contact filters: gripper prims + SAME-PHASE peers only. Support graphs only ever
+        # consult items sharing the counter within a phase, and full-load item counts would
+        # otherwise grow the sensor pair count O(N^2) across phases.
+        peers = ["{ENV_REGEX_NS}/" + jt.item_id for jt in PHASE_LIST[pi].items
+                 if jt.item_id != it.item_id]
+        pos_w, quat = _park_pose_w(k)
+        obj_specs.append({"name": it.item_id,
+                          "usd_path": config.OBJECTS[it.object_class].usd_path,
+                          "pos": pos_w, "quat": quat, "contact_filters": peers})
+    scene = InteractiveScene(dscene.make_scene_cfg(
+        with_object=False, with_robot_contacts=True, objects=obj_specs))
+    welds = {
+        it.item_id: dscene.author_weld(
+            scene.stage, prim_name=it.item_id,
+            T_wrist3_obj=T_w3_tcp @ profiles[PHASE_LIST[pi].state][it.object_class].T_tcp_obj,
+        )
+        for pi, it in all_items
+    }
+    ep = config.EPISODE_CAMERA
+    cam_specs = {**{k: v for k, v in config.CAMERAS.items()},
+                 "episode": (tuple(ep["eye"]), tuple(ep["target"]), dict(ep["lens"]))}
+    rig = CameraRig(cam_specs, hw=config.CAMERA_HW) if args_cli.enable_cameras else None
+    sim.reset()
+    if rig is not None:
+        rig.apply_poses(sim.device)
+    dscene.write_default_states(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
+    for path in welds.values():
+        dscene.set_weld_enabled(scene.stage, path, False)
+    for pi, it in all_items:
+        sensor = scene[f"{it.item_id}_contact"]
+        n_filters = len(sensor.cfg.filter_prim_paths_expr)
+        assert sensor.contact_view.filter_count == n_filters, (
+            f"{it.item_id}: contact filter count {sensor.contact_view.filter_count} != "
+            f"{n_filters} configured expressions")
+
+    dt = sim.get_physics_dt()
+    robot, dw = scene["robot"], scene["dishwasher"]
+    arm_ids, _ = robot.find_joints(config.ARM_JOINTS, preserve_order=True)
+    device = robot.data.joint_pos.torch.device
+    sensors = [scene["robot_contacts_arm"], scene["robot_contacts_gripper"]]
+    sensor_names = [list(getattr(s, "body_names", [])) for s in sensors]
+    gripper_bodies = tuple(sensor_names[1])
+    T_base_w = T_inv(make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W))
+    rec = dtraj.TrajectoryRecorder()
+    ctx = _Ctx(scene, sim, dt, robot, arm_ids, sensors, sensor_names, rec)
+    episode_id = f"ep{args_cli.seed:03d}"
+
+    def measured(item_id: str) -> np.ndarray:
+        o = scene[item_id]
+        return T_base_w @ make_T(o.data.root_pos_w.torch[0].cpu().numpy(),
+                                 o.data.root_quat_w.torch[0].cpu().numpy())
+
+    rack_joint_names = sorted(config.RACK_JOINT_TARGETS)
+    rack_joint_ids, _ = dw.find_joints(rack_joint_names, preserve_order=True)
+
+    def measure_exts() -> dict:
+        jp = dw.data.joint_pos.torch[0].cpu().numpy()
+        return {j: float(jp[i]) for j, i in zip(rack_joint_names, rack_joint_ids)}
+
+    def measure_body_pos(body: str) -> np.ndarray:
+        bi = dw.body_names.index(body)
+        pos_w = dw.data.body_link_pos_w.torch[0, bi].cpu().numpy()
+        return (T_base_w @ np.append(pos_w, 1.0))[:3]
+
+    # ---- episode state ------------------------------------------------------------------------
+    motion = MotionService(planner, ref_worlds[PHASE_LIST[0].state], ctx)
+    master = EpisodeResult(episode_id=episode_id, seed=int(args_cli.seed),
+                           classes=[it.object_class for _, it in all_items],
+                           cost_fn=args_cli.cost_fn or config.TASK["cost_fn"],
+                           status="partial", detail=None)
+    master.phases = []
+    placed: dict[str, int] = {}      # item_id -> phase index it was placed in
+    on_counter: dict[str, str] = {}  # item_id -> object_class, still lying on the counter
+    ep_path = os.path.join(run_dir, "episodes", f"{episode_id}.json")
+    phase_meta_extra = {"planner": planner.describe(), "scenario": SCENARIO,
+                        "post_state": POST_STATE, "run_id": run_id,
+                        "phase_states": phase_states, "mode": "full_load"}
+
+    def flush():
+        """Cumulative episode record after every wave/phase — a crash stays analyzable."""
+        write_episode(ep_path + ".tmp", master, extra=phase_meta_extra)
+        os.replace(ep_path + ".tmp", ep_path)
+
+    _write_manifest(run_dir, run_id, planner, phase_states=phase_states)
+    transitions_ok = True
+    pick_place = None
+    writer = None
+    trial_backlog: list = []  # (pick, state) written at each phase end with that phase's tmeta
+
+    try:
+        for pi, phase in enumerate(PHASE_LIST):
+            state = phase.state
+            ph_summary = {"phase": pi, "state": state, "n_items": len(phase.items),
+                          "n_placed": 0, "n_waves": 0, "transition_ok": None}
+            master.phases.append(ph_summary)
+            capture, writer = _make_capture(rig, rec, media_dir, args_cli,
+                                            dt, f"{episode_id}_p{pi}", video_camera)
+            rec.begin(scene, sim, {
+                "episode_id": episode_id, "seed": args_cli.seed, "phase": pi,
+                "phase_state": state, "classes": master.classes,
+                "object_classes": {it.item_id: it.object_class for _, it in all_items},
+                "object": sorted(set(master.classes))[0],
+                "config_hash": geometry_config_hash(),
+                "cameras": {k: {"eye": list(v[0]), "target": list(v[1]),
+                                "lens": (dict(v[2]) if len(v) > 2 else config.camera_lens(k))}
+                            for k, v in cam_specs.items()},
+                "camera_hw": list(config.CAMERA_HW), "camera_fps": int(config.CAMERA_FPS),
+                **phase_meta_extra,
+            }, object_keys=[it.item_id for _, it in all_items])
+
+            scene_access = _SceneAccess(scene, welds, [it for _, it in all_items],
+                                        gripper_bodies, T_base_w, T_w3_tcp, profiles[state])
+            inner_pick_place = PickPlace(motion, scene_access, profiles=profiles[state],
+                                         goal_sets=goal_sets[state], T_w3_tcp=T_w3_tcp,
+                                         seed=args_cli.seed, on_step=capture)
+            grasp_finder = GraspFinder(profiles[state], motion)
+            inner_pick_place.grasp_finder = grasp_finder
+            pick_place = _ClassWorldPick(inner_pick_place, state)
+
+            if pi == 0:
+                # start anchor (as in main: settle stepping happens before the first pick)
+                ctx.step(30)
+                start_home_err = pick_place.home_error()
+                if start_home_err >= float(config.TASK["home_tol_rad"]):
+                    pick_place.return_home(phase="episode-start-home", settle_steps=30)
+                    start_home_err = pick_place.home_error()
+                assert start_home_err < float(config.TASK["home_tol_rad"]), (
+                    f"episode did not start at HOME_Q: {start_home_err:.4f} rad")
+                master.start_home_err_rad = start_home_err
+                if RACK_ACTION is not None:
+                    rj = dw.find_joints(RACK_ACTION["joint"])[0]
+                    rack_runner = task_rack.RackAction(
+                        motion, gripper_bodies=gripper_bodies, seed=args_cli.seed,
+                        on_step=capture,
+                        measure_ext=lambda: float(dw.data.joint_pos.torch[0, rj[0]]))
+                    motion.world = rack_world
+                    try:
+                        rack_phase = task_rack.run_sequence(
+                            [task_rack.RackSpec.from_action(RACK_ACTION, rack_world)],
+                            rack_runner)
+                    finally:
+                        motion.world = ref_worlds[state]
+                    master.rack_phase = rack_phase.to_json()
+                    if not rack_phase.ok:
+                        bad = next(o for o in rack_phase.outcomes if not o.ok)
+                        master.detail = f"{bad.stage}: {bad.detail}"
+                        transitions_ok = False
+                        break
+                    pick_place.return_home(phase="post-rack-home", settle_steps=30)
+            else:
+                # ---- scripted transition into this phase's state ------------------------
+                pick_place.return_home(phase="pre-transition-home", settle_steps=30)
+                gates = config.TASK["transition_slip_gates"]
+                riders, slip_gates = {}, {}
+                for item_id, ppi in placed.items():
+                    riders[item_id] = _PHASE_RIDER_BODY[PHASE_LIST[ppi].state]
+                    mode = config.effective_placement_mode(
+                        next(it.object_class for _, it in all_items if it.item_id == item_id))
+                    slip_gates[item_id] = tuple(gates.get(mode, gates["default"]))
+                transition = task_rack.ScriptedTransition(
+                    motion, measure_exts=measure_exts,
+                    measure_items=lambda: {i: measured(i) for i in placed},
+                    measure_body_pos=measure_body_pos,
+                    home_q=np.array(config.HOME_Q), on_step=capture)
+                outcome = transition.run(
+                    tphases.transition_targets(PHASE_LIST[pi - 1].state, state),
+                    from_state=PHASE_LIST[pi - 1].state, to_state=state,
+                    riders=riders, slip_gates=slip_gates)
+                master.transitions.append(outcome.to_json())
+                ph_summary["transition_ok"] = outcome.ok
+                for item_id, s in outcome.item_slips.items():
+                    print(f"[INFO] transition rider {item_id}: slip {s['slip_mm']:.1f} mm "
+                          f"rot {s['rot_deg']:.1f} deg ok={s['ok']}")
+                print(f"[INFO] transition {PHASE_LIST[pi - 1].state} -> {state}: ok={outcome.ok} "
+                      f"{outcome.stage or ''} {outcome.detail or ''}")
+                if not outcome.ok:
+                    transitions_ok = False
+                    master.detail = f"transition to {state}: {outcome.stage}: {outcome.detail}"
+                    break
+                # world swap + obstacle re-registration at MEASURED post-transition poses in
+                # EVERY world of the incoming state (placed items rode their racks; refresh()
+                # only ever touches pending items). Pieces come from the state-independent
+                # per-class lookup: a leftover from an earlier phase may belong to a class
+                # this state never bakes, and loading its cache here would trip the manifest
+                # hash against the wrong applied scenario.
+                motion.world = ref_worlds[state]
+                for item_id in list(placed) + list(on_counter):
+                    cls = next(it.object_class for _, it in all_items if it.item_id == item_id)
+                    set_obstacle_all(state, item_id, pieces_by_class[cls], measured(item_id))
+                pick_place.return_home(phase="post-transition-home", settle_steps=30)
+
+            # ---- slot assignment for this phase --------------------------------------------
+            if FULL_LOAD_PLAN_PATH is not None:
+                assignment = {}
+                for it in phase.items:
+                    slot = slots_by_class[state][it.object_class].get(it.slot_id)
+                    if slot is None or not len(goal_sets[state][it.object_class].get(
+                            it.slot_id, ())):
+                        print(f"[WARN] planned slot {it.slot_id} for {it.item_id} has no "
+                              f"baked goal configs anymore — item will report no-goal-config")
+                        continue
+                    assignment[it.item_id] = slot
+            else:
+                assignment = _assign_slots(
+                    [TaskItem(item_id=it.item_id, object_class=it.object_class,
+                              instance=it.instance, T_base_obj=np.eye(4)) for it in phase.items],
+                    slots_by_class[state], goal_sets[state], slot_names_by_class[state])
+
+            # ---- waves ---------------------------------------------------------------------
+            reach_fn = make_reach_fn(state)
+            reach_fn_settled = make_reach_fn(state, thorough=True)
+            waves = tphases.plan_waves(
+                phase.items, rect=dict(config.TASK["spawn_rect_w"]),
+                min_separation_m=float(config.TASK["min_separation_m"]),
+                radius_fn=lambda c: tlayout.footprint_radius(config.OBJECTS[c]),
+                fill_factor=float(config.TASK["wave_fill_factor"]),
+                max_wave=config.TASK["max_wave_objects"])
+            ph_summary["n_waves"] = len(waves)
+            print(f"[INFO] phase {pi} ({state}): {len(phase.items)} items in "
+                  f"{[len(w) for w in waves]} wave(s)")
+
+            T_w_base = make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W)
+            for wi, wave in enumerate(waves):
+                # leftovers from earlier waves/phases still occupy the counter; the layout
+                # rect (and _too_close) works in WORLD xy, measured() in the base frame
+                occupied = [((T_w_base @ measured(i))[:2, 3],
+                             tlayout.footprint_radius(config.OBJECTS[on_counter[i]]))
+                            for i in on_counter]
+                wave_classes = [it.object_class for it in wave]
+                attempt, layout_ok = 0, False
+                while attempt < int(config.TASK["max_layout_retries"]):
+                    attempt += 1
+                    wseed = int(args_cli.seed) + 9973 * pi + 101 * wi + 10_007 * (attempt - 1)
+                    try:
+                        items_layout, rejection = tlayout.plan_countertop_layout(
+                            wave_classes, seed=wseed, reach_fn=reach_fn,
+                            allow_stacking=args_cli.allow_stacking, occupied=occupied)
+                    except RuntimeError as exc:
+                        print(f"[WARN] wave {pi}/{wi} layout failed (seed {wseed}): {exc}")
+                        continue
+                    # positional remap: plan_countertop_layout returns one item per requested
+                    # class, in request order — re-key onto the wave's global item ids
+                    for it, li in zip(wave, items_layout):
+                        pos_w, quat = _pose_w(li)
+                        scene[it.item_id].write_root_pose_to_sim_index(
+                            root_pose=torch.tensor(np.concatenate([pos_w, quat])[None],
+                                                   dtype=torch.float32, device=device))
+                        scene[it.item_id].write_root_velocity_to_sim_index(
+                            root_velocity=torch.zeros((1, 6), dtype=torch.float32,
+                                                      device=device))
+                    ctx.step(int(config.TASK["settle_steps"]))
+                    unreachable = [it.item_id for it in wave
+                                   if not reach_fn_settled(it.object_class,
+                                                          measured(it.item_id))]
+                    if not unreachable:
+                        layout_ok = True
+                        break
+                    print(f"[INFO] wave {pi}/{wi} attempt {attempt}: unreachable after "
+                          f"settling: {unreachable} — resampling")
+                if not layout_ok:
+                    print(f"[WARN] wave {pi}/{wi}: no reachable settled layout in "
+                          f"{attempt} attempts — skipping {len(wave)} item(s)")
+                    for it in wave:
+                        master.unplaced.append(it.item_id)
+                        master.blocked_reasons[it.item_id] = "spawn-unreachable-after-settling"
+                    flush()
+                    continue
+
+                wave_items = [TaskItem(item_id=it.item_id, object_class=it.object_class,
+                                       instance=it.instance,
+                                       T_base_obj=measured(it.item_id),
+                                       radius_m=items_layout[k].radius_m)
+                              for k, it in enumerate(wave)]
+                for wit in wave_items:
+                    on_counter[wit.item_id] = wit.object_class
+                    set_obstacle_all(state, wit.item_id,
+                                     profiles[state][wit.object_class].pieces,
+                                     wit.T_base_obj)
+
+                def refresh(_items=wave_items, _state=state):
+                    poses = {t.item_id: measured(t.item_id) for t in _items
+                             if t.state == "pending"}
+                    for item_id, T in poses.items():
+                        t = next(x for x in _items if x.item_id == item_id)
+                        set_obstacle_all(_state, item_id,
+                                         profiles[_state][t.object_class].pieces, T)
+                    return poses
+
+                peer_ids = {it.item_id for it in phase.items}
+
+                def support_fn(remaining):
+                    graph = tsupport.build_support_graph(
+                        remaining, forces=_peer_forces(scene, remaining, peer_ids))
+                    return graph.supports
+
+                seq = TaskSequencer(
+                    wave_items, motion, pick_place=pick_place, grasp_fn=grasp_finder,
+                    slot_fn=lambda item: assignment.get(item.item_id),
+                    cost_fn=args_cli.cost_fn or config.TASK["cost_fn"],
+                    refresh_fn=refresh, support_fn=support_fn,
+                    recovery=trecovery.make_recovery(),
+                    max_recoveries=int(config.TASK["max_recovery_attempts"]),
+                    on_event=lambda n, p: print(f"[INFO] {n}: {p}"))
+                wave_result = seq.run(episode_id=episode_id, seed=args_cli.seed,
+                                      classes=wave_classes)
+                merge_wave_results(master, wave_result, phase_index=pi, state=state,
+                                   wave_index=wi,
+                                   acquired_by_item={it.item_id: it.acquire for it in wave})
+                for p in wave_result.picks:
+                    trial_backlog.append((p, state))
+                    if p.success:
+                        placed[p.item_id] = pi
+                        on_counter.pop(p.item_id, None)
+                ph_summary["n_placed"] = sum(1 for p in master.picks
+                                             if p.phase == pi and p.success)
+                pick_place.return_home(phase=f"wave-{pi}-{wi}-home", settle_steps=30)
+                if rig is not None:
+                    rig.save_stills(media_dir, f"{episode_id}_p{pi}w{wi}")
+                flush()
+
+            # ---- phase wrap-up: close this phase's recorder segment + write its trials -----
+            traj_path = os.path.join(run_dir, "trajectories", f"{episode_id}_p{pi}.npz")
+            tmeta = rec.end(traj_path, extra_meta={"phase": pi, "phase_state": state,
+                                                   "n_placed": ph_summary["n_placed"]})
+            for p, pstate in trial_backlog:
+                p.trajectory_path = os.path.relpath(traj_path, PROJECT_ROOT)
+                _write_trial(run_dir, master, p, planner, args_cli, tmeta, scenario=pstate)
+            trial_backlog = []
+            if writer is not None:
+                writer.close()
+                writer = None
+            flush()
+    except Exception as exc:  # noqa: BLE001 — the failed episode is the interesting one
+        traceback.print_exc()
+        master.detail = master.detail or f"{type(exc).__name__}: {exc}"
+        transitions_ok = False
+
+    # A break (rack/transition failure) or an exception can leave the current phase's
+    # recorder open and its video writer unclosed — the partial segment is still evidence.
+    if rec.active:
+        try:
+            traj_path = os.path.join(run_dir, "trajectories", f"{episode_id}_partial.npz")
+            tmeta = rec.end(traj_path, extra_meta={"partial": True})
+            for p, pstate in trial_backlog:
+                p.trajectory_path = os.path.relpath(traj_path, PROJECT_ROOT)
+                _write_trial(run_dir, master, p, planner, args_cli, tmeta, scenario=pstate)
+            trial_backlog = []
+        except Exception as exc:  # noqa: BLE001
+            print(f"[WARN] partial trajectory segment lost: {exc}")
+    if writer is not None:
+        try:
+            writer.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # items whose phase never ran (transition failure / crash) are honestly unplaced
+    attempted = {p.item_id for p in master.picks} | set(master.unplaced)
+    for _, it in all_items:
+        if it.item_id not in attempted and it.item_id not in placed:
+            master.unplaced.append(it.item_id)
+
+    # ---- closing retreat + final verdict ------------------------------------------------------
+    if pick_place is not None:
+        scene_access_final = _SceneAccess(scene, welds, [it for _, it in all_items],
+                                          gripper_bodies, T_base_w, T_w3_tcp, {})
+        placed_before = {i: scene_access_final.object_pose_base(i)[:3, 3].copy()
+                         for i in placed}
+        try:
+            master.home_return_status = pick_place.return_home(phase="episode-home")
+            master.end_home_err_rad = pick_place.home_error()
+            master.post_home_displacement_mm = {
+                i: 1000.0 * float(np.linalg.norm(
+                    scene_access_final.object_pose_base(i)[:3, 3] - pos0))
+                for i, pos0 in placed_before.items()}
+        except Exception as exc:  # noqa: BLE001
+            print(f"[WARN] closing retreat failed: {exc}")
+            master.home_return_status = "failed"
+
+    master.status = full_load_status(master, n_planned=n_planned,
+                                     transitions_ok=transitions_ok)
+    phase_meta_extra["motion_stats"] = {
+        "n_plans": motion.stats.n_plans, "n_plan_failures": motion.stats.n_plan_failures,
+        "plan_time_s": round(motion.stats.plan_time_s, 3),
+        "n_exec_steps": motion.stats.n_exec_steps}
+    flush()
+    with open(os.path.join(PROJECT_ROOT, "results", "experiments", "LATEST"), "w") as f:
+        f.write(run_id + "\n")
+
+    print(f"[INFO] FULL-LOAD episode {episode_id}: status={master.status} "
+          f"placed={master.n_placed}/{n_planned}")
+    for ph_summary in master.phases:
+        print(f"[INFO]   phase {ph_summary['phase']} ({ph_summary['state']}): "
+              f"{ph_summary['n_placed']}/{ph_summary['n_items']} placed in "
+              f"{ph_summary['n_waves']} wave(s), transition_ok={ph_summary['transition_ok']}")
+    if rig is not None:
+        try:
+            rig.save_stills(media_dir, f"{episode_id}_final")
+            if args_cli.orbit:
+                from dishsim.media import write_orbit  # noqa: PLC0415
+                center = (float(config.DISHWASHER_POS_W[0]) - 0.15,
+                          float(config.DISHWASHER_POS_W[1]), 0.45)
+                write_orbit(rig, scene, sim, dt,
+                            os.path.join(media_dir, f"{episode_id}_orbit.mp4"),
+                            center=center, radius=1.7, height=0.8)
+            print(f"[INFO] media -> {os.path.relpath(media_dir, PROJECT_ROOT)}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[WARN] media write failed: {exc}")
+    print(f"[RESULT] {'PASS' if master.status == 'cleared' else 'FAIL'} ({master.status})")
+    return 0 if master.status == "cleared" else 1
+
+
+def _assign_slots(items, slots_by_class, goal_sets, slot_names_by_class) -> dict:
+    """Assign each item a destination slot (semantics and rationale: :mod:`dishsim.task.slotting`).
+
+    Thin adapter binding the shared packing rule to this run's config: the EFFECTIVE placement
+    mode (machine overrides applied — on the Bosch a fork's ``basket_drop`` reroutes to
+    ``flat_lay_third``, and the ``slot_pools`` lookup must follow it), registry body radii, and
+    the ``TASK`` preference tables.
+    """
+    return tslotting.assign_slots(
+        [tslotting.SlotRequest(it.item_id, it.object_class) for it in items],
+        slots_by_class, goal_sets, slot_names_by_class,
+        type_slots=config.TASK.get("type_slots") or {},
+        slot_pools=config.TASK["slot_pools"],
+        margin_m=float(config.TASK["slot_separation_margin_m"]),
+        mode_fn=config.effective_placement_mode,
+        rim_radius_fn=lambda cls: config.OBJECTS[cls].rim_radius_m,
+    )
 
 
 def _pose_w(item):
@@ -979,6 +1680,39 @@ def _grip_forces_named(scene, item_id: str, peer_ids=()) -> dict:
     }
 
 
+def _write_manifest(run_dir, run_id, planner, *, phase_states=None, extra=None):
+    """Run-level provenance (new in v3; episode runs previously wrote none and Phase 3 lost
+    the run id / planner / config hashes)."""
+    doc = {
+        "run_id": run_id, "argv": sys.argv[1:], "seed": int(args_cli.seed),
+        "machine": config.MACHINE, "base_placement": config.BASE_PLACEMENT,
+        "scenario": SCENARIO, "post_state": POST_STATE,
+        "phase_states": list(phase_states or []),
+        "planner": planner.describe(),
+        "full_load_plan": (os.path.relpath(FULL_LOAD_PLAN_PATH, PROJECT_ROOT)
+                           if FULL_LOAD_PLAN_PATH else None),
+        "episode_schema_version": EPISODE_SCHEMA_VERSION,
+        "trial_schema_version": TRIAL_SCHEMA_VERSION,
+    }
+    hashes = {}
+    entry = config.SCENARIO_NAME
+    try:
+        for state in dict.fromkeys([POST_STATE, *(phase_states or [])]):
+            config.apply_scenario(state)
+            with config.active_object(config.reference_class()):
+                hashes[state] = geometry_config_hash()
+    finally:
+        config.apply_scenario(entry)
+    doc["config_hash_by_state"] = hashes
+    doc["config_hash"] = hashes.get(POST_STATE)  # what metrics.summarize echoes
+    doc.update(extra or {})
+    path = os.path.join(run_dir, "manifest.json")
+    with open(path + ".tmp", "w") as f:
+        json.dump(doc, f, indent=2)
+    os.replace(path + ".tmp", path)
+    return path
+
+
 def _make_capture(rig, rec, media_dir, args_cli, dt, episode_id, camera):
     """Frame counter + inline video writer, matching run_trials.py's capture discipline.
 
@@ -1015,8 +1749,12 @@ def _finish_media(rig, writer, media_dir, result):
         print(f"[WARN] media write failed: {exc}")
 
 
-def _write_trial(run_dir, result, pick, planner, args_cli, tmeta):
-    """One per-pick record in the EXISTING trial schema, so Phase 3 reads it unchanged."""
+def _write_trial(run_dir, result, pick, planner, args_cli, tmeta, *, scenario=None):
+    """One per-pick record in the EXISTING trial schema, so Phase 3 reads it unchanged.
+
+    Phase mode passes ``scenario`` (the pick's phase state) and stamps two extra keys —
+    absent in single-phase records, which therefore stay byte-identical.
+    """
     tag = f"{result.episode_id}_{pick.item_id}"
     record = {
         "schema_version": TRIAL_SCHEMA_VERSION,
@@ -1028,9 +1766,9 @@ def _write_trial(run_dir, result, pick, planner, args_cli, tmeta):
                      in config.WELD_ACQUIRE_FAMILIES else "pick"),
         "start_welded": config.OBJECTS[pick.object_class].grasp.family
                         in config.WELD_ACQUIRE_FAMILIES,
-        "placement_mode": config.OBJECTS[pick.object_class].placement.mode,
+        "placement_mode": config.effective_placement_mode(pick.object_class),
         "planner": planner.describe(),
-        "scenario": SCENARIO, "rack_action": RACK_ACTION,
+        "scenario": scenario or SCENARIO, "rack_action": RACK_ACTION,
         "success": pick.success, "failure_stage": pick.failure_stage,
         "failure_detail": pick.failure_detail,
         "plan_time_s": pick.plan_time_s, "path_len_rad": None,
@@ -1044,6 +1782,10 @@ def _write_trial(run_dir, result, pick, planner, args_cli, tmeta):
         "episode": {"episode_id": result.episode_id, "order": pick.order,
                     "cost": pick.cost, "n_candidates": pick.n_candidates},
     }
+    if pick.phase is not None:  # phase-mode extras; single-phase records stay byte-identical
+        record["phase"] = pick.phase
+        record["phase_state"] = pick.phase_state
+        record["wave"] = pick.wave
     path = os.path.join(run_dir, "trials", f"{tag}.json")
     with open(path, "w") as f:
         json.dump(record, f, indent=2)

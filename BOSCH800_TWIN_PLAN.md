@@ -1,15 +1,21 @@
 # Bosch 800 digital twin — Stage A plan (portable)
 
-> **STATUS 2026-08-10, end of day (added for machine-portability — this file survived the
-> last instance change when nothing else did):** A0–A2 COMPLETE, A3 UNDERWAY. A2 verdict:
-> UR5e at `side_winner` (x +0.475, y −0.525, z 0.400, yaw +101.25°) meets all four
-> criteria. A3 landed: first full episode CLEARED (`bosch_ep2`: 560 mm pull + cup +
-> tumbler placed 2/2) and the plate is NO LONGER PATH-BLOCKED (`bosch_plate_rematch`:
-> planned in 16 s vs the v1 180 s timeout; failed only lateral settle 14.5 vs 12 mm).
-> Assets/results archived: HF `shu4dev/dishsim-assets` tag `20260810_99e5cb9`.
-> A3 remaining: plate settle tuning (release vs the 50 mm pitch), real-scale dishes
-> (§A0 shortlist), Bosch capacity fill, legacy-mug anomaly root-cause (excluded via
-> `config.reference_class`), middle-rack thinness (RackMatic-low lever), then Stage B.
+> **STATUS 2026-08-14 (full-load session):** A3 COMPLETE in its robot-load form. The
+> reachable FULL LOAD is defined, measured and executed: `scripts/setup/plan_full_load.py`
+> certifies **22 items** (fork 14 flat-lay + plate 2 + bowl 6; every exclusion measured —
+> see docs/success_criteria.md "Reachable capacity"), and `run_task.py --full_load` /
+> `--phases` runs multi-phase episodes with scripted rack transitions (top-down order —
+> the loaded lower rack cannot climb the door sill, known_limitations). Demonstration
+> episode `bosch_sanity_load2` (14 items): 11/14 placed — 7/8 forks in 2 counter waves,
+> scripted transition with 7 riders (max slip 3.1 mm), 3 bowls + 1 plate on the lower
+> rack; failures are per-item planner attrition, not systematic. Plate settle SOLVED
+> (per-machine tolerances, probe of record 24/24). Middle-rack "thinness" root-caused:
+> a derivation artifact (slots targeted the stowed lower rack) — fixed, 41/56 reachable —
+> but upright drinkware is measurably unstable on the coarse wire lattice (cup 53-76 %,
+> tumbler 73 %), so the middle rack holds zero robot destinations pending real-scale
+> dishes or a rim-down flip regrasp. A3 remaining: real-scale dishes, legacy-mug anomaly,
+> teleport capacity_fill port, drinkware placement (flip regrasp / cup-shelf mode), then
+> Stage B. Re-archive pending this session's caches + results.
 
 Written 2026-08-10. Self-contained execution plan for re-anchoring `dishwasher_sim_isaaclab`
 from the fictional ArtVIP compact machine to a **Bosch 800 Series 24″ built-in** digital

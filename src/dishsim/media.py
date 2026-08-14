@@ -148,6 +148,36 @@ class VideoWriter:
         self._writer.close()
 
 
+def write_orbit(rig: CameraRig, scene, sim, dt: float, path: str, *, center,
+                radius: float = 1.25, height: float = 0.55, n_frames: int = 240,
+                camera: str = "iso", fps: int | None = None) -> str:
+    """A 360° orbit clip around ``center`` [m, world], stepping physics per frame.
+
+    The shared final-evidence shot (capacity_fill's loaded-machine orbit, the full-load
+    episode's closing orbit). Steals the named camera for the sweep and restores its
+    configured pose after.
+
+    Returns:
+        The clip path.
+    """
+    from . import config  # noqa: PLC0415
+
+    writer = VideoWriter(path, fps=fps or config.CAMERA_FPS)
+    c = np.asarray(center, dtype=float)
+    for k in range(n_frames):
+        a = 2.0 * np.pi * k / n_frames
+        eye = c + np.array([radius * np.cos(a), radius * np.sin(a), height])
+        rig.set_view(camera, eye, c, sim.device)
+        scene.write_data_to_sim()
+        sim.step()
+        scene.update(dt)
+        rig.update(dt)
+        writer.add(rig.grab_one(camera))
+    writer.close()
+    rig.restore_view(camera, sim.device)
+    return path
+
+
 def contact_sheet(images: list[np.ndarray], labels: list[str], out_png: str, cols: int = 4) -> str:
     """Tile images into a labeled grid PNG (labels drawn in a strip above each tile)."""
     from PIL import Image, ImageDraw  # noqa: PLC0415

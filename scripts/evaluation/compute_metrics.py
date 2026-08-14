@@ -100,6 +100,31 @@ def summarize_run(run_dir: str) -> dict | None:
           f"{summary['plan_time_s'].get('median')} s -> {os.path.relpath(out_path, PROJECT_ROOT)}")
     if summary["failure_stages"]:
         print(f"[INFO]   failures: {summary['failure_stages']}")
+    summarize_episodes_for_run(run_dir, out_dir)
+    return summary
+
+
+def summarize_episodes_for_run(run_dir: str, out_dir: str) -> dict | None:
+    """Episode-level aggregation for multi-object runs — clear rate, by-phase-state placement,
+    transition rates. Single-object runs have no ``episodes/`` and skip silently."""
+    ep_paths = sorted(glob.glob(os.path.join(run_dir, "episodes", "*.json")))
+    if not ep_paths:
+        return None
+    from dishsim.task.episode import summarize_episodes  # noqa: PLC0415
+
+    episodes = [json.load(open(p)) for p in ep_paths]
+    summary = summarize_episodes(episodes)
+    out_path = os.path.join(out_dir, "episodes_summary.json")
+    with open(out_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"[INFO]   episodes: {summary['n_cleared']}/{summary['n_episodes']} cleared, "
+          f"picks {summary['n_pick_success']}/{summary['n_picks']} "
+          f"-> {os.path.relpath(out_path, PROJECT_ROOT)}")
+    for state, c in summary.get("by_phase_state", {}).items():
+        print(f"[INFO]     {state:<12} {c['success']}/{c['picks']} placed ({c['rate'] * 100:.0f} %)")
+    if summary.get("n_transitions"):
+        print(f"[INFO]     transitions ok: {summary['transition_ok_rate'] * 100:.0f} % "
+              f"of {summary['n_transitions']}")
     return summary
 
 

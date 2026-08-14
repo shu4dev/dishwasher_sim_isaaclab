@@ -127,9 +127,10 @@ def main() -> None:
     rng = np.random.default_rng(args_cli.seed)
 
     # ---- Kit-free computation ------------------------------------------------------------
-    # thin-insertion modes (cutlery into a bay, a disc into a 30 mm tine gap): the merged
-    # gripper+object hull is a giant wedge that can never fit — use the per-piece cluster
-    merged = config.effective_placement_mode() not in ("basket_drop", "plate_slot")
+    # thin-insertion modes (cutlery into a bay, a disc into a 30 mm tine gap, a flat lay
+    # inside the third-rack tray rims): the merged gripper+object hull is a giant wedge that
+    # can never fit — use the per-piece cluster
+    merged = config.effective_placement_mode() not in ("basket_drop", "plate_slot", "flat_lay_third")
     world = CollisionWorld(cache_dir=config.scenario_cache_dir(), self_check=True, merged_cluster=merged)
     slots = placement.derive_slots(config.scenario_cache_dir())  # mode dispatch per object
     print(f"[INFO] scenario {config.SCENARIO_NAME}: home config in_collision: "

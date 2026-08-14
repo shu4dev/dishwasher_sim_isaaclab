@@ -461,6 +461,24 @@ class PickPlace:
             m.reachable(T_hover, q_seed=m.current_q())
         if len(sols) == 0:
             raise _Failure("pick-plan", "no collision-free IK at the pre-grasp hover")
+        # The object MATERIALIZES at the carry transform the moment the weld takes it, so an
+        # approach goal is only valid if it stays collision-free WITH the payload attached.
+        # The empty-hand feasibility that chose the candidate cannot see that: a bowl hover
+        # can be fine bare-handed and clip the countertop hull the instant the bowl snaps in
+        # ("carry start configuration is in collision", measured 2026-08-14). If the finder's
+        # single config dies this way, widen back to every hover branch before giving up.
+        m.world.attach_object(prof.pieces, self.T_w3_tcp @ prof.T_tcp_obj)
+        try:
+            payload_ok = [q for q in np.atleast_2d(sols) if not m.world.in_collision(q)]
+            if not payload_ok and candidate.grasp_q is not None:
+                payload_ok = [q for q in m.reachable(T_hover, q_seed=m.current_q())
+                              if not m.world.in_collision(q)]
+        finally:
+            m.world.detach_carried_object()
+        if not payload_ok:
+            raise _Failure("pick-plan",
+                           "no hover configuration stays collision-free with the payload attached")
+        sols = np.asarray(payload_ok)
         res = m.plan(m.current_q(), sols, seed=self._seed(1))
         if res.status != "solved":
             raise _Failure("pick-plan", f"planner returned {res.status} for the approach")
@@ -547,13 +565,22 @@ class PickPlace:
 
         T_goal_tcp = m.tcp_pose(q_goal)
         T_back = T_goal_tcp.copy()
-        T_back[:3, 3] -= T_goal_tcp[:3, 2] * config.RETRACT_DIST_M
+        if config.placement_mode_params(slot.mode).get("retract_world_up"):
+            # deep-release modes (flat lay between tray rims): straight up in the base frame —
+            # the tool-z direction is pitched and would drag the open finger through the wires
+            T_back[:3, 3] += np.array([0.0, 0.0, config.RETRACT_DIST_M])
+        else:
+            T_back[:3, 3] -= T_goal_tcp[:3, 2] * config.RETRACT_DIST_M
         out = m.servo_line(T_goal_tcp, T_back, 12, q_goal, phase="retract",
                            aperture=prof.aperture_open_rad, on_step=cap)
         # Only a real contact fails the trial. A retract with no continuous IK branch leaves the
         # tool where it is, which is untidy but harmless — the same judgement the single-object
         # runner makes when it records "skipped-no-valid-path" and still evaluates the placement.
-        if not out.ok and out.peak_contact_n >= config.RETRACT_GRAZE_MAX_N:
+        # Deep-release modes may raise the graze bar (retract_graze_max_n): leaving a tray
+        # brushes wires transiently, and the post-retract settle verdict is the real judge.
+        graze_max = float(config.placement_mode_params(slot.mode).get(
+            "retract_graze_max_n", config.RETRACT_GRAZE_MAX_N))
+        if not out.ok and out.peak_contact_n >= graze_max:
             raise _Failure("retract-collision", out.detail)
 
         m.hold(config.SETTLE_STEPS, phase="final-settle", on_step=cap)

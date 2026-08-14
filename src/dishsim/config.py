@@ -689,13 +689,26 @@ PLACEMENT_MODES: dict[str, dict] = {
     },
     "flat_lay_third": {
         # Bosch third rack: cutlery/utensils lying FLAT on the shallow tray mesh (long axis
-        # horizontal), released from a low hover onto the wires. Design values pending the
-        # first Bosch goal funnel (A2/A3); tolerances mirror floor_stand except tilt, which
-        # measures deviation from HORIZONTAL for a lying object.
-        "release_hover_m": 0.030,
+        # horizontal). Released HIGH like basket_drop and dropped: at the original 0.030
+        # hover the jaws opened BETWEEN the tray rims and the outer finger pressed a tray
+        # wire at 29.1 N before the retract even moved (measured 2026-08-14); at 0.060 the
+        # open fingers clear the 0.050 rim and gravity lays the piece flat. Tolerances
+        # mirror floor_stand except tilt, which measures deviation from HORIZONTAL.
+        "release_hover_m": 0.060,
         "tol_lateral_m": 0.020,
         "tol_tilt_deg": 15.0,
         "tol_bottom_m": 0.015,
+        # The released piece sits BETWEEN the tray rims and the wrist arrives pitched, so the
+        # default retract (back along tool z) has a lateral component that drags the open
+        # finger through the tray wires — measured 29.1 N on right_outer_finger, 2026-08-14.
+        # Flat-lay retracts straight up in the world instead.
+        "retract_world_up": True,
+        # Departing a deep tray brushes wires transiently even on the vertical retract
+        # (measured 5.6 N after the hover+direction fixes — vs 29.1 N ramming before them).
+        # The brush is benign: the placement verdict runs AFTER the retract and still fails
+        # the trial if the departure disturbed the piece. The open-air 2 N graze bar stays
+        # for every other mode.
+        "retract_graze_max_n": 8.0,
     },
 }
 
@@ -874,6 +887,21 @@ TASK: dict = {
     # what makes settling non-trivial.
     "stack_fraction": 0.5,
     "stack_jitter_frac": 0.25,
+    # Full-load episodes (task/phases.py). A phase's items spawn in restock WAVES: a wave may
+    # claim this fraction of the spawn rect's area (each item a disc of footprint radius +
+    # half the separation) — random rejection-sampled layouts stop converging well before
+    # geometric packing density. None = no per-wave item cap beyond the area budget.
+    "wave_fill_factor": 0.45,
+    "max_wave_objects": None,
+    # Scripted-transition rider gates, per EFFECTIVE placement mode: (slip [m], rot [deg] or
+    # None). Slip is measured net of the rack's own ride. Values are the capacity_fill
+    # closability bars: standing/seated items get the strict gate, contained flat-lays the
+    # loose envelope (they may slide inside their zone without leaving it).
+    "transition_slip_gates": {
+        "default": (0.010, 10.0),
+        "flat_lay_third": (0.045, None),
+        "basket_drop": (0.045, None),
+    },
     # Goal slots inside the machine, per placement mode. None = every derived slot, in
     # derivation order; a tuple restricts and orders the pool (front-to-back, say). The
     # sequencer allocates an unused slot from the pool for each item.
@@ -1702,6 +1730,29 @@ _PLANNER_PARAMS_BOSCH = {**PLANNER_PARAMS,
 _TASK_BOSCH = {**TASK, "spawn_rect_w": {"x_min": 0.830, "x_max": 1.060,
                                         "y_min": -0.880, "y_max": -0.320}}
 
+#: Bosch episode camera: the v1 view targets the v1 scene at the origin and leaves the Bosch
+#: machine (x 1.12) right-of-frame with the counter clipped. Re-aimed 2026-08-14 by
+#: rendering candidates in one Kit boot (scratchpad frame_episode_cam sweep; candB adopted):
+#: counter spawn face, door runway with the extended rack, arm and machine all in frame with
+#: margins. Same 15 mm lens — the scene-fills-frame arithmetic above still applies.
+_EPISODE_CAMERA_BOSCH = {
+    "eye": (-0.70, -2.60, 1.60),
+    "target": (0.75, -0.30, 0.45),
+    "lens": dict(EPISODE_CAMERA["lens"]),
+}
+
+#: Bosch placement-mode view: identical to the baseline except the plate-slot settle
+#: tolerances, which are MEASURED for the Bosch bank's 50 mm pitch (the baseline values fit
+#: the ArtVIP 40 mm pitch, whose free lateral half-play is ~11.7 mm). A disc released over a
+#: Bosch gap rolls until it rests against a tine — how real plates sit — at
+#: (pitch 50 − tine wire 3.2 − plate 14.4)/2 = 16.2 mm of lateral play and a matching extra
+#: lean. Probe of record (scripts/setup/probe_plate_settle.py, 2026-08-14, 3 gaps x 8
+#: releases): lateral mean 14.1 / p95 15.0 / max 15.2 mm, tilt p95 14.0 / max 14.1 deg,
+#: bottom clean — 0/24 passed the v1 tolerances, 24/24 pass these (geometry bound + margin).
+_PLACEMENT_MODES_BOSCH = {**PLACEMENT_MODES,
+                          "plate_slot": {**PLACEMENT_MODES["plate_slot"],
+                                         "tol_lateral_m": 0.018, "tol_tilt_deg": 16.0}}
+
 MACHINES: dict[str, dict] = {
     MACHINE_BASELINE_NAME: {},  # baseline: no overrides; module-top values ARE its definition
     "bosch800": {
@@ -1760,6 +1811,8 @@ MACHINES: dict[str, dict] = {
         # 0.2 m / 240-step pull
         "RACK_SLIDE_STEPS": 672,
         "TASK": _TASK_BOSCH,
+        "PLACEMENT_MODES": _PLACEMENT_MODES_BOSCH,
+        "EPISODE_CAMERA": _EPISODE_CAMERA_BOSCH,
         "PLANNER_PARAMS": _PLANNER_PARAMS_BOSCH,
         # halved vs v1: the 560 mm loaded rack pull showed deterministic 103.8 N
         # wrist_2 contact under the middle-rack rail — tracking lag under drag
@@ -1789,7 +1842,9 @@ _MACHINE_MUTABLE = (
     "COUNTERTOP_CENTER_W",
     "RACK_SLIDE_STEPS",
     "CAMERAS",
+    "EPISODE_CAMERA",
     "TASK",
+    "PLACEMENT_MODES",
     "EXEC_JOINT_SPEED_RAD_S",
     "PLANNER_PARAMS",
 )

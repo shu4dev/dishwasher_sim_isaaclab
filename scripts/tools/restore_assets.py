@@ -111,21 +111,34 @@ def validate_caches(manifest: dict) -> bool:
             print(f"[FAIL] {rel}: extracted stamp != archived stamp")
             ok = False
             continue
-        # active-object reconstruction: mug caches use the legacy layout, other objects
-        # live under assets/cache/objects/<object>/<state>
+        # Context reconstruction, in the machine -> object -> scenario -> placement order the
+        # hash demands: machine and object come from the cache path (mug caches use the legacy
+        # layout, other objects live under .../objects/<object>/<state>). The base placement is
+        # not encoded in the path, so every placement the machine defines is tried — the hash
+        # covers it, so exactly one can match.
         parts = rel.split(os.sep)
+        machine = parts[parts.index("machines") + 1] if "machines" in parts \
+            else config.MACHINE_BASELINE_NAME
         active = parts[parts.index("objects") + 1] if "objects" in parts else "mug"
         if active not in config.OBJECTS:
             active = "mug"
-        config.set_active_object(active)
-        config.apply_scenario(stamp.get("scenario") or "both_out")
-        recomputed = config_hash()
-        tag = "OK" if recomputed == stamp["config_hash"] else "STALE"
-        if tag == "STALE":
+        placements = sorted(config.BASE_PLACEMENTS.get(machine, {"front": None}),
+                            key=lambda p: p != config.DEFAULT_BASE_PLACEMENT.get(machine, "front"))
+        matched = None
+        for placement in placements:
+            config.apply_machine(machine)  # resets scenario + placement, so it goes first
+            config.set_active_object(active)
+            config.apply_scenario(stamp.get("scenario") or "both_out")
+            config.apply_base_placement(placement)
+            if config_hash() == stamp["config_hash"]:
+                matched = placement
+                break
+        if matched is None:
             print(f"[WARN] {rel}: config.py drifted since the archive "
-                  f"({recomputed} != {stamp['config_hash']}) — re-run scripts/setup/extract_geometry.py for this state")
+                  f"— re-run scripts/setup/extract_geometry.py for this state")
         else:
-            print(f"[OK] {rel} ({stamp['object_name']}, {stamp['scenario']})")
+            print(f"[OK] {rel} ({stamp['object_name']}, {stamp['scenario']} @ {matched})")
+    config.apply_machine(config.MACHINE_BASELINE_NAME)
     config.set_active_object("mug")
     config.apply_scenario("both_out")
     return ok

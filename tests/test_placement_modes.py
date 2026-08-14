@@ -8,6 +8,8 @@ Uses a synthetic rack transform (identity at a fixed offset) instead of the geom
 so these run before any Kit extraction. The geometry numbers come from config.RACK_GEN.
 """
 
+import os
+
 import numpy as np
 import pytest
 
@@ -234,3 +236,53 @@ def test_evaluate_placement_flat_lay(bosch_third):
         [0.0, 0.0, config.RACK_GEN[THIRD]["channel"]["drop"] + spec.bbox_half[2]]
     )
     assert not placement.evaluate_placement(chan, T_hi)["ok"]
+
+
+def test_floor_stand_targets_the_extended_rack():
+    """middle_out loads the EXTENDED middle rack; every lower-extended or stowed state keeps
+    the v1 lower-rack derivation (baked-cache byte-stability)."""
+    from dishsim.placement import _floor_stand_rack_body
+    config.apply_machine("bosch800")
+    try:
+        config.apply_scenario("middle_out")
+        assert _floor_stand_rack_body() == "E_shelf_03"
+        for state in ("placement", "both_in", "both_out", "third_out"):
+            config.apply_scenario(state)
+            assert _floor_stand_rack_body() == "E_shelf_1_04", state
+    finally:
+        config.apply_machine(config.MACHINE_BASELINE_NAME)
+        config.apply_scenario("both_out")
+    for state in ("placement", "placement_open", "both_in", "both_out"):
+        config.apply_scenario(state)
+        assert _floor_stand_rack_body() == "E_shelf_1_04", state
+    config.apply_scenario("both_out")
+
+
+@pytest.mark.skipif(
+    not os.path.isdir(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                   "assets", "cache", "machines", "bosch800", "objects",
+                                   "cup", "middle_out")),
+    reason="restored Bosch caches not present")
+def test_middle_rack_floor_slots_stay_inside_the_flat_zones():
+    """The glass rack's floor is only flat inside its declared open_zones (slope ramps, cup
+    shelves and divider tines elsewhere) — a cup released outside them tipped to 35 deg
+    (measured 2026-08-14). Derivation must therefore never emit a cell outside them."""
+    config.apply_machine("bosch800")
+    config.apply_base_placement("side_winner")
+    try:
+        config.apply_scenario("middle_out")
+        config.set_active_object("cup")
+        cdir = config.scenario_cache_dir("middle_out", object_name="cup")
+        slots = placement.derive_slots_from_rack(cdir)
+        assert 0 < len(slots) < 56  # strictly fewer than the unfiltered 7x8 grid
+        from dishsim.geometry import load_manifest
+        T_rack = np.array(load_manifest(cdir)["statics"]["E_shelf_03"]["T_base_body"])
+        zones = config.RACK_GEN["E_shelf_03"]["open_zones"]
+        for s in slots:
+            p = np.linalg.inv(T_rack) @ np.append(s.T_base_slot[:3, 3], 1.0)
+            assert any(x0 <= p[0] <= x1 and y0 <= p[1] <= y1
+                       for x0, x1, y0, y1 in zones), f"slot {s.slot_id} at {p[:2]}"
+    finally:
+        config.set_active_object("mug")
+        config.apply_machine(config.MACHINE_BASELINE_NAME)
+        config.apply_scenario("both_out")

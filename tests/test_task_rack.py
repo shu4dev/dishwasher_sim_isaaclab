@@ -312,3 +312,139 @@ def test_rack_phase_serialises(geom):
     assert doc[0]["joint"] == spec.joint
     assert doc[0]["target_m"] == pytest.approx(-0.20)
     assert doc[0]["ok"] is True
+
+
+# ---- scripted transitions ------------------------------------------------------------------------
+#
+# The full-load episode's phase boundaries: drive ramps with the arm parked. The stub motion
+# above already records every set_rack_target call; measured extensions are simulated as
+# perfect drives (last commanded value) unless a test injects an error.
+
+def _joints():
+    return sorted(config.RACK_JOINT_TARGETS)
+
+
+def _perfect_exts(m, initial):
+    """measure_exts stub: drives are perfect — report the last commanded target."""
+    def measure():
+        return dict(m.rack_targets[-1]) if m.rack_targets else dict(initial)
+    return measure
+
+
+def _transition(m, initial, **kw):
+    return R.ScriptedTransition(m, measure_exts=_perfect_exts(m, initial),
+                                steps_per_meter=10, settle_steps=2, **kw)
+
+
+def test_transition_commands_complete_dicts_every_step():
+    down, up = _joints()[0], _joints()[-1]
+    m = StubMotion()
+    initial = {down: -0.20, up: 0.0}
+    tr = _transition(m, initial)
+    out = tr.run([{down: 0.0, up: 0.0}, {down: 0.0, up: -0.20}],
+                 from_state="placement", to_state="x")
+    assert out.ok
+    assert m.rack_targets, "the ramp must command targets"
+    for cmd in m.rack_targets:
+        assert set(cmd) == set(_joints()), "every commanded dict must be complete"
+    # the FINAL commanded dict is the destination state and stays commanded (never None)
+    assert m.rack_targets[-1] == {down: 0.0, up: -0.20}
+    assert None not in m.rack_targets
+
+
+def test_transition_rejects_incomplete_dicts():
+    down = _joints()[0]
+    m = StubMotion()
+    tr = _transition(m, {down: -0.20})
+    with pytest.raises(ValueError, match="complete"):
+        tr.run([{down: 0.0}], from_state="a", to_state="b")
+
+
+def test_transition_ramp_is_monotone_per_joint():
+    down, up = _joints()[0], _joints()[-1]
+    m = StubMotion()
+    tr = _transition(m, {down: -0.20, up: 0.0})
+    tr.run([{down: 0.0, up: 0.0}], from_state="a", to_state="b")
+    downs = [cmd[down] for cmd in m.rack_targets]
+    assert downs == sorted(downs), "stowing ramp must be monotone"
+    assert downs[-1] == 0.0
+
+
+def test_transition_slide_fault_on_settle_error():
+    down, up = _joints()[0], _joints()[-1]
+    m = StubMotion()
+
+    def bad_exts():
+        # the drive stalls 20 mm short of whatever was last commanded on the down joint
+        cur = dict(m.rack_targets[-1]) if m.rack_targets else {down: -0.20, up: 0.0}
+        cur[down] = cur[down] - 0.020
+        return cur
+
+    tr = R.ScriptedTransition(m, measure_exts=bad_exts, steps_per_meter=10, settle_steps=2)
+    out = tr.run([{down: 0.0, up: 0.0}], from_state="a", to_state="b")
+    assert not out.ok and out.stage == "transition-slide-fault"
+    assert out.per_joint[down]["error_m"] == pytest.approx(0.020)
+    # the last commanded dict stays commanded even on failure
+    assert m.rack_targets[-1] == {down: 0.0, up: 0.0}
+
+
+def test_transition_rider_slip_subtracts_the_rack_ride():
+    down, up = _joints()[0], _joints()[-1]
+    m = StubMotion()
+    T0 = np.eye(4)
+    T0[:3, 3] = (0.5, 0.1, 0.2)
+    T1 = np.eye(4)
+    T1[:3, 3] = (0.5, 0.1 + 0.56, 0.2)      # the item moved exactly with its rack
+    poses = {"n": 0}
+    body = {"n": 0}
+
+    def measure_items():
+        poses["n"] += 1
+        return {"cup_00": T0 if poses["n"] == 1 else T1}
+
+    def measure_body(name):
+        body["n"] += 1
+        return np.array([0.0, 0.0, 0.0]) if body["n"] == 1 else np.array([0.0, 0.56, 0.0])
+
+    tr = R.ScriptedTransition(m, measure_exts=_perfect_exts(m, {down: -0.20, up: 0.0}),
+                              measure_items=measure_items, measure_body_pos=measure_body,
+                              steps_per_meter=10, settle_steps=2)
+    out = tr.run([{down: 0.0, up: 0.0}], from_state="a", to_state="b",
+                 riders={"cup_00": "E_shelf_1_04"},
+                 slip_gates={"cup_00": (0.010, 10.0)})
+    assert out.ok
+    assert out.item_slips["cup_00"]["slip_mm"] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_transition_rider_displaced_fails():
+    down, up = _joints()[0], _joints()[-1]
+    m = StubMotion()
+    T0 = np.eye(4)
+    T1 = np.eye(4)
+    T1[:3, 3] = (0.05, 0.0, 0.0)            # 50 mm of real slip, no rack ride
+    seen = {"n": 0}
+
+    def measure_items():
+        seen["n"] += 1
+        return {"cup_00": T0 if seen["n"] == 1 else T1}
+
+    tr = R.ScriptedTransition(m, measure_exts=_perfect_exts(m, {down: -0.20, up: 0.0}),
+                              measure_items=measure_items,
+                              measure_body_pos=lambda b: np.zeros(3),
+                              steps_per_meter=10, settle_steps=2)
+    out = tr.run([{down: 0.0, up: 0.0}], from_state="a", to_state="b",
+                 riders={"cup_00": "E_shelf_1_04"},
+                 slip_gates={"cup_00": (0.010, 10.0)})
+    assert not out.ok and out.stage == "transition-rider-displaced"
+    assert not out.item_slips["cup_00"]["ok"]
+    assert out.item_slips["cup_00"]["slip_mm"] == pytest.approx(50.0)
+
+
+def test_transition_outcome_serialises():
+    down, up = _joints()[0], _joints()[-1]
+    m = StubMotion()
+    tr = _transition(m, {down: -0.20, up: 0.0})
+    doc = tr.run([{down: 0.0, up: 0.0}], from_state="placement",
+                 to_state="middle_out").to_json()
+    assert doc["ok"] is True and doc["from_state"] == "placement"
+    assert doc["per_joint"][down]["target_m"] == 0.0

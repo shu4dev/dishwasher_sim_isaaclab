@@ -26,7 +26,10 @@ import numpy as np
 #: ``TRIAL_SCHEMA_VERSION`` so the two can evolve separately.
 #: 2 — added the home-anchoring fields (``start_home_err_rad``, ``end_home_err_rad``,
 #: ``home_return_status``, ``post_home_displacement_mm``).
-EPISODE_SCHEMA_VERSION = 2
+#: 3 — multi-phase full-load episodes: per-pick ``phase``/``phase_state``/``wave``/
+#: ``acquired`` (all None/absent in single-phase episodes, so v2 consumers read v3 records
+#: unchanged) and episode-level ``phases``/``transitions``.
+EPISODE_SCHEMA_VERSION = 3
 
 
 @dataclass
@@ -48,6 +51,12 @@ class PickRecord:
         n_replans: Stage C — times the grasp was recomputed after the object shifted.
         trial_path: Per-pick trial JSON, relative to the project root.
         trajectory_path: Per-pick trajectory ``.npz``, relative to the project root.
+        phase: 0-based loading-phase index (None in single-phase episodes).
+        phase_state: Machine state the pick placed in (None in single-phase episodes).
+        wave: 0-based countertop restock wave within the phase (None in single-phase).
+        acquired: ``"pick"`` or ``"weld"`` — the two acquisition families report separately
+            and their success rates are never summed (None in pre-v3 records; consumers
+            fall back to the trial record's field).
     """
 
     item_id: str
@@ -64,6 +73,10 @@ class PickRecord:
     n_replans: int = 0
     trial_path: str | None = None
     trajectory_path: str | None = None
+    phase: int | None = None
+    phase_state: str | None = None
+    wave: int | None = None
+    acquired: str | None = None
 
     def to_json(self) -> dict:
         d = dict(self.__dict__)
@@ -105,6 +118,13 @@ class EpisodeResult:
             pre-positioned). An episode whose rack action failed is an ``error`` with no picks —
             every pick plans against a world posed at the post-action extension, so a rack that
             never arrived invalidates all of them.
+        phases: Per-loading-phase summaries of a full-load episode (empty in single-phase
+            episodes): ``{"phase", "state", "n_items", "n_placed", "n_waves",
+            "transition_ok"}``. Unlike a failed rack PROLOGUE, a failed mid-episode
+            transition does not void the earlier phases — their picks planned against their
+            own worlds — so the episode degrades to ``partial`` and keeps what was placed.
+        transitions: Scripted rack transitions in execution order
+            (:meth:`dishsim.task.rack.TransitionOutcome.to_json` documents the shape).
     """
 
     episode_id: str
@@ -125,6 +145,8 @@ class EpisodeResult:
     home_return_status: str | None = None
     post_home_displacement_mm: dict = field(default_factory=dict)
     rack_phase: list = field(default_factory=list)
+    phases: list = field(default_factory=list)
+    transitions: list = field(default_factory=list)
 
     @property
     def n_placed(self) -> int:
@@ -155,11 +177,61 @@ class EpisodeResult:
             "post_home_displacement_mm": {k: round(float(v), 3)
                                           for k, v in self.post_home_displacement_mm.items()},
             "rack_phase": list(self.rack_phase),
+            "phases": list(self.phases),
+            "transitions": list(self.transitions),
         }
 
 
 def _round(x, n: int):
     return None if x is None else round(float(x), n)
+
+
+def merge_wave_results(master: EpisodeResult, wave_result: EpisodeResult, *,
+                       phase_index: int, state: str, wave_index: int,
+                       acquired_by_item: dict | None = None) -> None:
+    """Fold one wave's sequencer result into the episode-level master record.
+
+    The sequencer numbers picks from 0 within each of its runs; the master re-offsets
+    ``order`` so it stays episode-global (the property every consumer of ``pick_order``
+    assumes). Blocked/unplaced/recovery bookkeeping accumulates; the final ``status`` is NOT
+    computed here — the runner decides it once, at the end, from what was planned vs placed
+    (see :func:`full_load_status`).
+
+    Args:
+        master: The episode-level accumulator.
+        wave_result: One ``TaskSequencer.run`` return value.
+        phase_index: 0-based loading-phase index stamped onto the wave's picks.
+        state: Machine state stamped onto the wave's picks.
+        wave_index: 0-based restock-wave index within the phase.
+        acquired_by_item: Optional ``{item_id: "pick" | "weld"}`` stamped per pick.
+    """
+    base = len(master.picks)
+    for p in wave_result.picks:
+        p.order += base
+        p.phase, p.phase_state, p.wave = int(phase_index), state, int(wave_index)
+        if acquired_by_item:
+            p.acquired = acquired_by_item.get(p.item_id, p.acquired)
+        master.picks.append(p)
+    master.unplaced.extend(i for i in wave_result.unplaced if i not in master.unplaced)
+    master.blocked_reasons.update(wave_result.blocked_reasons)
+    master.support_graph = wave_result.support_graph or master.support_graph
+    master.n_recoveries += wave_result.n_recoveries
+    if wave_result.status == "deadlock" and master.detail is None:
+        master.detail = f"phase {phase_index} wave {wave_index}: {wave_result.detail}"
+
+
+def full_load_status(master: EpisodeResult, *, n_planned: int,
+                     transitions_ok: bool) -> str:
+    """Episode status for a full-load run: ``cleared`` only when every planned item placed.
+
+    A failed transition degrades rather than errors — earlier phases' picks planned against
+    their own worlds and stay valid evidence — unless nothing at all was placed.
+    """
+    if master.n_placed >= n_planned and transitions_ok:
+        return "cleared"
+    if master.n_placed == 0 and not transitions_ok:
+        return "error"
+    return "partial"
 
 
 def write_episode(path: str, result: EpisodeResult, *, extra: dict | None = None) -> str:
@@ -237,4 +309,38 @@ def summarize_episodes(episodes) -> dict:
             (float(e["end_home_err_rad"]) for e in episodes
              if e.get("end_home_err_rad") is not None), default=None),
         "n_home_lerp": sum(1 for e in episodes if e.get("home_return_status") == "lerp"),
+        **_phase_extras(episodes, picks),
+    }
+
+
+def _phase_extras(episodes, picks) -> dict:
+    """Multi-phase aggregates; empty for runs of pre-v3 / single-phase records only."""
+    transitions = [t for e in episodes for t in e.get("transitions", [])]
+    by_state: dict[str, dict] = {}
+    for p in picks:
+        if p.get("phase_state") is None:
+            continue
+        c = by_state.setdefault(p["phase_state"], {"picks": 0, "success": 0})
+        c["picks"] += 1
+        c["success"] += int(bool(p.get("success")))
+    for c in by_state.values():
+        c["rate"] = round(c["success"] / c["picks"], 4) if c["picks"] else 0.0
+    # weld-acquire vs pick stay separate lines — the two rates are never summed
+    by_acquired: dict[str, dict] = {}
+    for p in picks:
+        if p.get("acquired") is None:
+            continue
+        c = by_acquired.setdefault(p["acquired"], {"picks": 0, "success": 0})
+        c["picks"] += 1
+        c["success"] += int(bool(p.get("success")))
+    for c in by_acquired.values():
+        c["rate"] = round(c["success"] / c["picks"], 4) if c["picks"] else 0.0
+    if not transitions and not by_state and not by_acquired:
+        return {}
+    return {
+        "n_transitions": len(transitions),
+        "transition_ok_rate": (round(sum(1 for t in transitions if t.get("ok"))
+                                     / len(transitions), 4) if transitions else None),
+        "by_phase_state": by_state,
+        "by_acquired": by_acquired,
     }

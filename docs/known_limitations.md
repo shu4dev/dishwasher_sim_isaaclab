@@ -75,3 +75,38 @@ Recorded 2026-08-09 during the v4 redesign diagnostics; they constrain any futur
   front of the shell top (bays at y ≲ 0.10 measured safe, ≥ 0.126 measured capped).
 - Slots at rack y ≳ 0.14 risk the stowed upper rack's roof (y ≥ 0.200, z ≥ 0.154) through the
   cluster's lateral extent; feasibility there is yaw-dependent — measure, don't assume.
+
+## Upright drinkware does not stand reliably on the Bosch wire racks (v2, measured)
+
+The Bosch racks' OEM-derived lattice (runners at ~41 mm, crossbars at ~46 mm) is coarser
+than the scaled drinkware bases (~50-60 mm), so a cup or tumbler released upright wedges
+base-first into a wire cell roughly half the time. Release-at-goal probes
+(`scripts/setup/probe_plate_settle.py --object <cls>`, 2026-08-14, tolerances of record):
+
+| class / rack | stable | note |
+|---|---|---|
+| bowl / lower | 59/60 (98 %) | wide base spans any cell — the control |
+| tumbler / lower | 64/88 (73 %) | |
+| cup / lower | 49/82 (60 %) | |
+| cup / middle | 63/120 (53 %) | 228/300 (76 %) even anchored to wire crossings |
+
+Consequences, encoded in `capacity.MEASURED_SETTLE_RELIABILITY` (bar: 90 %): cups and
+tumblers are excluded from the certified robot load on both racks, and the middle rack —
+whose only robot-capable load was drinkware — contributes zero robot destinations (its
+`middle_out` state and scripted transition remain exercised by the episode machinery).
+The real-world fix is how humans load glasses: rim-down, which needs a flip regrasp this
+stack does not have, or the middle rack's cup shelves, which need a lean placement mode —
+both future work alongside the real-scale dish library (larger bases would also clear the
+bar). The v1 machine never hit this: its v4 rack has a ~30 mm crossbar pitch.
+
+## The loaded lower rack cannot be driven back over the door sill (v2, measured)
+
+Stowing the Bosch lower rack under load stalls: with one bowl aboard the drive settled
+176.9 mm short of stowed (phase_smoke6, 2026-08-14). Rolling OUT onto the door is downhill
+and reliable — the robot pull and every extension transition use that direction — but the
+return climb over the authored sill/runway step defeats the rack drive. Re-authoring a sill
+ramp is a `MACHINE_GEN` change (full Bosch rebake), deferred. Until then the full-load
+episode loads TOP-DOWN (`third_out` → `middle_out` → `placement`, see
+`capacity.LOADING_STATES`): every scripted transition stows a tub-rail rack or extends the
+lower rack outward, and the episode ends with the loaded machine open — consistent with the
+v0 door-locked-open semantics.

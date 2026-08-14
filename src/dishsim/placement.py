@@ -106,20 +106,37 @@ class GoalSet:
         }
 
 
-def derive_slots_from_rack(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
-    """Grid of standing slots on the lower-rack wire floor, from the cached rack geometry.
+def _floor_stand_rack_body() -> str:
+    """The rack whose floor ``floor_stand`` slots target under the ACTIVE scenario.
 
-    Method: load the rack body mesh, take its bbox in the (axis-aligned) body frame, inset by
-    ``SLOT_RIM_INSET_M`` for the rim walls, find the wire-floor top plane (low-percentile
-    z-vertices + wire diameter), and tile the interior with footprint-sized cells. Slot frames
-    inherit the rack body's orientation (the rack is axis-aligned with the machine; z stays up
-    in the base frame — asserted).
+    The rack being loaded is the EXTENDED one. With the lower rack extended — or nothing
+    extended, the stowed reference states — that is the lower rack, which keeps every v1
+    derivation (and its baked caches) byte-identical. Only a state where the middle rack is
+    the sole extended rack (Bosch ``middle_out``, the drinkware phase) targets ``E_shelf_03``:
+    the original hardcoded lower-rack read made the ``middle_out`` funnels measure "reach a
+    cup into the STOWED lower rack through the tub mouth" (1 of 56 cells, measured
+    2026-08-14) instead of the extended middle rack the state exists to load.
+    """
+    if abs(config.RACK_LOWER_EXT_M) < 1e-6 and abs(config.RACK_UPPER_EXT_M) > 1e-6:
+        return "E_shelf_03"
+    return "E_shelf_1_04"
+
+
+def derive_slots_from_rack(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
+    """Grid of standing slots on the loaded rack's wire floor, from the cached rack geometry.
+
+    Method: load the rack body mesh (:func:`_floor_stand_rack_body` — the extended rack),
+    take its bbox in the (axis-aligned) body frame, inset by ``SLOT_RIM_INSET_M`` for the rim
+    walls, find the wire-floor top plane (low-percentile z-vertices + wire diameter), and
+    tile the interior with footprint-sized cells. Slot frames inherit the rack body's
+    orientation (the rack is axis-aligned with the machine; z stays up in the base frame —
+    asserted).
 
     Returns:
         Ordered slots (row-major over the grid), all ``source="derived"``.
     """
     manifest = load_manifest(cache_dir)
-    entry = manifest["statics"]["E_shelf_1_04"]
+    entry = manifest["statics"][_floor_stand_rack_body()]
     mesh = trimesh.load(os.path.join(cache_dir, entry["mesh"]), force="mesh")
     T_base_rack = np.array(entry["T_base_body"])
 
@@ -142,9 +159,27 @@ def derive_slots_from_rack(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]
     xs = lo[0] + (hi[0] - lo[0] - (nx - 1) * pitch) / 2.0 + np.arange(nx) * pitch
     ys = lo[1] + (hi[1] - lo[1] - (ny - 1) * pitch) / 2.0 + np.arange(ny) * pitch
 
+    # The GLASS rack's floor is not uniformly flat — slope ramps along both side walls,
+    # divider tines down the middle, cup shelves over the ramps — and its RACK_GEN entry
+    # declares the genuinely flat strips as ``open_zones``. A cell outside them passes the
+    # IK/collision goal funnel (hovering is legal anywhere) and then TIPS the released item
+    # (measured 2026-08-14: a cup released over the left ramp settled at 35 deg). The lower
+    # racks derive over the full grid exactly as before: their wire floor is flat wall to
+    # wall, and their own ``open_zones`` key belongs to the teleport fill-planner.
+    zones = None
+    if _floor_stand_rack_body() == "E_shelf_03":
+        zones = config.RACK_GEN["E_shelf_03"].get("open_zones")
+
+    def _in_flat_zone(x: float, y: float) -> bool:
+        if zones is None:
+            return True
+        return any(x0 <= x <= x1 and y0 <= y <= y1 for x0, x1, y0, y1 in zones)
+
     slots = []
     for j, y in enumerate(ys):
         for i, x in enumerate(xs):
+            if not _in_flat_zone(float(x), float(y)):
+                continue
             T_rack_slot = np.eye(4)
             T_rack_slot[:3, 3] = (x, y, floor_top_z)
             T_base_slot = T_base_rack @ T_rack_slot

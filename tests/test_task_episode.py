@@ -182,3 +182,95 @@ def test_runner_error_path_construction_is_valid():
     assert d["status"] == "error" and d["n_placed"] == 0
     assert d["detail"].startswith("RuntimeError")
     assert d["unplaced"] == ["cup_00", "cup_01", "tumbler_00"]
+
+
+# ---- schema v3: multi-phase full-load episodes ---------------------------------------------------
+
+class TestMergeWaveResults:
+    def _wave(self, *picks, status="cleared", unplaced=(), n_recoveries=0):
+        from dishsim.task.episode import EpisodeResult
+        return EpisodeResult("ep000", 0, picks=list(picks), status=status,
+                             unplaced=list(unplaced), n_recoveries=n_recoveries)
+
+    def _pick(self, item_id, order, success=True):
+        from dishsim.task.episode import PickRecord
+        return PickRecord(item_id, item_id.rsplit("_", 1)[0], order, success=success)
+
+    def test_order_is_reoffset_to_episode_global(self):
+        from dishsim.task import episode as E
+        master = E.EpisodeResult("ep000", 0)
+        E.merge_wave_results(master, self._wave(self._pick("cup_00", 0), self._pick("cup_01", 1)),
+                             phase_index=0, state="placement", wave_index=0)
+        E.merge_wave_results(master, self._wave(self._pick("fork_00", 0)),
+                             phase_index=2, state="third_out", wave_index=0)
+        assert [p.order for p in master.picks] == [0, 1, 2]
+        assert master.picks[2].phase == 2 and master.picks[2].phase_state == "third_out"
+        assert master.picks[0].wave == 0
+
+    def test_acquired_is_stamped(self):
+        from dishsim.task import episode as E
+        master = E.EpisodeResult("ep000", 0)
+        E.merge_wave_results(master, self._wave(self._pick("fork_00", 0)),
+                             phase_index=0, state="third_out", wave_index=0,
+                             acquired_by_item={"fork_00": "weld"})
+        assert master.picks[0].acquired == "weld"
+
+    def test_bookkeeping_accumulates(self):
+        from dishsim.task import episode as E
+        master = E.EpisodeResult("ep000", 0)
+        E.merge_wave_results(master, self._wave(unplaced=["cup_01"], n_recoveries=2,
+                                                status="deadlock"),
+                             phase_index=0, state="placement", wave_index=0)
+        E.merge_wave_results(master, self._wave(unplaced=["cup_01"], n_recoveries=1),
+                             phase_index=0, state="placement", wave_index=1)
+        assert master.unplaced == ["cup_01"]          # deduplicated
+        assert master.n_recoveries == 3
+        assert "wave 0" in master.detail
+
+
+class TestFullLoadStatus:
+    def _master(self, n_success):
+        from dishsim.task.episode import EpisodeResult, PickRecord
+        picks = [PickRecord(f"cup_{i:02d}", "cup", i, success=i < n_success)
+                 for i in range(3)]
+        return EpisodeResult("ep000", 0, picks=picks)
+
+    def test_cleared_needs_every_planned_item(self):
+        from dishsim.task.episode import full_load_status
+        assert full_load_status(self._master(3), n_planned=3, transitions_ok=True) == "cleared"
+        assert full_load_status(self._master(2), n_planned=3, transitions_ok=True) == "partial"
+
+    def test_transition_failure_degrades_not_errors(self):
+        from dishsim.task.episode import full_load_status
+        # phase 1 placed items, then a transition failed: partial, the picks stay evidence
+        assert full_load_status(self._master(2), n_planned=3, transitions_ok=False) == "partial"
+
+    def test_error_only_when_nothing_placed_and_transition_failed(self):
+        from dishsim.task.episode import full_load_status
+        assert full_load_status(self._master(0), n_planned=3, transitions_ok=False) == "error"
+        assert full_load_status(self._master(0), n_planned=3, transitions_ok=True) == "partial"
+
+
+class TestSummarizePhaseExtras:
+    def test_single_phase_records_add_no_extras(self):
+        from dishsim.task.episode import summarize_episodes
+        eps = [{"status": "cleared", "picks": [{"object_class": "cup", "success": True}]}]
+        out = summarize_episodes(eps)
+        assert "by_phase_state" not in out and "n_transitions" not in out
+
+    def test_mixed_v2_v3_records(self):
+        from dishsim.task.episode import summarize_episodes
+        v2 = {"status": "cleared", "picks": [{"object_class": "cup", "success": True}]}
+        v3 = {"status": "partial",
+              "picks": [{"object_class": "fork", "success": True, "phase_state": "third_out",
+                         "acquired": "weld"},
+                        {"object_class": "cup", "success": False, "phase_state": "placement",
+                         "acquired": "pick"}],
+              "transitions": [{"ok": True}, {"ok": False}]}
+        out = summarize_episodes([v2, v3])
+        assert out["n_transitions"] == 2 and out["transition_ok_rate"] == 0.5
+        assert out["by_phase_state"]["third_out"]["rate"] == 1.0
+        assert out["by_phase_state"]["placement"]["rate"] == 0.0
+        # weld vs pick stay separate lines, never summed
+        assert out["by_acquired"]["weld"]["picks"] == 1
+        assert out["by_acquired"]["pick"]["picks"] == 1

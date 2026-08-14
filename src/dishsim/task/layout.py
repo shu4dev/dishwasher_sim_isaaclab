@@ -231,6 +231,7 @@ def plan_countertop_layout(
     min_separation_m: float | None = None,
     max_resamples: int | None = None,
     stack_fraction: float | None = None,
+    occupied=(),
 ) -> tuple[list[LayoutItem], LayoutRejection]:
     """Sample a reproducible countertop layout.
 
@@ -255,6 +256,9 @@ def plan_countertop_layout(
         stack_fraction: With ``allow_stacking``, the probability that an object is deliberately
             aimed at an already-placed one rather than drawn uniformly. Defaults to
             ``config.TASK["stack_fraction"]``.
+        occupied: Footprint circles already ON the counter that this layout must clear —
+            ``(xy_w, radius_m)`` pairs. A restock wave passes the measured leftovers of the
+            previous wave here; a fresh layout leaves it empty.
 
     Returns:
         ``(items, rejection)``. ``items`` has one entry per requested class, in request order.
@@ -303,6 +307,10 @@ def plan_countertop_layout(
                 support = _stack_support(items, np.array([x, y]), r)
             else:
                 if _too_close(items, np.array([x, y]), r, sep):
+                    rej.too_close += 1
+                    continue
+                if any(float(np.linalg.norm(np.array([x, y]) - np.asarray(oxy))) < (r + orad + sep)
+                       for oxy, orad in occupied):
                     rej.too_close += 1
                     continue
 

@@ -382,3 +382,188 @@ def run_sequence(action_specs, action_runner) -> RackPhase:
         if not outcome.ok:
             break
     return phase
+
+
+#: Steady-state drive sag [m] a rack joint may show without the transition treating it as a
+#: joint it must slide (and gate): measured 14.9 mm on a lower rack parked at 0 through a
+#: long loading phase; genuine transition slides are two orders of magnitude larger.
+_DRIVE_SAG_TOL_M = 0.020
+
+
+@dataclass
+class TransitionOutcome:
+    """Result of one scripted rack-state transition.
+
+    Attributes:
+        ok: All driven joints settled within tolerance and every rider passed its slip gate.
+        from_state: Machine state the transition left.
+        to_state: Machine state the transition entered.
+        per_joint: ``{joint: {"target_m", "achieved_m", "error_m"}}`` for every driven joint.
+        item_slips: ``{item_id: {"slip_mm", "rot_deg", "ok"}}`` for every rider — slip is the
+            item's motion MINUS its rack's measured ride, so a clean passenger scores ~0.
+        stage: ``"transition-slide-fault" | "transition-rider-displaced"`` when not ok.
+        detail: Human-readable cause when not ok.
+    """
+
+    ok: bool
+    from_state: str = ""
+    to_state: str = ""
+    per_joint: dict = field(default_factory=dict)
+    item_slips: dict = field(default_factory=dict)
+    stage: str | None = None
+    detail: str | None = None
+
+    def to_json(self) -> dict:
+        return {
+            "ok": bool(self.ok), "from_state": self.from_state, "to_state": self.to_state,
+            "per_joint": {j: {k: round(float(v), 5) for k, v in d.items()}
+                          for j, d in self.per_joint.items()},
+            "item_slips": {i: {"slip_mm": round(float(d["slip_mm"]), 2),
+                               "rot_deg": round(float(d["rot_deg"]), 2),
+                               "ok": bool(d["ok"])}
+                           for i, d in self.item_slips.items()},
+            "stage": self.stage, "detail": self.detail,
+        }
+
+
+class ScriptedTransition:
+    """Rack-state change by drive ramp alone — the arm stays parked, no handle is touched.
+
+    The full-load episode's phase boundaries (lower-rack stow, middle/third extension) are
+    machine operations with nothing for the arm to do, so they run the way
+    ``capacity_fill.py`` moves racks: ramp the prismatic drive targets linearly, settle, and
+    gate on the measured result. Placed items RIDE their racks through this; the slip gates
+    (measured ride subtracted) are what says they arrived intact.
+
+    Every commanded dict is COMPLETE — one target per rack joint of the machine — because the
+    scene-side override is replace-not-merge and falls back to the BUILD scenario's targets
+    for any joint omitted: a phase-2 dict without the lower joint would silently drive the
+    loaded lower rack back out mid-phase. On success the final dict stays commanded for the
+    rest of the episode (never ``None`` — trap 2).
+
+    Args:
+        motion: The motion layer (its ``set_rack_target``/``hold`` do the work; no planning).
+        measure_exts: Callable returning ``{joint: measured extension [m]}`` for all rack
+            joints. Live simulator state, injected.
+        measure_items: Callable returning ``{item_id: T_base_obj}`` (shape [4, 4]) for the
+            current riders, or ``None`` to skip slip gating.
+        measure_body_pos: Callable ``body_name -> position`` (shape [3], same frame as
+            ``measure_items``) for the measured rack ride, or ``None``.
+        home_q: Arm configuration to hold throughout, shape [6] [rad].
+        steps_per_meter: Ramp density [steps/m]; default derives the calibrated slide speed
+            from ``RACK_SLIDE_STEPS`` over the machine's largest travel (1200 steps/m on
+            both machines).
+        settle_steps: Hold steps after each ramp segment.
+        on_step: Optional per-physics-step callback (media capture).
+    """
+
+    def __init__(self, motion, *, measure_exts, measure_items=None, measure_body_pos=None,
+                 home_q=None, steps_per_meter: float | None = None, settle_steps: int = 240,
+                 on_step=None) -> None:
+        self.motion = motion
+        self.measure_exts = measure_exts
+        self.measure_items = measure_items
+        self.measure_body_pos = measure_body_pos
+        self.home_q = None if home_q is None else np.asarray(home_q, dtype=float)
+        if steps_per_meter is None:
+            span = max(hi - lo for lo, hi in config.RACK_TRAVEL_LIMITS_BY_JOINT_M.values())
+            steps_per_meter = config.RACK_SLIDE_STEPS / span
+        self.steps_per_meter = float(steps_per_meter)
+        self.settle_steps = int(settle_steps)
+        self.on_step = on_step
+
+    def run(self, targets_seq: list[dict], *, from_state: str, to_state: str,
+            riders: dict | None = None, slip_gates: dict | None = None) -> TransitionOutcome:
+        """Ramp through ``targets_seq`` (each dict complete), settle, gate.
+
+        Args:
+            targets_seq: Complete joint-target dicts in execution order (see
+                :func:`dishsim.task.phases.transition_targets`).
+            from_state: Name of the state being left (record keeping).
+            to_state: Name of the state being entered.
+            riders: ``{item_id: rack_body_name}`` for every placed item that rides.
+            slip_gates: ``{item_id: (slip_tol_m, rot_tol_deg | None)}``.
+
+        Returns:
+            A :class:`TransitionOutcome`. On any failure the LAST commanded dict stays
+            commanded — rolling a half-moved loaded rack back is worse than holding it.
+        """
+        m = self.motion
+        out = TransitionOutcome(ok=False, from_state=from_state, to_state=to_state)
+        riders = dict(riders or {})
+        slip_gates = dict(slip_gates or {})
+        joints = sorted(config.RACK_JOINT_TARGETS)
+        for i, targets in enumerate(targets_seq):
+            missing = [j for j in joints if j not in targets]
+            if missing:
+                raise ValueError(f"transition dict {i} missing rack joints {missing} — "
+                                 f"every dict must be complete (replace-not-merge override)")
+
+        items_before = dict(self.measure_items()) if self.measure_items else {}
+        bodies = sorted(set(riders.values()))
+        body_before = ({b: np.asarray(self.measure_body_pos(b), dtype=float) for b in bodies}
+                       if self.measure_body_pos else {})
+
+        for targets in targets_seq:
+            current = {j: float(self.measure_exts()[j]) for j in joints}
+            # "Driven" means the transition genuinely SLIDES the joint. The force-type rack
+            # drives sag from their targets at equilibrium (a lower rack held at 0 measured
+            # 14.9 mm proud after a 40-minute loading phase — the outward direction is
+            # downhill), and gating a sag-correction joint against the slide tolerance fails
+            # transitions that moved nothing. Real slides are 0.5 m; sag is < ~20 mm.
+            driven = {j: t for j, t in targets.items()
+                      if abs(t - current[j]) > _DRIVE_SAG_TOL_M}
+            travel = max((abs(t - current[j]) for j, t in driven.items()), default=0.0)
+            n_steps = max(int(np.ceil(travel * self.steps_per_meter)), 1)
+            for k in range(1, n_steps + 1):
+                frac = k / n_steps
+                cmd = {j: current[j] + (targets[j] - current[j]) * frac for j in joints}
+                m.set_rack_target(cmd)
+                m.hold(1, phase="transition-slide", arm_q=self.home_q, on_step=self.on_step)
+            m.set_rack_target({j: float(targets[j]) for j in joints})
+            m.hold(self.settle_steps, phase="transition-settle", arm_q=self.home_q,
+                   on_step=self.on_step)
+            measured = self.measure_exts()
+            for j in driven:
+                err = abs(float(measured[j]) - float(targets[j]))
+                out.per_joint[j] = {"target_m": float(targets[j]),
+                                    "achieved_m": float(measured[j]), "error_m": err}
+                # loaded-slide tolerance, the capacity_fill closability bar
+                if err > 2.0 * config.RACK_SLIDE_TOL_M:
+                    out.stage = "transition-slide-fault"
+                    out.detail = (f"{j} settled {err * 1e3:.1f} mm off "
+                                  f"{targets[j]:+.3f} m under load "
+                                  f"(tol {2 * config.RACK_SLIDE_TOL_M * 1e3:.0f} mm)")
+                    return out
+
+        if self.measure_items and items_before:
+            items_after = dict(self.measure_items())
+            body_after = {b: np.asarray(self.measure_body_pos(b), dtype=float)
+                          for b in bodies} if self.measure_body_pos else {}
+            bad = []
+            for item_id, T0 in items_before.items():
+                T1 = items_after.get(item_id)
+                if T1 is None:
+                    continue
+                ride = np.zeros(3)
+                body = riders.get(item_id)
+                if body in body_before and body in body_after:
+                    ride = body_after[body] - body_before[body]
+                dp = np.asarray(T1)[:3, 3] - np.asarray(T0)[:3, 3] - ride
+                R = np.asarray(T0)[:3, :3].T @ np.asarray(T1)[:3, :3]
+                rot = float(np.degrees(np.arccos(np.clip((np.trace(R) - 1.0) / 2.0, -1, 1))))
+                slip_tol, rot_tol = slip_gates.get(item_id, (0.010, 10.0))
+                ok = float(np.linalg.norm(dp)) <= slip_tol and \
+                    (rot_tol is None or rot <= rot_tol)
+                out.item_slips[item_id] = {"slip_mm": float(np.linalg.norm(dp)) * 1e3,
+                                           "rot_deg": rot, "ok": ok}
+                if not ok:
+                    bad.append(item_id)
+            if bad:
+                out.stage = "transition-rider-displaced"
+                out.detail = (f"{len(bad)} rider(s) displaced beyond their slip gate: "
+                              f"{sorted(bad)}")
+                return out
+
+        out.ok = True
+        return out

@@ -105,3 +105,57 @@ basket bays + 5 floor cells, with bowl cells drawn from the floor cells, so a mi
 them. The floor placements are genuine countertop picks. For contrast, `capacity_fill.py`
 *teleports* 29 items in and 27 settle stably: the rack's own capacity is still larger than what
 this arm can reach into it.
+
+## Full-load episodes (Bosch 800, v2)
+
+A full load spans machine states — the lower rack loads in `placement`, the middle rack in
+`middle_out`, the third rack in `third_out` — so a FULL-LOAD episode is an ordered list of
+loading PHASES with a **scripted rack transition** between them (drive-target ramps, arm parked
+at HOME; the robot only picks and places). Within a phase the counter is stocked in restock
+WAVES: as many items as fit the reachable spawn band (`TASK["wave_fill_factor"]` of its area),
+cleared, then restocked.
+
+```bash
+# 1. plan the reachable full load (venv, no Kit) — writes the plan artifact + reach figure
+scripts/setup/plan_full_load.py --machine bosch800 --placement side_winner
+
+# 2. run it (ask before launching: the certified 22-item load is a 1.5-2.5 h run; --cap in
+#    the planner produces a smaller demonstration load, e.g. --cap fork=8,bowl=4)
+scripts/run_kit.sh scripts/experiment/run_task.py --headless --enable_cameras \
+    --machine bosch800 --placement side_winner --full_load --seed 1 \
+    --run_id bosch_full_load_s1 --orbit
+
+# debug composition without a plan (slots assigned at runtime):
+scripts/run_kit.sh scripts/experiment/run_task.py --headless --enable_cameras \
+    --machine bosch800 --placement side_winner \
+    --phases "middle_out:cup=1;third_out:fork=2" --seed 1 --run_id phase_smoke
+```
+
+**What "full load = N" means** (`src/dishsim/capacity.py`): a slot counts only if its baked
+goal set is non-empty (reachable), the load is grown one item at a time with every earlier
+item's body added to the collision world (the *same* re-filter `primitives._place` runs live,
+so the planned N predicts the runtime funnel), and a class may only ride a rack through a
+transition if its worst-case tolerance pose clears the overhead geometry by ≥ 15 mm
+(`capacity.z_budget_clearance_m` — measured: a middle-rack tumbler misses the third rack's
+underside by 15.8 mm, a cup clears by 20.6 mm, so the middle rack takes cups only).
+
+Mechanics worth knowing before touching the code:
+
+- **Transition target dicts are COMPLETE** (every rack joint in every dict): the scene-side
+  override is replace-not-merge and falls back to the BUILD scenario's targets for any joint
+  omitted — a phase-2 dict without the lower joint would silently drive the loaded lower rack
+  back out. Structural, tested (`tests/test_task_phases.py`).
+- **Riders are gated**: per placed item, slip (net of the rack's measured ride) must stay
+  within `TASK["transition_slip_gates"]` per effective mode; the rack itself must settle
+  within 2× `RACK_SLIDE_TOL_M` under load.
+- **A failed transition DEGRADES, it does not error**: earlier phases' picks planned against
+  their own worlds and remain valid evidence; remaining phases are skipped, the episode
+  reports `partial` (an `error` needs a failed transition AND nothing placed).
+- **Artifacts flush incrementally**: the episode JSON is atomically rewritten after every wave
+  and phase, trials at each phase end, and the trajectory recorder is segmented per phase
+  (`ep000_p0.npz`, …) so the 40k-step buffer never overflows on a 60-90k-step episode.
+- **Waves park off-workspace**: every phase's prims exist from scene build, parked at
+  x ≈ −2 m on the ground (the capacity_fill idiom), and teleport onto the counter per wave
+  with the arm verified at HOME. Contact filters pair items within a phase only.
+- `run_task.py` now writes a `manifest.json` (run id, argv, per-state config hashes, plan
+  path) in every mode — episode runs previously wrote none and Phase 3 lost provenance.
