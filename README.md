@@ -239,6 +239,22 @@ x +0.475, y −0.525, z 0.400, yaw +101.25°). The same two flags work on every 
 (`build_state`, `extract_geometry`, `parity_check`, `goal_configs`, `base_pose_sweep`).
 Bosch numbers and their provenance: [docs/bosch800_source_data.md](docs/bosch800_source_data.md).
 
+**One-command bring-up** — everything in §2.2–2.3 (venv, pinned deps, editable install,
+archive restore + cache validation) in one idempotent script:
+
+```bash
+scripts/tools/bootstrap.sh          # fresh clone -> experiments in ~5 minutes
+```
+
+The division of labor this enables is deliberate: everything expensive **runs once and ships
+in the archive** — geometry extraction, CoACD decomposition, parity checks, goal funnels
+(~2.5 h of Kit across both machines), the base-pose sweep, the capacity plan, the settle
+probes. What a clone actually iterates on — **motion-planning experiments** (`run_trials.py`,
+`run_task.py`, planner/seed/cost sweeps, `compute_metrics.py`) — bakes nothing and plans
+per-call against the restored caches. If a run asks you to bake, either the archive is stale
+for your config or you changed a hashed value (see §2.4); baking during an experiment sweep
+is always a smell.
+
 ### 2.4 Rebaking after a config change
 
 The shipped caches serve reproduction as-is. If you change any hashed config value (base

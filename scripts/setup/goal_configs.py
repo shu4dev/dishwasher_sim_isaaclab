@@ -36,6 +36,12 @@ parser.add_argument("--placement", type=str, default=None,
 parser.add_argument("--machine", type=str, default=None,
                     help="Machine name (see config.MACHINES); default: the v1 baseline.")
 parser.add_argument("--object", type=str, default="mug", help="Carried object class (see config.OBJECTS).")
+parser.add_argument("--max_store", type=int, default=None,
+                    help="Cap the goal configs STORED per slot (the funnel still measures the "
+                         "full acceptance for the feasibility record). Reachable-rich states "
+                         "accept thousands of wrap-expanded configs per slot while the runner "
+                         "consumes at most GOALS_PER_PLAN=64; 256 keeps a 4x margin and cuts "
+                         "the artifact ~10x. Default: store everything (legacy bakes).")
 parser.add_argument("--scenario", type=str, default=None,
                     help="Rack-state scenario (default: the placement state scripts/experiment/run_trials.py reads).")
 AppLauncher.add_app_launcher_args(parser)
@@ -144,6 +150,11 @@ def main() -> None:
     goal_sets = []
     for s in slots:
         gs = placement.goal_configs(s, world, rng)
+        if args_cli.max_store is not None and len(gs.configs) > args_cli.max_store:
+            # deterministic thinning across the whole accepted set (not a prefix — configs
+            # arrive grouped by pose sample, and a prefix would keep one pose's wraps only)
+            keep = np.linspace(0, len(gs.configs) - 1, args_cli.max_store).astype(int)
+            gs.configs = np.asarray(gs.configs)[keep]
         goal_sets.append(gs)
         print(f"[INFO] slot {s.slot_id}: {len(gs.configs)} goal configs "
               f"(funnel: {gs.n_pose_samples} poses -> {gs.n_ik_solutions} IK "
