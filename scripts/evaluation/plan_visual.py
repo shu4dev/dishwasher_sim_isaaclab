@@ -117,18 +117,7 @@ JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "
 
 T_W3_TCP = make_T(config.T_WRIST3_TCP_POS, config.T_WRIST3_TCP_QUAT)
 
-FAILURES: list[str] = []
-
-
-def check(name: str, ok: bool, detail: str = "") -> None:
-    print(f"[{'OK' if ok else 'FAIL'}] {name}{': ' + detail if detail else ''}")
-    if not ok:
-        FAILURES.append(name)
-
-
-def finish() -> None:
-    print(f"[RESULT] {'PASS' if not FAILURES else 'FAIL: ' + ', '.join(FAILURES)}")
-    raise SystemExit(0 if not FAILURES else 1)
+from dishsim.checks import FAILURES, check, finish  # noqa: E402
 
 
 def style_axes(ax) -> None:
@@ -540,7 +529,7 @@ def main() -> None:
     check("planner solved within budget", res.status == "solved",
           f"{res.status} after {res.plan_time_s:.2f}s")
     if dense is not None:
-        col = world.in_collision_batch(dense[::5])
+        col = np.array([world.in_collision(q) for q in dense[::5]], dtype=bool)
         check("executed path re-validates collision-free", not col.any(),
               f"{len(col)} configs checked")
     check("debug capture non-empty", dbg.n_checks > 0, f"{dbg.n_checks} checks")

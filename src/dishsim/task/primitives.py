@@ -30,6 +30,7 @@ import numpy as np
 
 from .. import config, placement
 from ..transforms import T_inv, make_T
+from .grasp import find_grasp
 from .sequencer import GraspCandidate, PickOutcome, TaskItem
 
 
@@ -157,15 +158,10 @@ class PickPlace:
         self.on_step = on_step
         self._n_calls = 0
         self.n_replans = 0
-        #: Optional Stage C grasp oracle; falls back to the built-in single-yaw check.
+        #: Optional Stage C grasp oracle; falls back to a single-yaw ``find_grasp`` search.
         self.grasp_finder = None
 
     # ---- grasp candidates ---------------------------------------------------------------------
-
-    #: Points sampled along the descent, as fractions of the hover-to-grasp travel. The last
-    #: stretch is deliberately excluded: near the grasp the pads are *inside* the object's
-    #: inflated hull by design, so any check there would veto every valid grasp.
-    DESCENT_SAMPLES = (0.0, 0.25, 0.5, 0.75)
 
     def grasp_candidate(self, item: TaskItem) -> GraspCandidate | None:
         """A collision-free way to pick ``item`` in the CURRENT world, or ``None``.
@@ -176,49 +172,12 @@ class PickPlace:
         perfectly reachable while the forearm sweeps through the object next to it on the way
         down, which shows up as a 56 N contact mid-descent rather than as an unreachable pose.
 
-        The object being picked is temporarily removed from the world for the check. It must be:
-        it is registered as an obstacle like every other item, and an object cannot be allowed to
-        veto its own grasp.
-
-        Stage C extends this with a yaw sweep over alternative grasps and the recovery ladder;
-        the state-dependence is already here.
+        Stage C installs :attr:`grasp_finder` (yaw sweep + rejection funnel + recovery ladder);
+        without one, the nominal-yaw slice of the same search runs.
         """
         if self.grasp_finder is not None:
             return self.grasp_finder(item)  # Stage C: yaw sweep + rejection funnel
-        prof = self.profiles[item.object_class]
-        T_obj = np.asarray(item.T_base_obj)
-        T_grasp = T_obj @ T_inv(prof.T_tcp_obj)
-        T_hover = T_grasp.copy()
-        T_hover[2, 3] += config.PICK_HOVER_M
-
-        had_obstacle = self.motion.world.has_object(item.item_id)
-        if had_obstacle:
-            self.motion.clear_obstacle(item.item_id)
-        try:
-            sols = self.motion.reachable(T_hover, q_seed=self.motion.current_q())
-            if len(sols) == 0:
-                return None
-            q = self._descent_clear(T_hover, T_grasp, sols)
-        finally:
-            if had_obstacle:
-                self.motion.set_obstacle(item.item_id, prof.pieces, T_obj)
-        if q is None:
-            return None
-        return GraspCandidate(
-            item_id=item.item_id, object_class=item.object_class,
-            T_base_obj=T_obj, T_base_grasp=T_grasp, grasp_q=q,
-        )
-
-    def _descent_clear(self, T_hover, T_grasp, hover_sols):
-        """First hover configuration whose whole descent stays collision-free, or ``None``."""
-        for q_hover in hover_sols:
-            seg = self.motion.line_configs(T_hover, T_grasp, len(self.DESCENT_SAMPLES) + 2, q_hover)
-            if seg is None:
-                continue
-            n_check = int(round(self.DESCENT_SAMPLES[-1] * (len(seg) - 1))) + 1
-            if not any(self.motion.world.in_collision(qq) for qq in seg[:n_check]):
-                return q_hover
-        return None
+        return find_grasp(item, self.profiles[item.object_class], self.motion, n_yaws=1)[0]
 
     # ---- the pick-and-place -------------------------------------------------------------------
 

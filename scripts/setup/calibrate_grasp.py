@@ -106,13 +106,7 @@ elif config.GRASP_TCP_OBJ_POS is None:
 from dishsim import scene as dscene  # noqa: E402
 from dishsim.media import CameraRig, VideoWriter  # noqa: E402
 
-FAILURES: list[str] = []
-
-
-def check(name: str, ok: bool, detail: str = "") -> None:
-    print(f"[{'OK' if ok else 'FAIL'}] {name}{': ' + detail if detail else ''}")
-    if not ok:
-        FAILURES.append(name)
+from dishsim.checks import FAILURES, check, finish  # noqa: E402
 
 
 def main() -> None:
@@ -405,9 +399,7 @@ def main() -> None:
     if args_cli.verify:
         print("[INFO] verify mode: frozen constants gated above — config.py and "
               "docs/grasp_calibration.md untouched")
-        print(f"[RESULT] {'PASS' if not FAILURES else 'FAIL: ' + ', '.join(FAILURES)}")
-        if FAILURES:
-            raise SystemExit(1)
+        finish()
         return
 
     doc = os.path.join(PROJECT_ROOT, "docs", "grasp_calibration.md")
@@ -436,9 +428,7 @@ def main() -> None:
     print(f"       GRIP_FORCE_MIN_N = {band_lo}")
     print(f"       GRIP_FORCE_MAX_N = {band_hi}")
 
-    print(f"[RESULT] {'PASS' if not FAILURES else 'FAIL: ' + ', '.join(FAILURES)}")
-    if FAILURES:
-        raise SystemExit(1)
+    finish()
 
 
 if __name__ == "__main__":

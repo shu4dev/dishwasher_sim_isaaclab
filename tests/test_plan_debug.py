@@ -18,22 +18,10 @@ from dishsim.planners import PlanDebug, make_planner
 from dishsim.planners.ompl_base import _coords_from_graphml
 from dishsim.ur5e_kin import JOINT_LIMITS
 
+from conftest import FreeWorld, WallWorld
+
 START = np.array(config.HOME_Q)
 FREE_GOALS = np.array([START + [0.4, 0.2, -0.2, 0.3, -0.3, 0.5], START + [-0.3, 0.1, 0.2, -0.2, 0.2, -0.4]])
-
-
-class FreeWorld:
-    """Stub collision world: everything is valid."""
-
-    def in_collision(self, q):
-        return False
-
-
-class WallWorld:
-    """Joint-space slab: q1 in (-1.2, -0.8) is blocked unless q0 > 0.5 (forces a detour)."""
-
-    def in_collision(self, q):
-        return (-1.2 < q[1] < -0.8) and (q[0] <= 0.5)
 
 
 def test_debug_capture_free_world():

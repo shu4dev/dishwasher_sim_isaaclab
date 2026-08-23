@@ -172,10 +172,6 @@ class MotionService:
         keep = [q for q in sols if not self.world.in_collision(q)]
         return np.array(keep) if keep else np.empty((0, 6))
 
-    def segment_valid(self, path_q) -> bool:
-        """Is every waypoint of a joint path collision-free in the current world?"""
-        return not any(self.world.in_collision(np.asarray(q, dtype=float)) for q in np.asarray(path_q))
-
     def line_configs(self, T_from: np.ndarray, T_to: np.ndarray, n: int, q_seed) -> np.ndarray | None:
         """Branch-continuous IK along a straight TCP translation (rotation held).
 
@@ -342,10 +338,6 @@ class MotionService:
         """Drop an obstacle if present; a no-op when the key is unknown."""
         if self.world.has_object(key):
             self.world.remove_object(key)
-
-    def obstacles(self) -> list[str]:
-        """Keys of the currently registered free obstacles."""
-        return self.world.object_names()
 
     def attach_payload(self, key: str, pieces, T_wrist3_obj: np.ndarray) -> None:
         """Make a payload ride the wrist for planning purposes.

@@ -105,9 +105,6 @@ class TrajectoryRecorder:
     weld: bool = field(default=False, init=False)
     _n: int = field(default=0, init=False)
 
-    def __len__(self) -> int:
-        return self._n
-
     def begin(self, scene, sim, meta: dict, object_keys: list | None = None) -> None:
         """Start recording from the current scene state (call after the trial reset settles).
 

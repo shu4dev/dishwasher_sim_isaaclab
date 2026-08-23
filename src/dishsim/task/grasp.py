@@ -34,7 +34,7 @@ so :class:`GraspFunnel` mirrors what :class:`dishsim.placement.GoalSet` records 
 generation: how many candidates were tried, how many died at IK, and how many at collision.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -52,7 +52,6 @@ class GraspFunnel:
     n_hover_blocked: int = 0
     n_descent_blocked: int = 0
     accepted_yaw_deg: float | None = None
-    tried_yaw_deg: list = field(default_factory=list)
 
     @property
     def found(self) -> bool:
@@ -129,7 +128,6 @@ def find_grasp(item, profile, motion, *, n_yaws: int | None = None,
     try:
         for yaw_deg in yaw_sweep(n_yaws):
             funnel.n_candidates += 1
-            funnel.tried_yaw_deg.append(float(yaw_deg))
             T_grasp = T_obj @ _yaw_about_object_axis(yaw_deg) @ T_inv(profile.T_tcp_obj)
             T_hover = T_grasp.copy()
             T_hover[2, 3] += config.PICK_HOVER_M

@@ -18,7 +18,6 @@ after any prologue has already run.
 """
 
 import json
-import os
 from dataclasses import dataclass, field
 
 import numpy as np

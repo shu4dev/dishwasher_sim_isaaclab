@@ -25,10 +25,9 @@ from dishsim.geometry import config_hash
 BASELINE = config.MACHINE_BASELINE_NAME  # "artvip_compact"
 BOSCH = "bosch800"
 
+from conftest import needs_cache
+
 MANIFEST = os.path.join(config.CACHE_DIR, "scene_state.json")
-needs_cache = pytest.mark.skipif(
-    not os.path.exists(MANIFEST), reason="baked collision cache not present"
-)
 
 #: base-placement globals rewritten by apply_base_placement + the scenario-owned targets;
 #: together with config._MACHINE_MUTABLE this is every global the selector touches.

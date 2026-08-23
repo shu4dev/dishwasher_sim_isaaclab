@@ -56,7 +56,6 @@ DOOR_BAND_DEG = 5.0  # v0 USD clamps door limits to [open - band, open]
 # gravity and under +8 N*m in the joint_report door test, despite the authored 90 deg limit).
 # Init at 89.0 so the settle transient is tiny; gravity presses the panel into the stop.
 DOOR_INIT_RAD = math.radians(89.0)
-DOOR_REST_DEG = 89.05  # measured rest angle at the stop
 RACK_LOWER_EXT_M = -0.20  # PrismaticJoint_dishwasher_2_down: 0 = stowed, -0.2 = fully out
 RACK_UPPER_EXT_M = -0.20  # baseline both_out: both racks fully extended
 RACK_JOINT_TARGETS = {
@@ -406,13 +405,6 @@ CAMERAS = {
 # unreadable. Widening the lens instead keeps the shot close: at 15 mm (vFOV 42.9 deg) the same
 # sphere fits from 2.76 m.
 CAMERA_LENS_DEFAULT = {"focal_length": 24.0, "horizontal_aperture": 20.955}
-CAMERA_LENS: dict[str, dict] = {}  # per-camera overrides; missing names use the default
-
-
-def camera_lens(name: str) -> dict:
-    """Lens parameters for a camera, falling back to :data:`CAMERA_LENS_DEFAULT`."""
-    return {**CAMERA_LENS_DEFAULT, **CAMERA_LENS.get(name, {})}
-
 
 # The episode camera: a single wide view that holds the countertop AND the machine for the whole
 # episode, so the counter's state is visible while the robot works. Merged into the rig only by
@@ -768,7 +760,6 @@ RACK_SLIDE_STEPS = 240  # 4 s at SIM_DT for the 0.2 m travel
 RACK_HANDLE_APERTURE_RAD = 0.70  # near-closed pinch around the 3.6 mm handle rod (pull)
 RACK_PUSH_APERTURE_RAD = 0.78  # closed-fist contact for push
 RACK_SLIDE_TOL_M = 0.005  # the rack must settle within this of the action target
-RACK_TRACK_TOL_M = 0.020  # max TCP-vs-handle tracking error during the slide
 RACK_APPROACH_HOVER_M = 0.08  # planned pre-engage TCP offset above/behind the handle
 # Min planned clearance between distal ARM links and the MOVING rack during the slide [m].
 # The drive-synchronized pull tracks with speed-dependent lag (measured on the Bosch 560 mm
@@ -1589,8 +1580,9 @@ MACHINE_PLACEMENT_MODE_OVERRIDES: dict[str, dict[str, str]] = {
 def reference_class() -> str:
     """Class whose caches carry the machine-only worlds (rack-action gates, empty-hand
     picks). v1: the frozen mug. Bosch: the cup — the legacy Y-up mug's pinch gate fails
-    extraction away from the frozen v1 base reference (measured 2026-08-10; see
-    base_sweep._reference_class for the numbers), so it sits out of v2 studies.
+    extraction away from the frozen v1 base reference (measured 2026-08-10: pad force
+    0.81 N at two different shifted references, in-band at (0, 0, 0.25); cup/tumbler seat
+    correctly everywhere), so it sits out of v2 studies until root-caused.
     """
     return "cup" if MACHINE == "bosch800" else "mug"
 

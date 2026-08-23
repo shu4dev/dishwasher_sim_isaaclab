@@ -68,13 +68,7 @@ from dishsim.media import CameraRig, VideoWriter  # noqa: E402
 from dishsim.transforms import T_inv, make_T, rot_angle_deg  # noqa: E402
 from dishsim.ur5e_kin import fk_wrist3  # noqa: E402
 
-FAILURES: list[str] = []
-
-
-def check(name: str, ok: bool, detail: str = "") -> None:
-    print(f"[{'OK' if ok else 'FAIL'}] {name}{': ' + detail if detail else ''}")
-    if not ok:
-        FAILURES.append(name)
+from dishsim.checks import FAILURES, check, finish  # noqa: E402
 
 
 def body_pose_np(articulation, body_name: str) -> tuple[np.ndarray, np.ndarray]:
@@ -490,9 +484,7 @@ def main() -> None:
         if rig is None:
             print("[WARN] cameras disabled — no media produced (run with --enable_cameras)")
 
-    print(f"[RESULT] {'PASS' if not FAILURES else 'FAIL: ' + ', '.join(FAILURES)}")
-    if FAILURES:
-        raise SystemExit(1)
+    finish()
 
 
 if __name__ == "__main__":

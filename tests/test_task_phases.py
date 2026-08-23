@@ -20,15 +20,6 @@ from dishsim import config
 from dishsim.task import phases
 
 
-@pytest.fixture
-def bosch():
-    config.apply_machine("bosch800")
-    config.apply_base_placement("side_winner")
-    yield
-    config.apply_machine(config.MACHINE_BASELINE_NAME)
-    config.apply_scenario("both_out")  # apply_machine keeps a surviving scenario name
-
-
 class TestTransitionTargets:
     def test_every_dict_contains_every_rack_joint(self, bosch):
         joints = set(phases.state_joint_targets("placement"))
