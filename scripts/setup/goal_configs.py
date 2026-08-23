@@ -83,13 +83,7 @@ from dishsim.media import CameraRig, contact_sheet  # noqa: E402
 from dishsim.transforms import T_inv, T_to_pos_quat, make_T  # noqa: E402
 from dishsim.ur5e_kin import ik_wrist3_all  # noqa: E402
 
-FAILURES: list[str] = []
-
-
-def check(name: str, ok: bool, detail: str = "") -> None:
-    print(f"[{'OK' if ok else 'FAIL'}] {name}{': ' + detail if detail else ''}")
-    if not ok:
-        FAILURES.append(name)
+from dishsim.checks import FAILURES, check, finish  # noqa: E402
 
 
 def render_slot_detection(slots, out_png: str) -> None:
@@ -191,9 +185,7 @@ def main() -> None:
 
     if not args_cli.enable_cameras:
         print("[WARN] cameras disabled — no contact sheets (run with --enable_cameras)")
-        print(f"[RESULT] {'PASS' if not FAILURES else 'FAIL: ' + ', '.join(FAILURES)}")
-        if FAILURES:
-            raise SystemExit(1)
+        finish()
         return
 
     # ---- Kit pass: pose the robot and shoot contact sheets --------------------------------
@@ -271,9 +263,7 @@ def main() -> None:
         out = contact_sheet(images, labels, os.path.join(args_cli.out_dir, "rejected_sheet.png"), cols=3)
         print(f"[INFO] rejected sheet: {out} ({len(rejected)} configs)")
 
-    print(f"[RESULT] {'PASS' if not FAILURES else 'FAIL: ' + ', '.join(FAILURES)}")
-    if FAILURES:
-        raise SystemExit(1)
+    finish()
 
 
 if __name__ == "__main__":

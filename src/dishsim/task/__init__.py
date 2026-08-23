@@ -21,14 +21,3 @@ package may not import task or scene modules, and :mod:`dishsim.task.motion` may
 object registry. Anything the motion layer is told about an object arrives as raw geometry
 (convex pieces plus a transform) under a caller-chosen opaque key.
 """
-
-from .cost import available_costs, make_cost
-from .layout import LayoutItem, LayoutRejection, plan_countertop_layout
-
-__all__ = [
-    "LayoutItem",
-    "LayoutRejection",
-    "available_costs",
-    "make_cost",
-    "plan_countertop_layout",
-]

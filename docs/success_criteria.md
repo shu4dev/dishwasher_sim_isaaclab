@@ -221,7 +221,7 @@ counted per episode as `n_replans`.
 | Goal slots, per type | `TASK["type_slots"]` — ordered slot NAMES | — |
 | Goal slots, per mode | `TASK["slot_pools"]` — slot ids | — |
 | Episode video camera | `TASK["video_camera"]`, `EPISODE_CAMERA` | `--video_camera` |
-| Camera lens | `CAMERA_LENS`, `CAMERA_LENS_DEFAULT` | — |
+| Camera lens | `CAMERA_LENS_DEFAULT` | — |
 | Pick-order heuristic | `TASK["cost_fn"]` | `--cost_fn` |
 | Slot clearance | `TASK["slot_separation_margin_m"]` — 10 mm; **this is what caps the load at 2** | — |
 | "Already home" tolerance | `TASK["home_tol_rad"]` | — |

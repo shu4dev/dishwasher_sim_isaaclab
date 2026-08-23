@@ -10,23 +10,13 @@ See :mod:`dishsim.planners.registry` for how to add one.
 """
 
 from .base import PlanDebug, Planner, PlanResult
-from .bit_star import BITStarPlanner
-from .ompl_base import OMPLPlanner
-from .prm import PRMPlanner
 from .registry import PLANNERS, available, make_planner
-from .rrt_connect import RRTConnectPlanner
-from .rrt_star import RRTStarPlanner
 
 __all__ = [
     "PLANNERS",
-    "BITStarPlanner",
-    "OMPLPlanner",
-    "PRMPlanner",
     "PlanDebug",
     "PlanResult",
     "Planner",
-    "RRTConnectPlanner",
-    "RRTStarPlanner",
     "available",
     "make_planner",
 ]

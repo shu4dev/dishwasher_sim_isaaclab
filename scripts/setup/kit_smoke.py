@@ -48,13 +48,7 @@ from isaaclab_physx.physics import PhysxCfg
 
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
-FAILURES: list[str] = []
-
-
-def check(name: str, ok: bool, detail: str = "") -> None:
-    print(f"[{'OK' if ok else 'FAIL'}] {name}{': ' + detail if detail else ''}")
-    if not ok:
-        FAILURES.append(name)
+from dishsim.checks import FAILURES, check, finish  # noqa: E402
 
 
 def test_imports() -> None:
@@ -174,9 +168,7 @@ def main() -> None:
     )
     check("video frames non-black throughout", min(stds) > 5.0, f"min std {min(stds):.1f}")
 
-    print(f"[RESULT] {'PASS' if not FAILURES else 'FAIL: ' + ', '.join(FAILURES)}")
-    if FAILURES:
-        raise SystemExit(1)
+    finish()
 
 
 if __name__ == "__main__":

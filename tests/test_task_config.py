@@ -252,14 +252,8 @@ def test_empty_slot_list_is_handled():
 
 
 def test_the_default_lens_reproduces_the_previous_hardcoded_optics():
-    lens = config.camera_lens("front")
+    lens = config.CAMERA_LENS_DEFAULT
     assert lens["focal_length"] == 24.0 and lens["horizontal_aperture"] == 20.955
-
-
-def test_every_configured_camera_resolves_a_lens():
-    for name in config.CAMERAS:
-        lens = config.camera_lens(name)
-        assert lens["focal_length"] > 0 and lens["horizontal_aperture"] > 0
 
 
 def _vfov_deg(lens, hw=config.CAMERA_HW):
@@ -319,7 +313,7 @@ def test_the_episode_camera_is_not_needlessly_far_back():
 def test_the_old_front_camera_demonstrably_crops_the_scene():
     """Guards the diagnosis itself: `front` is the view that cropped the countertop out."""
     eye, target = config.CAMERAS["front"]
-    u, v = _frame_fractions(eye, target, config.camera_lens("front"))
+    u, v = _frame_fractions(eye, target, config.CAMERA_LENS_DEFAULT)
     assert max(u, v) > 1.0, "front no longer crops — the reported problem has changed"
 
 

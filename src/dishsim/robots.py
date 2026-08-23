@@ -171,11 +171,6 @@ DISHWASHER_DOOR_JOINT = "RevoluteJoint_dishwasher_2_middle"
 DISHWASHER_RACK_JOINTS = ["PrismaticJoint_dishwasher_2_up", "PrismaticJoint_dishwasher_2_down"]
 if config.HAS_THIRD_RACK:
     DISHWASHER_RACK_JOINTS = DISHWASHER_RACK_JOINTS + [config.RACK_THIRD_JOINT]
-DISHWASHER_DOOR_BODY = "E_door_4"
-DISHWASHER_BASE_BODY = "E_body_5"
-DISHWASHER_LOWER_RACK_BODY = "E_shelf_1_04"
-DISHWASHER_UPPER_RACK_BODY = "E_shelf_03"
-DISHWASHER_THIRD_RACK_BODY = "E_shelf_third"  # exists only on machines with HAS_THIRD_RACK
 
 DISHWASHER_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(

@@ -58,13 +58,7 @@ if args.placement:
     config.apply_base_placement(args.placement)  # after machine/scenario — they reset it
 CACHE = config.scenario_cache_dir()
 
-FAILURES: list[str] = []
-
-
-def check(name: str, ok: bool, detail: str = "") -> None:
-    print(f"[{'OK' if ok else 'FAIL'}] {name}{': ' + detail if detail else ''}")
-    if not ok:
-        FAILURES.append(name)
+from dishsim.checks import FAILURES, check, finish  # noqa: E402
 
 
 def coacd_params_for(name: str) -> dict:
@@ -120,7 +114,7 @@ def decompose(name: str, mesh_rel: str) -> str | None:
         from dishsim import prop_gen  # noqa: PLC0415
 
         spec = config.active_object_spec()
-        parts, _ = prop_gen.build(spec.source_id)
+        parts = prop_gen.build(spec.source_id)
         mesh = trimesh.load(os.path.join(CACHE, mesh_rel), force="mesh")
         ref = trimesh.util.concatenate(parts)
         dev = float(np.abs(np.asarray(mesh.bounds) - np.asarray(ref.bounds)).max())
@@ -293,9 +287,7 @@ def main() -> None:
             render_overlay(name, entry["mesh"], out, os.path.join(media_dir, f"overlay_{name}.png"))
     out = decompose("object", manifest["object"]["mesh"])
     render_overlay("object", manifest["object"]["mesh"], out, os.path.join(media_dir, "overlay_object.png"))
-    print(f"[RESULT] {'PASS' if not FAILURES else 'FAIL: ' + ', '.join(FAILURES)}")
-    if FAILURES:
-        raise SystemExit(1)
+    finish()
 
 
 if __name__ == "__main__":

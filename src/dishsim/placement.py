@@ -191,46 +191,6 @@ def derive_slots_from_rack(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]
     return slots
 
 
-def object_pose_for_slot(slot: SlotFrame, yaw: float, lateral: np.ndarray, tilt: np.ndarray, hover: float) -> np.ndarray:
-    """Object (mug) pose standing at a slot: axis up (+tilt), bottom ``hover`` above the floor.
-
-    Args:
-        slot: Target slot.
-        yaw: Rotation of the object about the slot z-axis [rad].
-        lateral: Lateral offset of the axis footprint from the slot center, shape [2] [m].
-        tilt: Small tilt angles about slot x/y, shape [2] [rad].
-        hover: Bottom clearance above the wire floor [m].
-
-    Returns:
-        T_base_obj, shape [4, 4].
-    """
-    from scipy.spatial.transform import Rotation  # noqa: PLC0415
-
-    # object frame -> "standing" frame (axis-aware): the Y-up mug stands via Rx(+90) — the
-    # -90 variant stands it on its head 8 cm underground (cost one full debugging cycle);
-    # Z-up objects stand as authored. Then yaw about z.
-    R_stand = _spec_R_stand()
-    R = (
-        Rotation.from_euler("xy", tilt).as_matrix()
-        @ Rotation.from_euler("z", yaw).as_matrix()
-        @ R_stand
-    )
-    # axis point at the object BOTTOM (obj frame), per the axis convention
-    axis_uv = config.OBJECT_BODY_CENTER_XZ
-    if tuple(config.OBJECT_AXIS_OBJ) == (0.0, 1.0, 0.0):
-        p_bottom_obj = np.array([axis_uv[0], -config.OBJECT_BBOX_HALF[1], axis_uv[1]])
-    else:
-        p_bottom_obj = np.array([axis_uv[0], axis_uv[1], -config.OBJECT_BBOX_HALF[2]])
-    T = np.eye(4)
-    T[:3, :3] = R
-    # place the (rotated) bottom axis point at slot center + lateral, hover above the floor
-    bottom_target = slot.T_base_slot[:3, 3] + slot.T_base_slot[:3, :3] @ np.array(
-        [lateral[0], lateral[1], hover]
-    )
-    T[:3, 3] = bottom_target - R @ p_bottom_obj
-    return T
-
-
 # ---------------------------------------------------------------------------------------------
 # mode-aware slot derivation + goal poses (multi-object v1)
 # ---------------------------------------------------------------------------------------------
@@ -400,7 +360,29 @@ def object_pose_for_mode(slot: SlotFrame, spin: float, lateral: np.ndarray, tilt
     from scipy.spatial.transform import Rotation  # noqa: PLC0415
 
     if slot.mode == "floor_stand":
-        return object_pose_for_slot(slot, spin, lateral, tilt, hover)
+        # standing pose: axis up (+tilt), bottom ``hover`` above the wire floor. Object frame ->
+        # "standing" frame (axis-aware): the Y-up mug stands via Rx(+90) — the -90 variant
+        # stands it on its head 8 cm underground (cost one full debugging cycle); Z-up objects
+        # stand as authored. Then spin about z.
+        R = (
+            Rotation.from_euler("xy", tilt).as_matrix()
+            @ Rotation.from_euler("z", spin).as_matrix()
+            @ _spec_R_stand()
+        )
+        # axis point at the object BOTTOM (obj frame), per the axis convention
+        axis_uv = config.OBJECT_BODY_CENTER_XZ
+        if tuple(config.OBJECT_AXIS_OBJ) == (0.0, 1.0, 0.0):
+            p_bottom_obj = np.array([axis_uv[0], -config.OBJECT_BBOX_HALF[1], axis_uv[1]])
+        else:
+            p_bottom_obj = np.array([axis_uv[0], axis_uv[1], -config.OBJECT_BBOX_HALF[2]])
+        T = np.eye(4)
+        T[:3, :3] = R
+        # place the (rotated) bottom axis point at slot center + lateral, hover above the floor
+        bottom_target = slot.T_base_slot[:3, 3] + slot.T_base_slot[:3, :3] @ np.array(
+            [lateral[0], lateral[1], hover]
+        )
+        T[:3, 3] = bottom_target - R @ p_bottom_obj
+        return T
 
     R_slot = slot.T_base_slot[:3, :3]
     spec = config.active_object_spec()

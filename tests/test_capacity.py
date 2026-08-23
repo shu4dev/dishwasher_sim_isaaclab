@@ -23,15 +23,6 @@ BOSCH_PLACEMENT_CACHE = os.path.join(
     "assets", "cache", "machines", "bosch800", "objects", "cup", "placement", "slots")
 
 
-@pytest.fixture
-def bosch():
-    config.apply_machine("bosch800")
-    config.apply_base_placement("side_winner")
-    yield
-    config.apply_machine(config.MACHINE_BASELINE_NAME)
-    config.apply_scenario("both_out")  # apply_machine keeps a surviving scenario name
-
-
 class TestZBudget:
     """The measured transition-clearance gate (values from the 2026-08-14 z-budget table)."""
 
@@ -76,7 +67,7 @@ class TestPolicyStreams:
         assert "mug" in capacity.capacity_classes()
 
 
-def _fake_tables(state="placement"):
+def _fake_tables():
     def slot(sid, xyz):
         T = np.eye(4)
         T[:3, 3] = xyz
@@ -84,7 +75,7 @@ def _fake_tables(state="placement"):
 
     slots = {0: slot(0, (0.3, 0.0, 0.0)), 1: slot(1, (0.4, 0.0, 0.0))}
     return capacity._StateTables(
-        state, "deadbeef", {"cup": slots},
+        "deadbeef", {"cup": slots},
         {"cup": {0: np.zeros((3, 6)), 1: np.zeros((0, 6))}},
         {"cup": {"near": 0, "far": 1}})
 
