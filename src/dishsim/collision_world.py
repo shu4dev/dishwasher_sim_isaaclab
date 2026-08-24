@@ -114,29 +114,20 @@ class CollisionWorld:
         # ---- statics ------------------------------------------------------------------------
         self._static_objs: dict[str, list[fcl.CollisionObject]] = {}
         self._static_T: dict[str, np.ndarray] = {}
-        self._static_lookup: dict[int, str] = {}
         for name, entry in self.manifest["statics"].items():
             T = np.array(entry["T_base_body"])
             self._static_T[name] = T
             pieces = self._load_pieces(name, entry)
-            objs = []
-            for piece in pieces:
-                obj = fcl.CollisionObject(_fcl_convex(piece), _tf(T))
-                objs.append(obj)
-                self._static_lookup[id(obj)] = name
-            self._static_objs[name] = objs
+            self._static_objs[name] = [fcl.CollisionObject(_fcl_convex(piece), _tf(T)) for piece in pieces]
         self._static_mgr = fcl.DynamicAABBTreeCollisionManager()
         self._static_mgr.registerObjects([o for objs in self._static_objs.values() for o in objs])
         self._static_mgr.setup()
 
         # ---- movables: arm links ------------------------------------------------------------
         self._arm: dict[str, fcl.CollisionObject] = {}
-        self._arm_geom_meshes: dict[str, trimesh.Trimesh] = {}
         for name, entry in self.manifest["arm_links"].items():
             mesh = trimesh.load(os.path.join(cache_dir, entry["mesh"]), force="mesh")
-            hull = _inflated_hull(mesh, margin)
-            self._arm_geom_meshes[name] = hull
-            self._arm[name] = fcl.CollisionObject(_fcl_convex(hull))
+            self._arm[name] = fcl.CollisionObject(_fcl_convex(_inflated_hull(mesh, margin)))
 
         # ---- movables: gripper cluster (+ optionally the carried object) ---------------------
         self._merged_cluster = bool(merged_cluster)
@@ -184,7 +175,6 @@ class CollisionWorld:
         cluster_all = trimesh.util.concatenate(cluster_meshes_w3)
         self._cluster_hull_w3 = cluster_all.convex_hull
         self._cluster_hull_obj = fcl.CollisionObject(_fcl_convex(self._cluster_hull_w3))
-        self._cluster_hull_dirty = False
 
         # ---- extra world objects (MCTS mutation API) -----------------------------------------
         self._extra: dict[str, list[fcl.CollisionObject]] = {}
@@ -312,10 +302,6 @@ class CollisionWorld:
                     return name
         return "static"
 
-    def in_collision_batch(self, Q: np.ndarray) -> np.ndarray:
-        """Vector of verdicts for configurations ``Q`` of shape [N, 6]."""
-        return np.array([self.in_collision(q) for q in np.atleast_2d(Q)], dtype=bool)
-
     def min_distance(self, q: np.ndarray) -> float:
         """Smallest robot/cluster-to-world distance [m] (negative-ish == in collision).
 
@@ -349,10 +335,6 @@ class CollisionWorld:
     def has_object(self, name: str) -> bool:
         """Is a free-standing obstacle registered under ``name``?"""
         return name in self._extra
-
-    def object_names(self) -> list:
-        """Names of the currently registered free-standing obstacles."""
-        return sorted(self._extra)
 
     def set_object_pose(self, name: str, T_base_obj: np.ndarray) -> None:
         for obj in self._extra[name]:
@@ -490,4 +472,3 @@ class CollisionWorld:
             return
         self._cluster_hull_w3 = trimesh.util.concatenate(meshes).convex_hull
         self._cluster_hull_obj = fcl.CollisionObject(_fcl_convex(self._cluster_hull_w3))
-        self._cluster_hull_dirty = False

@@ -47,7 +47,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from dishsim import config  # noqa: E402
-from dishsim.base_sweep import _bottom_offset, _stand_R, largest_rectangle  # noqa: E402
+from dishsim.base_sweep import largest_rectangle  # noqa: E402
+from dishsim.fill_plan import _axis_bottom_offset, _stand_R  # noqa: E402
 from dishsim.collision_world import CollisionWorld  # noqa: E402
 from dishsim.transforms import T_inv, make_T  # noqa: E402
 from dishsim.ur5e_kin import ik_wrist3_all  # noqa: E402
@@ -111,7 +112,7 @@ def main() -> int:
                     R = _stand_R(spec, float(yaw))  # world-frame stand rotation + yaw
                     T_w_obj = np.eye(4)
                     T_w_obj[:3, :3] = R
-                    T_w_obj[:3, 3] = (x, y, top_z_w + _bottom_offset(spec, R))
+                    T_w_obj[:3, 3] = (x, y, top_z_w + _axis_bottom_offset(spec, R)[2])
                     T_base_obj = T_base_w @ T_w_obj  # rotation AND translation re-expressed
                     T_grasp = T_base_obj @ T_obj_tcp
                     T_hover = T_grasp.copy()

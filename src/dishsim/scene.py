@@ -28,6 +28,7 @@ import math
 
 import numpy as np
 import torch
+from scipy.spatial.transform import Rotation
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
@@ -119,26 +120,12 @@ def countertop_pose_w(instance: int = 0) -> tuple[np.ndarray, np.ndarray]:
         (position [m] shape [3], XYZW quaternion shape [4]).
     """
     (pos_w, yaw_deg) = config.OBJECT_COUNTERTOP_POSES_W[instance]
-    yaw = math.radians(yaw_deg)
-    cz, sz = math.cos(yaw / 2.0), math.sin(yaw / 2.0)
-    q_yaw = np.array([0.0, 0.0, sz, cz])  # XYZW
+    r_yaw = Rotation.from_euler("z", float(yaw_deg), degrees=True)
     if tuple(config.OBJECT_AXIS_OBJ) == (0.0, 1.0, 0.0):  # Y-up mug stands via Rx(+90)
-        s, c = math.sin(math.pi / 4.0), math.cos(math.pi / 4.0)
-        q_stand = np.array([s, 0.0, 0.0, c])
+        r_stand = Rotation.from_euler("x", 90.0, degrees=True)
     else:  # Z-up and X-up (flat) objects stage as authored
-        q_stand = np.array([0.0, 0.0, 0.0, 1.0])
-    # quaternion product q_yaw * q_stand (XYZW)
-    x1, y1, z1, w1 = q_yaw
-    x2, y2, z2, w2 = q_stand
-    quat = np.array(
-        [
-            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-        ]
-    )
-    return np.asarray(pos_w, dtype=float), quat
+        r_stand = Rotation.identity()
+    return np.asarray(pos_w, dtype=float), (r_yaw * r_stand).as_quat()  # XYZW
 
 
 # ---------------------------------------------------------------------------------------------
@@ -241,18 +228,6 @@ def make_scene_cfg(
         )
 
     if with_object:
-        filter_list = [
-            "{ENV_REGEX_NS}/Robot/Gripper/Robotiq_2F_85/left_inner_finger",
-            "{ENV_REGEX_NS}/Robot/Gripper/Robotiq_2F_85/right_inner_finger",
-            "{ENV_REGEX_NS}/Robot/Gripper/Robotiq_2F_85/left_inner_knuckle",
-            "{ENV_REGEX_NS}/Robot/Gripper/Robotiq_2F_85/right_inner_knuckle",
-            "{ENV_REGEX_NS}/Robot/Gripper/Robotiq_2F_85/left_outer_knuckle",
-            "{ENV_REGEX_NS}/Robot/Gripper/Robotiq_2F_85/right_outer_knuckle",
-            "{ENV_REGEX_NS}/Robot/Gripper/Robotiq_2F_85/left_outer_finger",
-            "{ENV_REGEX_NS}/Robot/Gripper/Robotiq_2F_85/right_outer_finger",
-            "{ENV_REGEX_NS}/Robot/Gripper/Robotiq_2F_85/base_link",
-            "{ENV_REGEX_NS}/Robot/wrist_3_link",
-        ]
         for i in range(max(1, n_instances)):
             suffix = "" if i == 0 else f"_{i}"
             # instance 0 spawns at the home-configuration grasp pose (legacy: scripts 10-15
@@ -281,7 +256,7 @@ def make_scene_cfg(
                 ContactSensorCfg(
                     prim_path="{ENV_REGEX_NS}/CarriedObject" + suffix,
                     update_period=0.0,
-                    filter_prim_paths_expr=list(filter_list),
+                    filter_prim_paths_expr=list(_GRIPPER_FILTER_PATHS),
                 ),
             )
 

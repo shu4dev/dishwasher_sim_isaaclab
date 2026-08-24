@@ -103,14 +103,3 @@ def test_wrap_expansion_within_limits():
         assert np.all(v >= K.JOINT_LIMITS[:, 0]) and np.all(v <= K.JOINT_LIMITS[:, 1])
         # each wrapped variant maps to the same pose
         assert np.linalg.norm(K.fk_wrist3(v)[:3, 3] - K.fk_wrist3(q)[:3, 3]) < 1e-9
-
-
-def test_dls_fallback():
-    rng = np.random.default_rng(SEED + 2)
-    for _ in range(5):
-        q = rng.uniform(-np.pi / 2, np.pi / 2, 6)
-        T = K.fk_wrist3(q)
-        q_num = K.dls_ik(T, q + rng.normal(0, 0.1, 6))
-        assert q_num is not None
-        T_re = K.fk_wrist3(q_num)
-        assert np.linalg.norm(T_re[:3, 3] - T[:3, 3]) < 1e-5

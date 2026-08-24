@@ -68,7 +68,7 @@ class SlotRequest:
 def candidate_slot_ids(object_class: str, mode: str, slots: Mapping[int, object],
                        slot_names: Mapping[str, int], goal_sets: Mapping[int, Sequence],
                        *, type_slots: Mapping[str, Sequence[str]] | None,
-                       slot_pools: Mapping[str, Sequence[int] | None]) -> tuple[list[int], str]:
+                       slot_pools: Mapping[str, Sequence[int] | None]) -> list[int]:
     """Ordered candidate slot ids for one class: preference list, then reachability filter.
 
     Args:
@@ -81,8 +81,8 @@ def candidate_slot_ids(object_class: str, mode: str, slots: Mapping[int, object]
         slot_pools: Optional ``{mode: slot ids}`` pool table.
 
     Returns:
-        ``(ids, source)`` — feasible candidate ids in preference order, and which table
-        supplied them (``"type_slots"`` | ``"slot_pools"`` | ``"all"``).
+        Feasible candidate ids in preference order (``type_slots`` preference table, else
+        the mode's ``slot_pools`` entry, else every slot).
 
     Raises:
         SystemExit: A ``type_slots`` entry names a slot that does not exist for this mode.
@@ -97,12 +97,12 @@ def candidate_slot_ids(object_class: str, mode: str, slots: Mapping[int, object]
             raise SystemExit(
                 f"[FAIL] TASK['type_slots'][{object_class!r}] names {unknown}, which do not "
                 f"exist for placement mode {mode!r}. Valid names: {sorted(slot_names)}")
-        ids, source = [slot_names[n] for n in names], "type_slots"
+        ids = [slot_names[n] for n in names]
     elif pool is not None:
-        ids, source = list(pool), "slot_pools"
+        ids = list(pool)
     else:
-        ids, source = sorted(slots), "all"
-    return [s for s in ids if len(goal_sets.get(s, ())) > 0], source
+        ids = sorted(slots)
+    return [s for s in ids if len(goal_sets.get(s, ())) > 0]
 
 
 def occupancy_conflict(mode_a: str, centre_a: np.ndarray, radius_a: float,
@@ -162,10 +162,9 @@ def assign_slots(requests: Sequence[SlotRequest], slots_by_class: Mapping[str, M
     feasible = {}
     for req in requests:
         cls = req.object_class
-        ids, _source = candidate_slot_ids(
+        feasible[req.item_id] = candidate_slot_ids(
             cls, mode_fn(cls), slots_by_class[cls], slot_names_by_class[cls],
             goal_sets_by_class[cls], type_slots=type_slots, slot_pools=slot_pools)
-        feasible[req.item_id] = ids
 
     out, occupied = {}, list(taken)
     for req in sorted(requests, key=lambda r: (len(feasible[r.item_id]), r.item_id)):

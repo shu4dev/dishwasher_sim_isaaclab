@@ -69,7 +69,6 @@ ZONE_COLORS = {
     "cup_shelf": "#7b52ab",
     "rackmatic": "#33343a",
     "basket": "#9aa0a6",
-    "basket_handle": "#7d838a",
 }
 
 
@@ -203,7 +202,7 @@ def _arc_points_3d(center, radius: float, u, v, a0_deg: float, a1_deg: float, se
     return center[None, :] + radius * (np.cos(ang)[:, None] * u[None, :] + np.sin(ang)[:, None] * v[None, :])
 
 
-def _block(center, extents, n_unused: int = 0) -> trimesh.Trimesh:
+def _block(center, extents) -> trimesh.Trimesh:
     """Axis-aligned box part (RackMatic lever caps, insert stop clip)."""
     c = np.asarray(center, dtype=float)
     e = np.asarray(extents, dtype=float) / 2.0
@@ -591,8 +590,10 @@ def _cutlery_basket(parts: list[RackPart], p: dict) -> None:
 
     Rides the rack (fixed part of the rack body mesh, group ``basket`` -> own USD mesh +
     material): a free-standing basket would skate during the 0.2 m rack slide. Convex parts
-    only: floor slab, 4 walls, 2 y-dividers (3 bays), and an arch carry handle (2 posts +
-    bar). The floor slab contributes 8 vertices to the bottom 15 mm percentile band —
+    only: floor slab, 4 walls, and 2 x-dividers (3 bays), handleless by measurement
+    (2026-08-09: an arch bar over rotated bays runs along every drop column's dodge axis
+    and leaves no collision-free drop window for cutlery).
+    The floor slab contributes 8 vertices to the bottom 15 mm percentile band —
     negligible against the thousands of floor-wire vertices, so the slot datum contract
     holds (asserted in tests).
     """
@@ -602,8 +603,6 @@ def _cutlery_basket(parts: list[RackPart], p: dict) -> None:
     y0, y1 = b["y"]
     z0 = zl["floor_top"]
     h, t, ft = b["h"], b["wall_t"], b["floor_t"]
-    n = p["wire_sides"]
-    cx = (x0 + x1) / 2.0
 
     parts.append(RackPart("basket_floor", "basket", group="basket", mesh=_block(((x0 + x1) / 2.0, (y0 + y1) / 2.0, z0 + ft / 2.0), (x1 - x0, y1 - y0, ft))))
     z_wall = z0 + ft + (h - ft) / 2.0
@@ -613,52 +612,26 @@ def _cutlery_basket(parts: list[RackPart], p: dict) -> None:
     parts.append(RackPart("basket_wall_y0", "basket", group="basket", mesh=_block(((x0 + x1) / 2.0, y0 + t / 2.0, z_wall), (x1 - x0 - 2 * t, t, wall_h))))
     parts.append(RackPart("basket_wall_y1", "basket", group="basket", mesh=_block(((x0 + x1) / 2.0, y1 - t / 2.0, z_wall), (x1 - x0 - 2 * t, t, wall_h))))
     cy = (y0 + y1) / 2.0
-    # The arch carry handle is optional (side-grip baskets). Measured 2026-08-09: an arch bar
-    # over rotated (x-split) bays runs along every drop column's dodge axis and leaves no
-    # collision-free drop window for cutlery — a rotated robot-loaded basket must go handleless.
-    hd = b.get("handle")
-    z_top = z0 + h
-    if "dividers_x" in b:
-        # rotated variant: bays split along x — keeps every drop column at the basket's
-        # front-band y, where the fork-drop stack clears the machine mouth (measured: bays at
-        # y >= 0.126 are capped by the shell top)
-        for di, dx in enumerate(b["dividers_x"]):
-            parts.append(RackPart(f"basket_divider_{di}", "basket", group="basket", mesh=_block((dx, cy, z_wall), (t, y1 - y0 - 2 * t, wall_h))))
-        if hd is not None:
-            z_bar = z_top + hd["clearance"]
-            parts.append(RackPart("basket_handle_post_0", "basket_handle", group="basket", mesh=_rod((x0 + t / 2.0, cy, z_top - 0.010), (x0 + t / 2.0, cy, z_bar), hd["post_dia"], n)))
-            parts.append(RackPart("basket_handle_post_1", "basket_handle", group="basket", mesh=_rod((x1 - t / 2.0, cy, z_top - 0.010), (x1 - t / 2.0, cy, z_bar), hd["post_dia"], n)))
-            parts.append(RackPart("basket_handle_bar", "basket_handle", group="basket", mesh=_rod((x0 + t / 2.0, cy, z_bar), (x1 - t / 2.0, cy, z_bar), hd["bar_dia"], n)))
-        return
-    for di, dy in enumerate(b["dividers_y"]):
-        parts.append(RackPart(f"basket_divider_{di}", "basket", group="basket", mesh=_block(((x0 + x1) / 2.0, dy, z_wall), (x1 - x0 - 2 * t, t, wall_h))))
-    if hd is None:
-        return
-    z_bar = z_top + hd["clearance"]
-    # arch carry handle over the y-centerline (posts at the two end walls, bar along y)
-    parts.append(RackPart("basket_handle_post_0", "basket_handle", group="basket", mesh=_rod((cx, y0 + t / 2.0, z_top - 0.010), (cx, y0 + t / 2.0, z_bar), hd["post_dia"], n)))
-    parts.append(RackPart("basket_handle_post_1", "basket_handle", group="basket", mesh=_rod((cx, y1 - t / 2.0, z_top - 0.010), (cx, y1 - t / 2.0, z_bar), hd["post_dia"], n)))
-    parts.append(RackPart("basket_handle_bar", "basket_handle", group="basket", mesh=_rod((cx, y0 + t / 2.0, z_bar), (cx, y1 - t / 2.0, z_bar), hd["bar_dia"], n)))
+    # bays split along x (rotated variant): keeps every drop column at the basket's front-band
+    # y, where the fork-drop stack clears the machine mouth (measured: bays at y >= 0.126 are
+    # capped by the shell top)
+    for di, dx in enumerate(b["dividers_x"]):
+        parts.append(RackPart(f"basket_divider_{di}", "basket", group="basket", mesh=_block((dx, cy, z_wall), (t, y1 - y0 - 2 * t, wall_h))))
 
 
 def basket_bays(params: dict) -> list[tuple[float, float, float, float]]:
     """Interior (x0, x1, y0, y1) of each basket compartment (design frame)."""
     b = params["basket"]
     t = b["wall_t"]
-    if "dividers_x" in b:
-        y0, y1 = b["y"][0] + t, b["y"][1] - t
-        lo_edges = [b["x"][0] + t] + [d + t / 2.0 for d in b["dividers_x"]]
-        hi_edges = [d - t / 2.0 for d in b["dividers_x"]] + [b["x"][1] - t]
-        return [(lo, hi, y0, y1) for lo, hi in zip(lo_edges, hi_edges)]
-    x0, x1 = b["x"][0] + t, b["x"][1] - t
-    lo_edges = [b["y"][0] + t] + [d + t / 2.0 for d in b["dividers_y"]]
-    hi_edges = [d - t / 2.0 for d in b["dividers_y"]] + [b["y"][1] - t]
-    return [(x0, x1, lo, hi) for lo, hi in zip(lo_edges, hi_edges)]
+    y0, y1 = b["y"][0] + t, b["y"][1] - t
+    lo_edges = [b["x"][0] + t] + [d + t / 2.0 for d in b["dividers_x"]]
+    hi_edges = [d - t / 2.0 for d in b["dividers_x"]] + [b["x"][1] - t]
+    return [(lo, hi, y0, y1) for lo, hi in zip(lo_edges, hi_edges)]
 
 
 def basket_probes(params: dict) -> list[tuple[tuple[float, float, float], tuple[float, float, float]]]:
     """A cutlery-sized box inside each basket bay (must be FCL-free), inset 4 mm from the
-    bay walls and spanning from just above the basket floor to just under the handle bar."""
+    bay walls and spanning from just above the basket floor to just under the rim."""
     b = params["basket"]
     zl = _z_levels(params)
     z0 = zl["floor_top"] + b["floor_t"] + 0.003
@@ -675,11 +648,8 @@ def basket_divider_negative_probe(params: dict) -> tuple[tuple[float, float, flo
     b = params["basket"]
     zl = _z_levels(params)
     z_c = zl["floor_top"] + b["h"] / 2.0
-    if "dividers_x" in b:
-        cy = (b["y"][0] + b["y"][1]) / 2.0
-        return (0.020, 0.030, 0.030), (float(b["dividers_x"][0]), cy, z_c)
-    cx = (b["x"][0] + b["x"][1]) / 2.0
-    return (0.030, 0.020, 0.030), (cx, float(b["dividers_y"][0]), z_c)
+    cy = (b["y"][0] + b["y"][1]) / 2.0
+    return (0.020, 0.030, 0.030), (float(b["dividers_x"][0]), cy, z_c)
 
 
 def open_zones_effective(params: dict) -> list[tuple[float, float, float, float]]:

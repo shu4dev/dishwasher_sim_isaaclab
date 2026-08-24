@@ -18,8 +18,6 @@ Run with:
         tests/test_collision_world_payload.py -v
 """
 
-import os
-
 import numpy as np
 import pytest
 import trimesh
@@ -27,10 +25,7 @@ import trimesh
 from dishsim import config
 from dishsim.collision_world import CollisionWorld
 
-needs_cache = pytest.mark.skipif(
-    not os.path.exists(os.path.join(config.CACHE_DIR, "scene_state.json")),
-    reason="baseline geometry cache not built yet (run scripts/setup/extract_geometry.py)",
-)
+from conftest import needs_cache
 
 
 @pytest.fixture()

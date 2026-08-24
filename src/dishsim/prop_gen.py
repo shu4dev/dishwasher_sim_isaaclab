@@ -4,16 +4,14 @@
 
 """Procedural dishware props (Kit-free): tumbler, wine glass, container + lid, serving spoon.
 
-Each builder returns ``(parts, color)`` where ``parts`` is a list of **convex, watertight**
-trimesh pieces in the object's canonical frame (Z-up for drinkware/containers, length-along-X
-for utensils, origin at the bbox center). The pieces serve three consumers with zero
-decomposition slop:
+Each builder returns a list of **convex, watertight** trimesh pieces in the object's canonical
+frame (Z-up for drinkware/containers, length-along-X for utensils, origin at the bbox center).
+The pieces serve two consumers with zero decomposition slop:
 
-- The authoring pipeline (``build_object_assets.py``, in git history) authored them as per-part USD mesh prims, each with a
-  convex-hull collider (PhysX side);
+- The authoring pipeline (``build_object_assets.py``, in git history) authored them as per-part
+  USD mesh prims, each with a convex-hull collider (PhysX side);
 - ``scripts/setup/decompose_meshes.py`` writes them verbatim as the FCL pieces (no CoACD — CoACD
-  would seal thin open shells like the glass walls);
-- ``fill_plan`` uses the merged mesh for overlap validation.
+  would seal thin open shells like the glass walls).
 
 Deterministic by construction (fixed segment counts, no RNG): scripts/setup/decompose_meshes.py must regenerate
 byte-identical geometry from the registry dims alone. Dims come from
@@ -68,7 +66,7 @@ def _box(size, center) -> trimesh.Trimesh:
     return m
 
 
-def tumbler() -> tuple[list[trimesh.Trimesh], tuple[float, float, float]]:
+def tumbler() -> list[trimesh.Trimesh]:
     """Open drinking tumbler: tapered shell, dia 52 -> 60 mm, h 105 mm, wall 2.5 mm."""
     spec = config.OBJECTS["tumbler"]
     h = spec.height_m
@@ -79,10 +77,10 @@ def tumbler() -> tuple[list[trimesh.Trimesh], tuple[float, float, float]]:
     z0, z1 = -h / 2.0, h / 2.0
     parts = [_disc(r_bot, z0, z0 + floor_t)]
     parts += _ring_wall(r_bot - wall, r_bot, r_top - wall, r_top, z0 + floor_t, z1)
-    return parts, (0.55, 0.75, 0.85)
+    return parts
 
 
-def wine_glass() -> tuple[list[trimesh.Trimesh], tuple[float, float, float]]:
+def wine_glass() -> list[trimesh.Trimesh]:
     """Wine glass: foot disc + stem + open tulip bowl; h 120 mm, bowl dia 58 mm.
 
     The stem is 8 mm to seat in the upper rack's stemware scallops (r 8 mm).
@@ -106,10 +104,10 @@ def wine_glass() -> tuple[list[trimesh.Trimesh], tuple[float, float, float]]:
     prof = [(0.012, zb0 + 0.008), (0.026, zb0 + 0.030), (r_bowl, zb0 + 0.052), (0.0275, zb0 + bowl_h)]
     for (r_a, z_a), (r_b, z_b) in zip(prof[:-1], prof[1:]):
         parts += _ring_wall(r_a - wall, r_a, r_b - wall, r_b, z_a, z_b)
-    return parts, (0.82, 0.88, 0.92)
+    return parts
 
 
-def container() -> tuple[list[trimesh.Trimesh], tuple[float, float, float]]:
+def container() -> list[trimesh.Trimesh]:
     """Open food-storage box 120 x 90 x 55 mm, wall 2.5 mm, floor 3 mm."""
     spec = config.OBJECTS["container"]
     L, W = 2 * spec.bbox_half[0], 2 * spec.bbox_half[1]
@@ -123,10 +121,10 @@ def container() -> tuple[list[trimesh.Trimesh], tuple[float, float, float]]:
         _box((wall, W - 2 * wall, H - floor_t), (-(L - wall) / 2.0, 0, floor_t / 2.0)),
         _box((wall, W - 2 * wall, H - floor_t), ((L - wall) / 2.0, 0, floor_t / 2.0)),
     ]
-    return parts, (0.70, 0.82, 0.95)
+    return parts
 
 
-def lid() -> tuple[list[trimesh.Trimesh], tuple[float, float, float]]:
+def lid() -> list[trimesh.Trimesh]:
     """Container lid 126 x 96 x 8 mm: top plate + retaining lip."""
     spec = config.OBJECTS["lid"]
     L, W = 2 * spec.bbox_half[0], 2 * spec.bbox_half[1]
@@ -140,10 +138,10 @@ def lid() -> tuple[list[trimesh.Trimesh], tuple[float, float, float]]:
         _box((lip, W - 2 * lip, H - plate_t), (-(L - lip) / 2.0, 0, -plate_t / 2.0)),
         _box((lip, W - 2 * lip, H - plate_t), ((L - lip) / 2.0, 0, -plate_t / 2.0)),
     ]
-    return parts, (0.70, 0.82, 0.95)
+    return parts
 
 
-def serving_spoon() -> tuple[list[trimesh.Trimesh], tuple[float, float, float]]:
+def serving_spoon() -> list[trimesh.Trimesh]:
     """Serving spoon 180 mm: handle bar + solid shallow scoop (convex — fine for collision)."""
     spec = config.OBJECTS["serving_spoon"]
     L = spec.height_m  # long axis = x
@@ -155,7 +153,7 @@ def serving_spoon() -> tuple[list[trimesh.Trimesh], tuple[float, float, float]]:
     scoop.vertices[:, 2] = np.minimum(scoop.vertices[:, 2], 0.004)
     scoop = trimesh.convex.convex_hull(scoop.vertices)
     scoop.apply_translation([L / 2.0 - 0.0375, 0, 0.002])
-    return [handle, scoop], (0.75, 0.75, 0.78)
+    return [handle, scoop]
 
 
 BUILDERS = {
@@ -167,14 +165,9 @@ BUILDERS = {
 }
 
 
-def build(name: str) -> tuple[list[trimesh.Trimesh], tuple[float, float, float]]:
-    """Parts + display color for a procedural object (registry key or builder name)."""
+def build(name: str) -> list[trimesh.Trimesh]:
+    """Convex parts for a procedural object (registry key or builder name)."""
     if name not in BUILDERS:
         raise ValueError(f"no procedural builder {name!r} (choices: {sorted(BUILDERS)})")
     return BUILDERS[name]()
 
-
-def merged(name: str) -> trimesh.Trimesh:
-    """All parts concatenated (visual/bbox/overlap checks; per-part watertight)."""
-    parts, _ = build(name)
-    return trimesh.util.concatenate(parts)

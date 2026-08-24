@@ -15,22 +15,10 @@ from dishsim import config
 from dishsim.planners import PLANNERS, PlanDebug, PlanResult, Planner, available, make_planner
 from dishsim.ur5e_kin import JOINT_LIMITS
 
+from conftest import FreeWorld, WallWorld
+
 START = np.array([0.0, -1.2, 1.2, -1.5, -1.5, 0.0])
 GOALS = np.array([[0.6, -1.0, 1.0, -1.4, -1.5, 0.2], [-0.6, -1.4, 1.4, -1.6, -1.5, -0.2]])
-
-
-class FreeWorld:
-    """Stub collision world: everything is valid."""
-
-    def in_collision(self, q):
-        return False
-
-
-class WallWorld:
-    """Joint-space slab: q1 in (-1.2, -0.8) is blocked unless q0 > 0.5 (forces a detour)."""
-
-    def in_collision(self, q):
-        return (-1.2 < q[1] < -0.8) and (q[0] <= 0.5)
 
 
 def _budget(name: str) -> float:

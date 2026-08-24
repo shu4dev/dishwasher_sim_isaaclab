@@ -80,42 +80,22 @@ def _stamped_hash(usda_path: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _ensure_insert_material(stage):
-    """Self-contained dark material for the fold-down insert row (Bosch/Whirlpool signature:
-    the clip-in tine row is a darker gray than the rack). A dedicated UsdPreviewSurface is
-    used because a bound material overrides displayColor under RTX and the rack's own
-    ``mat_1029771`` is a referenced PBR override we should not mutate."""
+def _ensure_material(stage, path: str, color, metallic: float, roughness: float):
+    """Self-contained UsdPreviewSurface for rack_gen groups (dark fold-down insert row,
+    light-gray polypropylene cutlery basket). A dedicated material is used because a bound
+    material overrides displayColor under RTX and the rack's own ``mat_1029771`` is a
+    referenced PBR override we should not mutate."""
     from pxr import Sdf, UsdShade  # noqa: PLC0415
 
-    path = "/root/materials/mat_rackgen_insert"
     prim = stage.GetPrimAtPath(path)
     if prim.IsValid():
         return UsdShade.Material(prim)
     mat = UsdShade.Material.Define(stage, path)
     shader = UsdShade.Shader.Define(stage, path + "/Shader")
     shader.CreateIdAttr("UsdPreviewSurface")
-    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set((0.28, 0.28, 0.30))
-    shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.35)
-    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.35)
-    mat.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
-    return mat
-
-
-def _ensure_basket_material(stage):
-    """Light-gray plastic for the v3 cutlery basket (real baskets are molded polypropylene,
-    visually distinct from both the wire rack and the dark insert row)."""
-    from pxr import Sdf, UsdShade  # noqa: PLC0415
-
-    path = "/root/materials/mat_rackgen_basket"
-    prim = stage.GetPrimAtPath(path)
-    if prim.IsValid():
-        return UsdShade.Material(prim)
-    mat = UsdShade.Material.Define(stage, path)
-    shader = UsdShade.Shader.Define(stage, path + "/Shader")
-    shader.CreateIdAttr("UsdPreviewSurface")
-    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set((0.62, 0.64, 0.66))
-    shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
-    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.55)
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(tuple(color))
+    shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(float(metallic))
+    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(float(roughness))
     mat.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
     return mat
 
@@ -130,7 +110,6 @@ def _author_countertop(stage) -> None:
     the machine spawn pose (yaw -90 about z at DISHWASHER_POS_W; E_body_5 frame == asset root).
     """
     import numpy as np  # noqa: PLC0415
-    from pxr import Gf, Sdf, UsdGeom, UsdPhysics, Vt  # noqa: PLC0415
 
     from . import config  # noqa: PLC0415
 
@@ -147,27 +126,8 @@ def _author_countertop(stage) -> None:
     sx, sy, sz = config.COUNTERTOP_SIZE
     ext_m = np.array([sy, sx, sz]) / 2.0  # world x/y swap under the 90-degree yaw
 
-    signs = np.array(
-        [[-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1], [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]],
-        dtype=float,
-    )
-    pts = (center_m[None, :] + signs * ext_m[None, :]).astype(np.float32)
-    faces = np.array(
-        [(0, 2, 1), (0, 3, 2), (4, 5, 6), (4, 6, 7), (0, 1, 5), (0, 5, 4),
-         (2, 3, 7), (2, 7, 6), (1, 2, 6), (1, 6, 5), (3, 0, 4), (3, 4, 7)],
-        dtype=np.int32,
-    )
-    mesh = UsdGeom.Mesh.Define(stage, "/root/E_body_5/Countertop")
-    mesh.CreatePointsAttr(Vt.Vec3fArray.FromNumpy(pts))
-    mesh.CreateFaceVertexCountsAttr(Vt.IntArray.FromNumpy(np.full(len(faces), 3, dtype=np.int32)))
-    mesh.CreateFaceVertexIndicesAttr(Vt.IntArray.FromNumpy(faces.reshape(-1)))
-    lo, hi = pts.min(axis=0), pts.max(axis=0)
-    mesh.CreateExtentAttr(Vt.Vec3fArray([Gf.Vec3f(*map(float, lo)), Gf.Vec3f(*map(float, hi))]))
-    mesh.CreateSubdivisionSchemeAttr("none")
-    prim = mesh.GetPrim()
-    UsdPhysics.CollisionAPI.Apply(prim)
-    UsdPhysics.MeshCollisionAPI.Apply(prim).CreateApproximationAttr("convexHull")
-    prim.CreateAttribute("primvars:displayColor", Sdf.ValueTypeNames.Color3fArray).Set([(0.85, 0.85, 0.86)])
+    _author_box(stage, "/root/E_body_5/Countertop", center_m - ext_m, center_m + ext_m,
+                color=(0.85, 0.85, 0.86))
     print("[INFO] countertop slab authored on /root/E_body_5")
 
 
@@ -198,10 +158,9 @@ def _author_rack_meshes(stage) -> None:
             if child.IsA(UsdGeom.Mesh):
                 stage.RemovePrim(child.GetPath())
 
-        # route through the builder dispatcher when present (the Bosch third rack declares
-        # {"builder": "tray"}); v1 dicts carry no builder key and take build_rack either way
-        build = getattr(rack_gen, "build", rack_gen.build_rack)
-        parts = build(params)
+        # the builder dispatcher routes on the params dict (the Bosch third rack declares
+        # {"builder": "tray"}); v1 dicts carry no builder key and take build_rack
+        parts = rack_gen.build(params)
         groups = rack_gen.parts_by_group(parts)
         for group, prim_name in group_prims.items():
             gparts = groups.get(group)
@@ -230,11 +189,14 @@ def _author_rack_meshes(stage) -> None:
                 int(params["sdf_resolution"])
             )
             if group == "insert":
+                # Bosch/Whirlpool signature: the clip-in tine row is a darker gray than the rack
                 mesh.CreateDisplayColorAttr([Gf.Vec3f(0.28, 0.28, 0.30)])  # fallback if unbound
-                UsdShade.MaterialBindingAPI.Apply(prim).Bind(_ensure_insert_material(stage))
+                UsdShade.MaterialBindingAPI.Apply(prim).Bind(_ensure_material(
+                    stage, "/root/materials/mat_rackgen_insert", (0.28, 0.28, 0.30), 0.35, 0.35))
             elif group == "basket":
                 mesh.CreateDisplayColorAttr([Gf.Vec3f(0.62, 0.64, 0.66)])  # fallback if unbound
-                UsdShade.MaterialBindingAPI.Apply(prim).Bind(_ensure_basket_material(stage))
+                UsdShade.MaterialBindingAPI.Apply(prim).Bind(_ensure_material(
+                    stage, "/root/materials/mat_rackgen_basket", (0.62, 0.64, 0.66), 0.0, 0.55))
             else:
                 mat_prim = stage.GetPrimAtPath("/root/materials/mat_1029771")  # original rack material
                 if mat_prim.IsValid():

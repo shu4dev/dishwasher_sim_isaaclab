@@ -43,6 +43,7 @@ import json
 import os
 import sys
 import traceback
+from datetime import datetime, timezone
 
 import numpy as np
 from isaaclab.app import AppLauncher
@@ -258,6 +259,58 @@ from dishsim.ur5e_kin import ik_wrist3_all  # noqa: E402
 TRIAL_SCHEMA_VERSION = 1
 
 
+def _resolve_planner(args_cli) -> tuple:
+    """(planner, name) from --planner/--planner_param, or (None, name) after a [FAIL] print."""
+    planner_name = args_cli.planner or config.PLANNER
+    if planner_name not in available_planners():
+        print(f"[FAIL] unknown planner {planner_name!r} (choices: {available_planners()})")
+        return None, planner_name
+    planner_params = dict(config.PLANNER_PARAMS.get(planner_name, {}))
+    for item in args_cli.planner_param:
+        key, _, value = item.partition("=")
+        try:
+            planner_params[key.strip()] = json.loads(value)
+        except json.JSONDecodeError:
+            planner_params[key.strip()] = value
+    return make_planner(planner_name, **planner_params), planner_name
+
+
+def _validate_video_camera(args_cli) -> str | None:
+    """The chosen video camera name, or None after a [FAIL] print.
+
+    Validated HERE, not in the capture callback: that callback first runs deep inside the
+    episode — after Kit boot, cache loads, scene build and the settle loop — so a typo would
+    otherwise cost minutes before surfacing as a bare KeyError.
+    """
+    video_camera = args_cli.video_camera or config.TASK["video_camera"]
+    known_cameras = sorted(set(config.CAMERAS) | {"episode"})
+    if video_camera not in known_cameras:
+        print(f"[FAIL] unknown --video_camera {video_camera!r} (choices: {known_cameras})")
+        return None
+    return video_camera
+
+
+def _make_run_dirs(args_cli, prefix: str) -> tuple[str, str, str]:
+    """(run_id, run_dir, media_dir), with the results/media subtrees created."""
+    run_id = args_cli.run_id or (
+        f"{prefix}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+    )
+    run_dir = args_cli.out or os.path.join(PROJECT_ROOT, "results", "experiments", run_id)
+    for sub in ("episodes", "trials", "trajectories"):
+        os.makedirs(os.path.join(run_dir, sub), exist_ok=True)
+    media_dir = args_cli.media or os.path.join(PROJECT_ROOT, "media", "task", run_id)
+    if args_cli.enable_cameras:
+        os.makedirs(media_dir, exist_ok=True)
+    return run_id, run_dir, media_dir
+
+
+def _measured_pose_base(scene, T_base_w, item_id: str) -> np.ndarray:
+    """The item's MEASURED pose in the robot-base frame (physics-backed ``.data`` buffers)."""
+    o = scene[item_id]
+    return T_base_w @ make_T(o.data.root_pos_w.torch[0].cpu().numpy(),
+                             o.data.root_quat_w.torch[0].cpu().numpy())
+
+
 def main() -> int:
     if PHASE_LIST is not None:
         return _run_full_load_episode()
@@ -299,38 +352,13 @@ def main() -> int:
               f"scripts/setup/calibrate_grasp.py to make them real picks.")
 
     n_objects = int(args_cli.n_objects or config.TASK["n_objects"])
-    planner_name = args_cli.planner or config.PLANNER
-    if planner_name not in available_planners():
-        print(f"[FAIL] unknown planner {planner_name!r} (choices: {available_planners()})")
+    planner, planner_name = _resolve_planner(args_cli)
+    if planner is None:
         return 1
-    planner_params = dict(config.PLANNER_PARAMS.get(planner_name, {}))
-    for item in args_cli.planner_param:
-        key, _, value = item.partition("=")
-        try:
-            planner_params[key.strip()] = json.loads(value)
-        except json.JSONDecodeError:
-            planner_params[key.strip()] = value
-    planner = make_planner(planner_name, **planner_params)
-
-    # Validate the video camera HERE, not in the capture callback. That callback first runs deep
-    # inside the episode — after Kit boot, cache loads, scene build and the settle loop — so a
-    # typo would otherwise cost minutes before surfacing as a bare KeyError.
-    video_camera = args_cli.video_camera or config.TASK["video_camera"]
-    known_cameras = sorted(set(config.CAMERAS) | {"episode"})
-    if video_camera not in known_cameras:
-        print(f"[FAIL] unknown --video_camera {video_camera!r} (choices: {known_cameras})")
+    video_camera = _validate_video_camera(args_cli)
+    if video_camera is None:
         return 1
-
-    run_id = args_cli.run_id or (
-        f"task_{SCENARIO}_{planner_name}_"
-        f"{__import__('datetime').datetime.now(__import__('datetime').timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
-    )
-    run_dir = args_cli.out or os.path.join(PROJECT_ROOT, "results", "experiments", run_id)
-    for sub in ("episodes", "trials", "trajectories"):
-        os.makedirs(os.path.join(run_dir, sub), exist_ok=True)
-    media_dir = args_cli.media or os.path.join(PROJECT_ROOT, "media", "task", run_id)
-    if args_cli.enable_cameras:
-        os.makedirs(media_dir, exist_ok=True)
+    run_id, run_dir, media_dir = _make_run_dirs(args_cli, f"task_{SCENARIO}_{planner_name}")
 
     # ---- cache pre-flight ---------------------------------------------------------------------
     # Rack extensions are part of the collision-cache hash and caches are keyed by state name, so
@@ -668,7 +696,7 @@ def main() -> int:
         # eye, target AND lens: without the lens a replay re-renders a 15 mm episode view
         # through the 24 mm default and silently reframes the shot.
         "cameras": {k: {"eye": list(v[0]), "target": list(v[1]),
-                        "lens": (dict(v[2]) if len(v) > 2 else config.camera_lens(k))}
+                        "lens": (dict(v[2]) if len(v) > 2 else dict(config.CAMERA_LENS_DEFAULT))}
                     for k, v in cam_specs.items()},
         "camera_hw": list(config.CAMERA_HW), "camera_fps": int(config.CAMERA_FPS),
     }, object_keys=[it.item_id for it in items])
@@ -865,35 +893,13 @@ def _run_full_load_episode() -> int:  # noqa: PLR0915 — one episode, top to bo
         print(f"[INFO] {welded} are weld-ACQUIRED (no calibrated countertop pick); their "
               f"success rate reports separately and is never summed with real picks")
 
-    planner_name = args_cli.planner or config.PLANNER
-    if planner_name not in available_planners():
-        print(f"[FAIL] unknown planner {planner_name!r} (choices: {available_planners()})")
+    planner, planner_name = _resolve_planner(args_cli)
+    if planner is None:
         return 1
-    planner_params = dict(config.PLANNER_PARAMS.get(planner_name, {}))
-    for item in args_cli.planner_param:
-        key, _, value = item.partition("=")
-        try:
-            planner_params[key.strip()] = json.loads(value)
-        except json.JSONDecodeError:
-            planner_params[key.strip()] = value
-    planner = make_planner(planner_name, **planner_params)
-
-    video_camera = args_cli.video_camera or config.TASK["video_camera"]
-    known_cameras = sorted(set(config.CAMERAS) | {"episode"})
-    if video_camera not in known_cameras:
-        print(f"[FAIL] unknown --video_camera {video_camera!r} (choices: {known_cameras})")
+    video_camera = _validate_video_camera(args_cli)
+    if video_camera is None:
         return 1
-
-    run_id = args_cli.run_id or (
-        f"fullload_{config.MACHINE}_"
-        f"{__import__('datetime').datetime.now(__import__('datetime').timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
-    )
-    run_dir = args_cli.out or os.path.join(PROJECT_ROOT, "results", "experiments", run_id)
-    for sub in ("episodes", "trials", "trajectories"):
-        os.makedirs(os.path.join(run_dir, sub), exist_ok=True)
-    media_dir = args_cli.media or os.path.join(PROJECT_ROOT, "media", "task", run_id)
-    if args_cli.enable_cameras:
-        os.makedirs(media_dir, exist_ok=True)
+    run_id, run_dir, media_dir = _make_run_dirs(args_cli, f"fullload_{config.MACHINE}")
 
     # ---- cache pre-flight: the prologue state (reference class only) + every phase state ------
     # The reference class supplies each state's WORLD (manifest + pieces) and nothing else, so
@@ -1174,7 +1180,7 @@ def _run_full_load_episode() -> int:  # noqa: PLR0915 — one episode, top to bo
                 "object": sorted(set(master.classes))[0],
                 "config_hash": geometry_config_hash(),
                 "cameras": {k: {"eye": list(v[0]), "target": list(v[1]),
-                                "lens": (dict(v[2]) if len(v) > 2 else config.camera_lens(k))}
+                                "lens": (dict(v[2]) if len(v) > 2 else dict(config.CAMERA_LENS_DEFAULT))}
                             for k, v in cam_specs.items()},
                 "camera_hw": list(config.CAMERA_HW), "camera_fps": int(config.CAMERA_FPS),
                 **phase_meta_extra,

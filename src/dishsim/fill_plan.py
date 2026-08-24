@@ -28,7 +28,7 @@ Every number here is either a registry dim, a RACK_GEN parameter, or derived fro
 """
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import trimesh
@@ -57,18 +57,6 @@ class PlannedItem:
     T_base_obj: np.ndarray  # [4, 4] target REST pose (design intent, pre-settle)
     rack: str  # "lower" | "upper"
     zone: str  # human-readable zone tag
-    spawn_order: int = 0
-
-    def to_json(self) -> dict:
-        return {
-            "item_id": self.item_id,
-            "name": self.name,
-            "instance": self.instance,
-            "T_base_obj": self.T_base_obj.tolist(),
-            "rack": self.rack,
-            "zone": self.zone,
-            "spawn_order": self.spawn_order,
-        }
 
 
 # ---------------------------------------------------------------------------------------------
@@ -312,7 +300,6 @@ def plan_full_load(cache_dir: str | None = None) -> list[PlannedItem]:
     """
     manifest = load_manifest(cache_dir or config.scenario_cache_dir())
     out: list[PlannedItem] = []
-    order = 0
     counters: dict[str, int] = {}
     for rack, body, builder in (("lower", LOWER, _lower_items), ("upper", UPPER, _upper_items)):
         T_base_rack = np.array(manifest["statics"][body]["T_base_body"])
@@ -328,10 +315,8 @@ def plan_full_load(cache_dir: str | None = None) -> list[PlannedItem]:
                     T_base_obj=T_base_rack @ T_design,
                     rack=rack,
                     zone=zone,
-                    spawn_order=order,
                 )
             )
-            order += 1
     return out
 
 
@@ -354,19 +339,15 @@ def validate_plan(items: list[PlannedItem], cache_dir: str | None = None) -> dic
     """
     import fcl  # noqa: PLC0415
 
+    from .collision_world import _fcl_convex, _tf  # noqa: PLC0415
+
     cache_dir = cache_dir or config.scenario_cache_dir()
     manifest = load_manifest(cache_dir)
-
-    def convex(mesh, T):
-        hull = mesh.convex_hull
-        faces = np.hstack([np.full((len(hull.faces), 1), 3, dtype=np.int64), hull.faces.astype(np.int64)])
-        geo = fcl.Convex(hull.vertices.astype(np.float64), len(hull.faces), faces.flatten())
-        return fcl.CollisionObject(geo, fcl.Transform(T[:3, :3], T[:3, 3]))
 
     objs = []
     for it in items:
         mesh = _item_mesh(it.name)
-        objs.append((it, convex(mesh, it.T_base_obj)))
+        objs.append((it, fcl.CollisionObject(_fcl_convex(mesh), _tf(it.T_base_obj))))
 
     # pairwise item overlap (convex-hull level; the mug hull ignores the cavity — fine for
     # spacing checks since nothing nests inside another item in this layout)

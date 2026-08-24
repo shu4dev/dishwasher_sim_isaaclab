@@ -26,8 +26,8 @@ class CameraRig:
     def __init__(self, cam_specs: dict[str, tuple], hw: tuple[int, int] = (720, 1280)):
         """Args:
             cam_specs: ``{name: (eye, target)}`` or ``{name: (eye, target, lens)}``. A carried
-                lens wins over :data:`dishsim.config.CAMERA_LENS`, which is what lets a replay
-                re-render through the same optics the experiment was shot with instead of
+                lens wins over :data:`dishsim.config.CAMERA_LENS_DEFAULT`, which is what lets a
+                replay re-render through the same optics the experiment was shot with instead of
                 whatever the config happens to say now.
             hw: (height, width) in pixels.
         """
@@ -44,7 +44,7 @@ class CameraRig:
         self._specs = {k: (tuple(v[0]), tuple(v[1])) for k, v in cam_specs.items()}
         #: Lens actually used per camera — a spec may carry its own (replay), otherwise config.
         self.lenses = {
-            k: dict(v[2]) if len(v) > 2 and v[2] else config.camera_lens(k)
+            k: dict(v[2]) if len(v) > 2 and v[2] else dict(config.CAMERA_LENS_DEFAULT)
             for k, v in cam_specs.items()
         }
         self.cams: dict[str, object] = {}

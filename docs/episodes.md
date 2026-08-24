@@ -84,7 +84,7 @@ object.
 
 ## Camera framing
 
-`config.CAMERA_LENS` makes focal length and aperture configurable, and `config.EPISODE_CAMERA`
+`config.CAMERA_LENS_DEFAULT` sets focal length and aperture, and `config.EPISODE_CAMERA`
 is a wide view that keeps the countertop and the machine in frame for the whole episode.
 Vertical FOV is the binding constraint on a 16:9 frame, not horizontal.
 

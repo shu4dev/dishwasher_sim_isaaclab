@@ -278,7 +278,6 @@ def z_budget_clearance_m(object_class: str, state: str, *, last_state: bool) -> 
 class _StateTables:
     """Per-class slot/goal tables for one state, loaded under that state's scenario."""
 
-    state: str
     config_hash: str
     slots: dict[str, dict[int, placement.SlotFrame]]
     goal_sets: dict[str, dict[int, np.ndarray]]
@@ -314,7 +313,7 @@ def load_state_tables(state: str, classes: list[str]) -> _StateTables:
                 goal_sets[cls] = {g["slot_id"]: np.array(g["configs"])
                                   for g in stamped["goal_sets"]}
         names[cls] = placement.slot_names(list(slots[cls].values()))
-    return _StateTables(state, live_hash or "", slots, goal_sets, names)
+    return _StateTables(live_hash or "", slots, goal_sets, names)
 
 
 def _nominal_rest_pose(slot: placement.SlotFrame) -> np.ndarray:
@@ -460,7 +459,7 @@ def _try_place_one(cls: str, state: str, tables: _StateTables, world: CollisionW
                    occupied: list, counters: dict) -> PlannedPlacement | None:
     """First candidate slot whose baked goal set survives the neighbour re-filter."""
     mode = config.effective_placement_mode(cls)
-    ids, _src = slotting.candidate_slot_ids(
+    ids = slotting.candidate_slot_ids(
         cls, mode, tables.slots[cls], tables.slot_names[cls], tables.goal_sets[cls],
         type_slots=config.TASK.get("type_slots") or {}, slot_pools=config.TASK["slot_pools"])
     r = float(config.OBJECTS[cls].rim_radius_m)

@@ -80,13 +80,7 @@ from dishsim import trajectory as dtraj  # noqa: E402
 from dishsim.geometry import config_hash  # noqa: E402
 from dishsim.media import CameraRig, VideoWriter  # noqa: E402
 
-FAILURES: list[str] = []
-
-
-def check(name: str, ok: bool, detail: str = "") -> None:
-    print(f"[{'OK' if ok else 'FAIL'}] {name}{': ' + detail if detail else ''}")
-    if not ok:
-        FAILURES.append(name)
+from dishsim.checks import FAILURES, check, finish  # noqa: E402
 
 
 def main() -> None:
@@ -176,9 +170,7 @@ def main() -> None:
         print(f"[INFO] {meta['trial']}: {n_expected} frames from {len(rec)} recorded steps -> {out_dir}"
               + (f", still {os.path.basename(still)}" if still else ""))
 
-    print(f"[RESULT] {'PASS' if not FAILURES else 'FAIL: ' + ', '.join(FAILURES)}")
-    if FAILURES:
-        raise SystemExit(1)
+    finish()
 
 
 if __name__ == "__main__":

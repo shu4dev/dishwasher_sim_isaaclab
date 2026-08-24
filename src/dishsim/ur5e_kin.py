@@ -293,59 +293,6 @@ def expand_2pi_wraps(
     return np.array(keep)
 
 
-def dls_ik(
-    T_base_wrist3: np.ndarray,
-    q0: np.ndarray,
-    max_iters: int = 200,
-    tol: float = 1e-8,
-    damping: float = 1e-3,
-) -> np.ndarray | None:
-    """Damped-least-squares numeric IK fallback (finite-difference Jacobian).
-
-    Args:
-        T_base_wrist3: Target pose, shape [4, 4].
-        q0: Initial guess, shape [6].
-        max_iters: Iteration cap.
-        tol: Convergence threshold on the 6-D pose error norm.
-        damping: DLS damping factor.
-
-    Returns:
-        Converged joint vector (shape [6]) or None.
-    """
-    T_t = np.asarray(T_base_wrist3, dtype=float)
-    q = np.asarray(q0, dtype=float).copy()
-
-    def pose_err(qv: np.ndarray) -> np.ndarray:
-        T = fk_wrist3(qv)
-        e_p = T_t[:3, 3] - T[:3, 3]
-        R_err = T_t[:3, :3] @ T[:3, :3].T
-        # rotation-vector (log map) of R_err
-        cos_a = np.clip((np.trace(R_err) - 1.0) / 2.0, -1.0, 1.0)
-        angle = np.arccos(cos_a)
-        if angle < 1e-9:
-            e_r = np.zeros(3)
-        else:
-            axis = np.array([R_err[2, 1] - R_err[1, 2], R_err[0, 2] - R_err[2, 0], R_err[1, 0] - R_err[0, 1]])
-            e_r = angle * axis / (2.0 * np.sin(angle))
-        return np.concatenate([e_p, e_r])
-
-    for _ in range(max_iters):
-        e = pose_err(q)
-        if np.linalg.norm(e) < tol:
-            return wrap_to_pi(q)
-        # finite-difference Jacobian of the pose (e(q) = target - pose(q), so
-        # (e(q) - e(q+h))/h = d(pose)/dq, which is what the DLS update wants)
-        J = np.zeros((6, 6))
-        h = 1e-6
-        for j in range(6):
-            dq = q.copy()
-            dq[j] += h
-            J[:, j] = (pose_err(q) - pose_err(dq)) / h
-        JT = J.T
-        q = q + JT @ np.linalg.solve(J @ JT + damping * np.eye(6), e)
-    return None
-
-
 def _self_check() -> None:
     """Verify the Rz(pi) base-corrector identity against the raw URDF chain at fixed configs."""
 

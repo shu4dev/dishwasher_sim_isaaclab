@@ -62,6 +62,7 @@ import trimesh
 
 from . import config, rack_ops
 from .collision_world import CollisionWorld, _fcl_convex, _tf
+from .fill_plan import _axis_bottom_offset, _stand_R
 from .geometry import dishwasher_bodies
 from .placement import SlotFrame, derive_slots, goal_configs
 from .transforms import T_inv, make_T
@@ -141,24 +142,13 @@ class Candidate:
 FRONT = Candidate(0.0, 0.0, 0.0)
 
 
-def _reference_class() -> str:
-    """Class carried by the pick/rack-gate worlds (hand empty — only the cache identity).
-
-    v1: the frozen mug. Bosch: the cup — the legacy Y-up mug's pinch gate fails extraction
-    at any base reference except the frozen v1 spot (measured 2026-08-10: pad force 0.81 N
-    at two different shifted references, in-band at (0, 0, 0.25); cup/tumbler seat
-    correctly everywhere). Known limitation to root-cause before the mug joins v2 studies.
-    """
-    return "cup" if config.MACHINE == "bosch800" else "mug"
-
-
 def funnel_combos() -> list[tuple[str, str]]:
     """The (state, class) pairs the sweep scores — exactly the baked combos that carry the
     active machine's success-bar counts."""
     demo = [k for k, s in config.OBJECTS.items() if s.robot_demo]
     if config.MACHINE == "bosch800":
         # Bosch bar: lower-extended (placement), middle-extended (middle_out drinkware),
-        # third-rack flat-lay (third_out fork). The mug sits out (see _reference_class).
+        # third-rack flat-lay (third_out fork). The mug sits out (see config.reference_class).
         combos = [("placement", cls) for cls in demo if cls != "mug"]
         combos += [("middle_out", c) for c in ("cup", "tumbler")]
         combos += [("third_out", "fork")]
@@ -216,7 +206,7 @@ class SweepContext:
             self.slots0[key] = derive_slots(config.scenario_cache_dir(state, object_name=cls))
 
         # pick world: the machine and nothing carried — the state a pick happens in
-        ref = _reference_class()
+        ref = config.reference_class()
         self.pick_world = self._load("placement", ref, attached=False, merged=True)
         self.pick_statics0 = self._statics(self.pick_world)
 
@@ -342,7 +332,7 @@ def gate_static_clearance(ctx: SweepContext, cand: Candidate) -> bool:
 def gate_home_free(ctx: SweepContext) -> bool:
     """HOME_Q collision-free with the mug carried and with the hand empty (after re-basing)."""
     home = np.array(config.HOME_Q)
-    ref = _reference_class()
+    ref = config.reference_class()
     return not ctx.worlds[("placement", ref)].in_collision(home) and not ctx.pick_world.in_collision(home)
 
 
@@ -404,28 +394,6 @@ def largest_rectangle(mask: np.ndarray) -> tuple[int, int, int, int]:
     return best[1]
 
 
-def _stand_R(spec, yaw_deg: float) -> np.ndarray:
-    """Rotation standing the object axis up, then yawing about world z (reach_map convention)."""
-    from scipy.spatial.transform import Rotation  # noqa: PLC0415
-
-    axis = tuple(spec.axis_obj)
-    if axis == (0.0, 1.0, 0.0):
-        R0 = Rotation.from_euler("x", 90.0, degrees=True).as_matrix()
-    elif axis == (0.0, 0.0, 1.0):
-        R0 = np.eye(3)
-    else:
-        R0 = Rotation.from_euler("y", -90.0, degrees=True).as_matrix()
-    return Rotation.from_euler("z", yaw_deg, degrees=True).as_matrix() @ R0
-
-
-def _bottom_offset(spec, R: np.ndarray) -> float:
-    """Distance from the object origin down to its lowest bbox point under ``R``."""
-    h = np.array(spec.bbox_half)
-    corners = np.array([[sx * h[0], sy * h[1], sz * h[2]]
-                        for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
-    return -float((R @ corners.T).T[:, 2].min())
-
-
 def _pick_feasible(world, T_hover, T_grasp, T_tcp_w3, q_seed) -> bool:
     """reach_map's criterion: one arm configuration clears BOTH the hover and the grasp pose."""
     hover_sols = [q for q in ik_wrist3_all(T_hover @ T_tcp_w3, q_seed=q_seed)
@@ -471,7 +439,7 @@ def pick_coverage(ctx: SweepContext, cand: Candidate, *, step: float, n_yaws: in
                     R = _stand_R(spec, float(yaw))
                     T_w_obj = np.eye(4)
                     T_w_obj[:3, :3] = R
-                    T_w_obj[:3, 3] = (x, y, top_z + _bottom_offset(spec, R))
+                    T_w_obj[:3, 3] = (x, y, top_z + _axis_bottom_offset(spec, R)[2])
                     T_grasp = (T_b1_w @ T_w_obj) @ T_obj_tcp
                     T_hover = T_grasp.copy()
                     T_hover[2, 3] += config.PICK_HOVER_M
