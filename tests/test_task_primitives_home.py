@@ -24,6 +24,8 @@ from dishsim import config
 from dishsim.task.primitives import GraspProfile, PickPlace
 from dishsim.task.sequencer import TaskItem
 
+from conftest import StubPlanResult, StubStats
+
 HOME = np.array(config.HOME_Q, dtype=float)
 TOL = float(config.TASK["home_tol_rad"])
 
@@ -34,16 +36,6 @@ class StubWorld:
 
     def in_collision(self, q, return_pairs=False):
         return (self._in_coll, []) if return_pairs else self._in_coll
-
-
-class StubStats:
-    plan_time_s = 0.0
-
-
-class StubPlanResult:
-    def __init__(self, status, path_q=None):
-        self.status = status
-        self.path_q = path_q
 
 
 class StubMotion:

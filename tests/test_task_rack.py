@@ -24,6 +24,8 @@ import pytest
 from dishsim import config
 from dishsim.task import rack as R
 
+from conftest import StubPlanResult, StubStats
+
 ACTION = config.SCENARIOS["both_in"]["rack_action"]
 
 
@@ -39,16 +41,6 @@ class StubWorld:
 
     def in_collision(self, q, return_pairs=False):
         return (self._c, []) if return_pairs else self._c
-
-
-class StubPlan:
-    def __init__(self, status, path_q=None):
-        self.status, self.path_q = status, path_q
-        self.plan_time_s = 0.0
-
-
-class StubStats:
-    plan_time_s = 0.0
 
 
 class StubMotion:
@@ -71,8 +63,8 @@ class StubMotion:
 
     def plan(self, start_q, goal_qs, *, seed=None, debug=None):
         if not self._plan_solves:
-            return StubPlan("failed")
-        return StubPlan("solved", np.vstack([np.asarray(start_q, float), np.asarray(goal_qs)[0]]))
+            return StubPlanResult("failed")
+        return StubPlanResult("solved", np.vstack([np.asarray(start_q, float), np.asarray(goal_qs)[0]]))
 
     def _result(self, phase, q_end):
         from dishsim.task.motion import ExecResult

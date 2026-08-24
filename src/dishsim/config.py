@@ -739,14 +739,13 @@ def placement_mode_params(mode: str) -> dict:
 # Surface 0.190 -> 0.411 m^2, against 0.20 m^2 for the entire 15-class library laid flat.
 COUNTERTOP_SIZE = (0.395, 1.040, 0.020)  # world-aligned box extents [m]
 COUNTERTOP_CENTER_W = (0.8475, -0.080, 0.48)  # world center; top surface at z 0.49
-# Object staging poses: upright on the countertop at the robot-nearest corner (the wrist
+# Object staging pose: upright on the countertop at the robot-nearest corner (the wrist
 # IK target lands at ~0.81 of the 0.85 m reach — verified with the analytic IK offline). Yaw
 # orients the handle so the fixed calibrated grasp transform stays IK-reachable. This is the
 # ACTIVE-OBJECT view (rewritten by set_active_object); tuple of ((x, y, z), yaw_deg) staging
-# poses, one per trial instance. Entry 0 reproduces the frozen v0 mug pose.
+# poses. Entry 0 reproduces the frozen v0 mug pose.
 OBJECT_COUNTERTOP_POSES_W: tuple = (
     ((0.665, -0.185, 0.5307), 0.0),  # root (= bbox center); mug base at z 0.49
-    ((0.665, -0.105, 0.5307), 0.0),  # second staging spot, one footprint toward +y
 )
 PICK_HOVER_M = 0.10  # planned pre-grasp TCP hover above the grasp pose; the descent is a
 #                      scripted straight line gated by the calibrated pinch band, not FCL
@@ -1064,7 +1063,7 @@ OBJECTS: dict[str, ObjectSpec] = {
             rim_tcp_z_m=-0.0200, aperture_rad=0.106, force_min_n=1.8, force_max_n=16.3, force_exec_max_n=12.0,),
         placement=PlacementSpec(mode="floor_stand", rack="lower"),
         coacd={"threshold": 0.03, "max_convex_hull": 32},
-        countertop_poses_w=(((0.665, -0.185, 0.5246), 0.0), ((0.665, -0.105, 0.5246), 0.0)),
+        countertop_poses_w=(((0.665, -0.185, 0.5246), 0.0),),
         robot_demo=True,
         cache_name="025_mug",
         usd_basename="025_mug_physics.usd",
@@ -1092,7 +1091,7 @@ OBJECTS: dict[str, ObjectSpec] = {
         ),
         placement=PlacementSpec(mode="plate_slot", rack="lower", params={"lean_deg": 7.0}),
         coacd={"threshold": 0.02, "max_convex_hull": 48},
-        countertop_poses_w=(((0.70, -0.185, 0.562), 0.0), ((0.70, -0.10, 0.562), 0.0)),
+        countertop_poses_w=(((0.70, -0.185, 0.562), 0.0),),
         robot_demo=True,
     ),
     "saucer": ObjectSpec(
@@ -1137,7 +1136,7 @@ OBJECTS: dict[str, ObjectSpec] = {
         # is traded for placeability; capacity_fill stands its bowls too.
         placement=PlacementSpec(mode="floor_stand", rack="lower"),
         coacd={"threshold": 0.03, "max_convex_hull": 32},
-        countertop_poses_w=(((0.665, -0.185, 0.5087), 0.0), ((0.665, -0.10, 0.5087), 0.0)),
+        countertop_poses_w=(((0.665, -0.185, 0.5087), 0.0),),
         robot_demo=True,
     ),
     "cup": ObjectSpec(
@@ -1160,7 +1159,7 @@ OBJECTS: dict[str, ObjectSpec] = {
         ),
         placement=PlacementSpec(mode="floor_stand", rack="lower"),
         coacd={"threshold": 0.03, "max_convex_hull": 32},
-        countertop_poses_w=(((0.665, -0.185, 0.5238), 0.0), ((0.665, -0.105, 0.5238), 0.0)),
+        countertop_poses_w=(((0.665, -0.185, 0.5238), 0.0),),
         robot_demo=True,
     ),
     # ---- YCB google_16k cutlery + utensils (scaled to the basket) -----------------------------
@@ -1185,7 +1184,7 @@ OBJECTS: dict[str, ObjectSpec] = {
         ),
         placement=PlacementSpec(mode="basket_drop", rack="basket"),
         coacd={"threshold": 0.05, "max_convex_hull": 16},
-        countertop_poses_w=(((0.68, -0.19, 0.4946), 90.0), ((0.68, -0.11, 0.4946), 90.0)),
+        countertop_poses_w=(((0.68, -0.19, 0.4946), 90.0),),
         robot_demo=True,
     ),
     "spoon": ObjectSpec(
@@ -1257,7 +1256,7 @@ OBJECTS: dict[str, ObjectSpec] = {
         grasp=GraspSpec(family="rim_diam", grasp_width_m=0.0600, rim_tcp_z_m=-0.018, aperture_rad=0.303, force_min_n=1.6, force_max_n=14.7, force_exec_max_n=12.0,),
         placement=PlacementSpec(mode="floor_stand", rack="lower"),
         coacd={"analytic": True},
-        countertop_poses_w=(((0.665, -0.185, 0.5425), 0.0), ((0.665, -0.105, 0.5425), 0.0)),
+        countertop_poses_w=(((0.665, -0.185, 0.5425), 0.0),),
         robot_demo=True,
     ),
     "wine_glass": ObjectSpec(
@@ -1738,8 +1737,8 @@ _EPISODE_CAMERA_BOSCH = {
 #: the ArtVIP 40 mm pitch, whose free lateral half-play is ~11.7 mm). A disc released over a
 #: Bosch gap rolls until it rests against a tine — how real plates sit — at
 #: (pitch 50 − tine wire 3.2 − plate 14.4)/2 = 16.2 mm of lateral play and a matching extra
-#: lean. Probe of record (scripts/setup/probe_plate_settle.py, 2026-08-14, 3 gaps x 8
-#: releases): lateral mean 14.1 / p95 15.0 / max 15.2 mm, tilt p95 14.0 / max 14.1 deg,
+#: lean. Probe of record (probe_plate_settle.py, retired to git history, 2026-08-14, 3 gaps
+#: x 8 releases): lateral mean 14.1 / p95 15.0 / max 15.2 mm, tilt p95 14.0 / max 14.1 deg,
 #: bottom clean — 0/24 passed the v1 tolerances, 24/24 pass these (geometry bound + margin).
 _PLACEMENT_MODES_BOSCH = {**PLACEMENT_MODES,
                           "plate_slot": {**PLACEMENT_MODES["plate_slot"],
@@ -1899,3 +1898,26 @@ def apply_base_placement(name: str) -> None:
     PEDESTAL_SIZE = p["pedestal_size"]
     PEDESTAL_POS_W = p["pedestal_pos_w"]
     BASE_PLACEMENT = name
+
+
+def apply_selection(machine: str | None = None, object_name: str = "mug",
+                    scenario: str | None = None, placement: str | None = None) -> None:
+    """Apply a machine/object/scenario/placement selection in the ONE valid order.
+
+    Machine first (it resets scenario + base placement), then the active object, then the
+    scenario, and the base placement last (machine/scenario apply would reset it). Call
+    BEFORE any scene/robots import — they bind rack targets + the derived USD at import.
+    The setup scripts' shared CLI flags (``scripts/setup/_selector.py``) feed this directly.
+
+    Args:
+        machine: Machine name (see :data:`MACHINES`); ``None`` keeps the v1 baseline.
+        object_name: Active object class (see :data:`OBJECTS`).
+        scenario: Rack-state scenario; ``None`` uses the ACTIVE machine's placement state.
+        placement: Named base placement; ``None`` keeps the machine's default.
+    """
+    if machine:
+        apply_machine(machine)
+    set_active_object(object_name)
+    apply_scenario(scenario if scenario is not None else PLACEMENT_STATE)
+    if placement:
+        apply_base_placement(placement)

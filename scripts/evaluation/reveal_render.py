@@ -14,7 +14,7 @@ import sys
 import numpy as np
 from isaaclab.app import AppLauncher
 
-PROJECT_ROOT = "/workspace/isaaclab/dishwasher_sim_isaaclab"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 parser = argparse.ArgumentParser()
@@ -70,7 +70,7 @@ def main() -> int:
     scene = InteractiveScene(dscene.make_scene_cfg(
         with_object=False, with_robot_contacts=False, objects=obj_specs))
     ep_cam = config.EPISODE_CAMERA
-    cam_specs = {**{k: v for k, v in config.CAMERAS.items()},
+    cam_specs = {**config.CAMERAS,
                  "episode": (tuple(ep_cam["eye"]), tuple(ep_cam["target"]),
                              dict(ep_cam["lens"]))}
     rig = CameraRig(cam_specs, hw=config.CAMERA_HW)

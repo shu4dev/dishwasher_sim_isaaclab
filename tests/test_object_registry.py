@@ -7,7 +7,8 @@
 Covers: per-spec geometry/mass sanity, jaw clearance at the grasp patch, the grasp-chain
 math for every family (the grasped feature must land on the tool axis at rim_tcp_z), the
 mug entry reproducing the frozen v0 constants bit-exactly (baseline cache protection),
-set_active_object mutate/restore, and per-object cache-dir separation.
+set_active_object mutate/restore, per-object cache-dir separation, and the gripper-wide
+grasp constants (force band, open aperture, pad bodies, inner-finger signs).
 """
 
 import numpy as np
@@ -47,7 +48,7 @@ def test_spec_sanity(name):
     )
     assert spec.placement.rack in ("lower", "upper", "basket")
     if spec.robot_demo:
-        assert len(spec.countertop_poses_w) >= 2, "demo classes need 2 staging poses"
+        assert len(spec.countertop_poses_w) >= 1, "demo classes need a staging pose"
         assert spec.grasp.family != "stem_pinch", "stem_pinch is registry-only"
 
 
@@ -208,3 +209,31 @@ def test_object_spec_in_hash_for_non_mug():
     finally:
         config.OBJECTS["plate"] = spec
     assert h1 != h2
+
+
+# ---------------------------------------------------------------------------------------------
+# 5. gripper-wide grasp constants
+# ---------------------------------------------------------------------------------------------
+
+
+def test_force_band_ordering():
+    # static band is ordered; the dynamic cap must clear the band floor (a motion dip to the
+    # static minimum must not abort) — but it is measured independently (wiggle peak x1.5)
+    # and may sit below the generous static maximum
+    assert 0.0 < config.GRIP_FORCE_MIN_N < config.GRIP_FORCE_MAX_N
+    assert config.GRIP_FORCE_MIN_N < config.GRIP_FORCE_EXEC_MAX_N
+
+
+def test_open_aperture_is_fully_open():
+    assert config.GRIPPER_APERTURE_OPEN_RAD == 0.0
+
+
+def test_pad_bodies_are_the_inner_finger_pair():
+    assert set(config.GRIP_PAD_BODIES) == {"left_inner_finger", "right_inner_finger"}
+
+
+def test_inner_finger_signs_measured():
+    signs = config.GRIPPER_INNER_FINGER_SIGNS
+    assert signs is not None
+    assert set(signs) == {"left_inner_finger_joint", "right_inner_finger_joint"}
+    assert all(v in (-1.0, 1.0) for v in signs.values())

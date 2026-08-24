@@ -39,23 +39,15 @@ import trimesh  # noqa: E402
 from dishsim import config  # noqa: E402
 from dishsim.geometry import coacd_dir_for, load_manifest  # noqa: E402
 
+from _selector import add_selector_args  # noqa: E402  scripts/setup shared flags
+
 parser = argparse.ArgumentParser(description="CoACD decomposition of the collision cache.")
 parser.add_argument("--force", action="store_true", help="Re-decompose even if outputs exist.")
-parser.add_argument("--placement", type=str, default=None,
-                    help="Named base placement (see config.BASE_PLACEMENTS); default: the machine's.")
-parser.add_argument("--machine", type=str, default=None,
-                    help="Machine name (see config.MACHINES); default: the v1 baseline.")
-parser.add_argument("--object", type=str, default="mug", help="Carried object class (see config.OBJECTS).")
-parser.add_argument("--scenario", type=str, default="both_out",
-                    help="Rack-state scenario (see config.SCENARIOS).")
+add_selector_args(parser)
 args = parser.parse_args()
 
-if args.machine:
-    config.apply_machine(args.machine)  # first: it resets scenario + base placement
-config.set_active_object(args.object)
-config.apply_scenario(args.scenario)
-if args.placement:
-    config.apply_base_placement(args.placement)  # after machine/scenario — they reset it
+config.apply_selection(machine=args.machine, object_name=args.object,
+                       scenario=args.scenario, placement=args.placement)
 CACHE = config.scenario_cache_dir()
 
 from dishsim.checks import FAILURES, check, finish  # noqa: E402

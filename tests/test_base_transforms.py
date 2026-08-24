@@ -24,7 +24,7 @@ import numpy as np
 import pytest
 
 from dishsim import config
-from dishsim.base_sweep import _bottom_offset, _stand_R
+from dishsim.fill_plan import _axis_bottom_offset, _stand_R
 from dishsim.task import layout as L
 from dishsim.transforms import T_inv, make_T
 
@@ -151,18 +151,18 @@ def test_top_z_is_invariant_across_base_placements():
 
 
 def test_reach_map_idiom_matches_layout_surface_pose(side_high):
-    """reach_map.py builds T_base_obj by conjugating a world pose (base_sweep's pure helpers);
+    """reach_map.py builds T_base_obj by conjugating a world pose (fill_plan's pure helpers);
     for a Z-up class its stand convention coincides with layout's, so the two constructions
     must agree pose-for-pose under a yawed base."""
     spec = config.OBJECTS["cup"]
     assert tuple(spec.axis_obj) == (0.0, 0.0, 1.0)  # conventions only coincide for Z-up
     x, y, yaw, top_z_w = 0.95, -0.45, 90.0, 0.914
 
-    # reach_map.py's construction (post-fix), using base_sweep's pure functions
+    # reach_map.py's construction (post-fix), using fill_plan's pure functions
     R = _stand_R(spec, yaw)
     T_w_obj = np.eye(4)
     T_w_obj[:3, :3] = R
-    T_w_obj[:3, 3] = (x, y, top_z_w + _bottom_offset(spec, R))
+    T_w_obj[:3, 3] = (x, y, top_z_w + _axis_bottom_offset(spec, R)[2])
     T_base_w = T_inv(make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W))
     reach_map_pose = T_base_w @ T_w_obj
 

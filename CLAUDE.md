@@ -63,15 +63,15 @@ scripts/run_kit.sh scripts/experiment/run_task.py --headless --enable_cameras \
 
 # bake a machine state's collision caches (what run_task.py prints when a cache is missing)
 scripts/setup/build_state.py --state placement --classes mug,cup,tumbler
-# Bosch states take the same flags (+ --skip_goals when only the sweep needs the world)
+# Bosch states take the same flags (+ --skip_goals for reference-class world-only bakes)
 scripts/setup/build_state.py --machine bosch800 --placement side_winner --state placement --classes cup
 
 # entry points: scripts/ is split by phase (see README Usage)
 #   setup/      kit_smoke, inspect_scene, check_scene, calibrate_grasp, freeze_calibration,
 #               extract_geometry, decompose_meshes, parity_check, goal_configs, preview_rack,
-#               capacity_fill, build_state, reach_map, base_pose_sweep (completed study)
-#               (asset authoring — build_object_assets, make_prop_physics_usd — retired to
-#               git history with the public-asset release; the archive ships their outputs)
+#               capacity_fill, build_state, reach_map
+#               (one-off tooling — asset authoring, the base-pose sweep, calibration probes —
+#               retires to git history once its outputs are frozen; the archive ships them)
 #   experiment/ run_trials (single object, v0 baseline), run_task (episodes)
 #               --planner selects the algorithm for both
 #   evaluation/ compute_metrics, render_videos, verify_replay, plan_visual

@@ -28,7 +28,6 @@ import math
 
 import numpy as np
 import torch
-from scipy.spatial.transform import Rotation
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
@@ -113,28 +112,13 @@ def base_to_world(pos_b) -> np.ndarray:
     return T_w_base[:3, :3] @ np.asarray(pos_b, dtype=float) + T_w_base[:3, 3]
 
 
-def countertop_pose_w(instance: int = 0) -> tuple[np.ndarray, np.ndarray]:
-    """World staging pose of trial ``instance`` on the countertop (axis-convention aware).
-
-    Returns:
-        (position [m] shape [3], XYZW quaternion shape [4]).
-    """
-    (pos_w, yaw_deg) = config.OBJECT_COUNTERTOP_POSES_W[instance]
-    r_yaw = Rotation.from_euler("z", float(yaw_deg), degrees=True)
-    if tuple(config.OBJECT_AXIS_OBJ) == (0.0, 1.0, 0.0):  # Y-up mug stands via Rx(+90)
-        r_stand = Rotation.from_euler("x", 90.0, degrees=True)
-    else:  # Z-up and X-up (flat) objects stage as authored
-        r_stand = Rotation.identity()
-    return np.asarray(pos_w, dtype=float), (r_yaw * r_stand).as_quat()  # XYZW
-
-
 # ---------------------------------------------------------------------------------------------
 # scene construction
 # ---------------------------------------------------------------------------------------------
 
 
 def make_scene_cfg(
-    with_object: bool = True, with_robot_contacts: bool = False, n_instances: int = 1,
+    with_object: bool = True, with_robot_contacts: bool = False,
     objects: list | None = None,
 ) -> InteractiveSceneCfg:
     """Build the v0 scene config (single env).
@@ -142,17 +126,12 @@ def make_scene_cfg(
     Args:
         objects: Heterogeneous manipulable objects to spawn, one dict per item with keys
             ``name``, ``usd_path``, ``pos``, ``quat`` and optionally ``contact_filters``.
-            Unlike ``n_instances`` (which copies the ACTIVE class), these may be different
-            classes — what a multi-object task needs. Usually combined with
-            ``with_object=False``.
+            Unlike the active-class ``with_object`` spawn, these may be different classes —
+            what a multi-object task needs. Usually combined with ``with_object=False``.
         with_object: Spawn the carried object at the home-configuration grasp pose. Set False
             for the ``--measure`` bootstrap run that derives the TCP rotation constant.
         with_robot_contacts: Add contact sensors over every robot body (arm + gripper) — used
             by the parity check and execution-time contact monitoring.
-        n_instances: Object instances of the active class. Instance 0 keeps the legacy
-            ``CarriedObject``/``object_contact`` names; instance ``i`` adds
-            ``CarriedObject_i``/``object_contact_i`` staged on the countertop. Only one weld
-            is ever enabled at a time (see :func:`author_weld`).
     """
     robot_joint_pos = dict(zip(config.ARM_JOINTS, config.HOME_Q))
     # gripper: the drive joint starts fully open (the trial-start state — the visible close
@@ -228,37 +207,26 @@ def make_scene_cfg(
         )
 
     if with_object:
-        for i in range(max(1, n_instances)):
-            suffix = "" if i == 0 else f"_{i}"
-            # instance 0 spawns at the home-configuration grasp pose (legacy: scripts 10-15
-            # weld it there); later instances stage on the countertop from the start
-            pos, quat = grasp_pose_w() if i == 0 else countertop_pose_w(i)
-            setattr(
-                scene_cfg,
-                f"carried_object{suffix}",
-                RigidObjectCfg(
-                    prim_path="{ENV_REGEX_NS}/CarriedObject" + suffix,
-                    spawn=sim_utils.UsdFileCfg(
-                        usd_path=config.OBJECT_USD,
-                        rigid_props=sim_utils.RigidBodyPropertiesCfg(max_depenetration_velocity=5.0),
-                        activate_contact_sensors=True,
-                    ),
-                    init_state=RigidObjectCfg.InitialStateCfg(pos=tuple(pos), rot=tuple(xyzw_to_wxyz(quat))),
-                ),
-            )
-            # net contact force on the carried object — must stay ~0 while welded (any
-            # persistent force means the fingers or the world are touching it). The filter
-            # list resolves per-partner forces into force_matrix_w for diagnosis (sensor prim
-            # is a single prim per env, so filtering is legal here).
-            setattr(
-                scene_cfg,
-                f"object_contact{suffix}",
-                ContactSensorCfg(
-                    prim_path="{ENV_REGEX_NS}/CarriedObject" + suffix,
-                    update_period=0.0,
-                    filter_prim_paths_expr=list(_GRIPPER_FILTER_PATHS),
-                ),
-            )
+        # spawned at the home-configuration grasp pose (legacy: scripts 10-15 weld it there)
+        pos, quat = grasp_pose_w()
+        scene_cfg.carried_object = RigidObjectCfg(
+            prim_path="{ENV_REGEX_NS}/CarriedObject",
+            spawn=sim_utils.UsdFileCfg(
+                usd_path=config.OBJECT_USD,
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(max_depenetration_velocity=5.0),
+                activate_contact_sensors=True,
+            ),
+            init_state=RigidObjectCfg.InitialStateCfg(pos=tuple(pos), rot=tuple(xyzw_to_wxyz(quat))),
+        )
+        # net contact force on the carried object — must stay ~0 while welded (any
+        # persistent force means the fingers or the world are touching it). The filter
+        # list resolves per-partner forces into force_matrix_w for diagnosis (sensor prim
+        # is a single prim per env, so filtering is legal here).
+        scene_cfg.object_contact = ContactSensorCfg(
+            prim_path="{ENV_REGEX_NS}/CarriedObject",
+            update_period=0.0,
+            filter_prim_paths_expr=list(_GRIPPER_FILTER_PATHS),
+        )
 
     for spec in objects or ():
         _add_object(scene_cfg, spec, _GRIPPER_FILTER_PATHS)
@@ -283,8 +251,8 @@ _GRIPPER_FILTER_PATHS = [
 def _add_object(scene_cfg, spec: dict, gripper_filters: list) -> None:
     """Attach one heterogeneous manipulable object to a scene config.
 
-    ``n_instances`` spawns N copies of the ACTIVE class; a multi-object task needs a mug and a
-    cup and a tumbler in one scene, each from its own USD, each with its own contact sensor.
+    ``with_object`` spawns the ACTIVE class; a multi-object task needs a mug and a cup and a
+    tumbler in one scene, each from its own USD, each with its own contact sensor.
 
     Args:
         scene_cfg: Scene configclass instance to mutate.
@@ -325,23 +293,22 @@ def _add_object(scene_cfg, spec: dict, gripper_filters: list) -> None:
 # ---------------------------------------------------------------------------------------------
 
 
-def author_weld(stage, env_path: str = "/World/envs/env_0", instance: int = 0,
+def author_weld(stage, env_path: str = "/World/envs/env_0",
                 prim_name: str | None = None, T_wrist3_obj: np.ndarray | None = None) -> str:
     """Author the wrist->object FixedJoint on the live stage BEFORE ``sim.reset()``.
 
     The joint's local pose on the wrist side is the analytic grasp chain, so after reset (which
     also teleports the object to the matching world pose) the constraint starts with zero
     error. ``physics:excludeFromArticulation`` keeps PhysX from absorbing the object into the
-    robot articulation. With multiple instances, author one weld per instance (disabled) and
-    only ever enable the one being carried.
+    robot articulation. With multiple objects, author one weld per item (disabled) and only
+    ever enable the one being carried.
 
     Args:
         stage: Live USD stage.
         env_path: Environment prim path.
-        instance: Instance index; selects the default ``CarriedObject<suffix>`` prim name.
-        prim_name: Explicit object prim name under ``env_path``, overriding the default. A
-            multi-object episode spawns one prim per item under its own name, so the weld can
-            no longer be derived from an instance index alone.
+        prim_name: Explicit object prim name under ``env_path``, overriding the default
+            ``CarriedObject``. A multi-object episode spawns one prim per item under its own
+            name.
         T_wrist3_obj: Explicit wrist-to-object transform, shape [4, 4]. Required when the
             objects are of DIFFERENT classes: the module-level grasp chain describes only the
             active object, and welding a cup with a mug's transform silently offsets it.
@@ -352,8 +319,7 @@ def author_weld(stage, env_path: str = "/World/envs/env_0", instance: int = 0,
     """
     from pxr import Gf, Sdf, UsdPhysics  # noqa: PLC0415
 
-    suffix = "" if instance == 0 else f"_{instance}"
-    name = prim_name if prim_name is not None else f"CarriedObject{suffix}"
+    name = prim_name if prim_name is not None else "CarriedObject"
     T = t_wrist3_obj() if T_wrist3_obj is None else np.asarray(T_wrist3_obj)
     pos, quat = T_to_pos_quat(T)  # wrist_3_link -> object
     weld_path = f"{env_path}/{name}/{WELD_PRIM_NAME}"
@@ -499,16 +465,12 @@ def ramp_gripper(
     return float(robot.data.joint_pos[0, ids[0]])
 
 
-def _obj_key(instance: int = 0) -> str:
-    return "object_contact" if instance == 0 else f"object_contact_{instance}"
-
-
-def object_contact_partners(scene, instance: int = 0) -> list[str]:
+def object_contact_partners(scene) -> list[str]:
     """Basenames of the ``object_contact`` filter bodies, in ``force_matrix_w`` row order."""
-    return [p.rsplit("/", 1)[-1] for p in scene[_obj_key(instance)].cfg.filter_prim_paths_expr]
+    return [p.rsplit("/", 1)[-1] for p in scene["object_contact"].cfg.filter_prim_paths_expr]
 
 
-def grip_forces(scene, instance: int = 0) -> dict:
+def grip_forces(scene) -> dict:
     """Per-partner contact forces on the carried object, plus the external residual.
 
     Returns:
@@ -517,8 +479,8 @@ def grip_forces(scene, instance: int = 0) -> dict:
         ``external_n`` (net minus summed partner forces [N] — the mug's non-gripper contact
         estimate, ~0 unless the mug touches the world).
     """
-    sensor = scene[_obj_key(instance)]
-    names = object_contact_partners(scene, instance)
+    sensor = scene["object_contact"]
+    names = object_contact_partners(scene)
     net_vec = sensor.data.net_forces_w[0].reshape(-1, 3).sum(dim=0)
     fm = sensor.data.force_matrix_w[0].reshape(-1, 3)
     partners = {n: float(m) for n, m in zip(names, fm.norm(dim=-1))}
@@ -532,7 +494,7 @@ def grip_forces(scene, instance: int = 0) -> dict:
     }
 
 
-def grip_gate(scene, during_motion: bool = False, instance: int = 0) -> tuple[bool, str]:
+def grip_gate(scene, during_motion: bool = False) -> tuple[bool, str]:
     """Check the calibrated grip-force band while the object is gripped.
 
     Static (default): each pad force within ``[GRIP_FORCE_MIN_N, GRIP_FORCE_MAX_N]``. During
@@ -543,7 +505,7 @@ def grip_gate(scene, during_motion: bool = False, instance: int = 0) -> tuple[bo
     Returns:
         (ok, detail) — detail names the first violated condition.
     """
-    f = grip_forces(scene, instance)
+    f = grip_forces(scene)
     lo, hi = (
         (0.0, config.GRIP_FORCE_EXEC_MAX_N)
         if during_motion
@@ -560,7 +522,7 @@ def grip_gate(scene, during_motion: bool = False, instance: int = 0) -> tuple[bo
     return True, ""
 
 
-def unexpected_robot_contact(scene, sensors, sensor_names, exclude=(), instance: int = 0,
+def unexpected_robot_contact(scene, sensors, sensor_names, exclude=(),
                              object_key: str | None = None) -> tuple[float, str]:
     """Peak *unexpected* contact force over the robot-body sensors.
 
@@ -574,17 +536,16 @@ def unexpected_robot_contact(scene, sensors, sensor_names, exclude=(), instance:
         sensors: Robot-body contact sensors.
         sensor_names: Body names per sensor.
         exclude: Robot bodies whose contact is expected.
-        instance: Object instance whose sensor supplies the pad reaction.
-        object_key: Explicit scene key of the carried object's contact sensor, overriding
-            ``instance``. A multi-object scene names sensors after their item, so without this
-            the pad reaction is never found and the gripper's own grip on the object it is
-            carrying is reported as an unexpected collision.
+        object_key: Explicit scene key of the carried object's contact sensor, overriding the
+            default ``object_contact``. A multi-object scene names sensors after their item,
+            so without this the pad reaction is never found and the gripper's own grip on the
+            object it is carrying is reported as an unexpected collision.
 
     Returns:
         (peak force [N], body name).
     """
     pad_rows = {}
-    key = object_key if object_key is not None else _obj_key(instance)
+    key = object_key if object_key is not None else "object_contact"
     if key in scene.keys():
         sensor_obj = scene[key]
         if sensor_obj.data.force_matrix_w is not None:
@@ -620,13 +581,12 @@ def write_default_states(scene, aperture: float | None = None) -> None:
         art.write_root_velocity_to_sim(root_velocity=art.data.default_root_state[:, 7:].clone())
         art.write_joint_position_to_sim(position=art.data.default_joint_pos.clone())
         art.write_joint_velocity_to_sim(velocity=art.data.default_joint_vel.clone())
-    for key in scene.keys():
-        if key == "carried_object" or key.startswith("carried_object_"):
-            obj = scene[key]
-            root_pose = obj.data.default_root_state[:, :7].clone()
-            root_pose[:, :3] += scene.env_origins
-            obj.write_root_pose_to_sim(root_pose=root_pose)
-            obj.write_root_velocity_to_sim(root_velocity=obj.data.default_root_state[:, 7:].clone())
+    if "carried_object" in scene.keys():
+        obj = scene["carried_object"]
+        root_pose = obj.data.default_root_state[:, :7].clone()
+        root_pose[:, :3] += scene.env_origins
+        obj.write_root_pose_to_sim(root_pose=root_pose)
+        obj.write_root_velocity_to_sim(root_velocity=obj.data.default_root_state[:, 7:].clone())
     # scene.reset() clears command buffers — targets must be re-armed AFTER it (a finger target
     # set before reset silently reverts to the open pose; found the hard way during scene bring-up)
     scene.reset()

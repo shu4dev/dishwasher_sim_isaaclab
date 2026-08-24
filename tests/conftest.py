@@ -18,6 +18,21 @@ class FreeWorld:
         return False
 
 
+class StubStats:
+    """MotionStats stand-in: just the field the code under test reads."""
+
+    plan_time_s = 0.0
+
+
+class StubPlanResult:
+    """Minimal PlanResult stand-in for stub motion layers."""
+
+    def __init__(self, status, path_q=None):
+        self.status = status
+        self.path_q = path_q
+        self.plan_time_s = 0.0
+
+
 class WallWorld:
     """Joint-space slab: q1 in (-1.2, -0.8) is blocked unless q0 > 0.5 (forces a detour)."""
 

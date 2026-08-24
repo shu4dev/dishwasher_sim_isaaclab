@@ -28,8 +28,8 @@ progress it did not make can only waste that many iterations.
 Deliberately NOT here: a non-prehensile nudge or push. That is the textbook next rung and it is a
 genuinely different capability — this repository's entire safety model (calibrated pad-force
 bands, the hidden wrist weld) is built around pinch grasps, and an open-jaw push needs its own
-force thresholds and its own validation. It belongs behind this same interface when it is
-justified, which is why strategies are a registry rather than a hard-coded sequence.
+force thresholds and its own validation. When it is justified it becomes one more rung function
+in :func:`default_recovery`'s ladder.
 """
 
 from typing import Callable
@@ -74,44 +74,20 @@ def resettle(sequencer, remaining) -> bool:
     return True
 
 
-#: Registry key -> strategy. Order matters: the ladder is tried top to bottom and stops at the
-#: first rung that reports a change.
-RECOVERY_STRATEGIES: dict = {
-    "widen_grasp_search": widen_grasp_search,
-    "resettle": resettle,
-}
-
-#: The default ladder, cheapest rung first.
-DEFAULT_LADDER = ("widen_grasp_search", "resettle")
+#: The ladder, cheapest rung first. Order matters: rungs are tried top to bottom and the
+#: ladder stops at the first one that reports a change.
+LADDER = (widen_grasp_search, resettle)
 
 
-def available_recoveries() -> list:
-    """Registered strategy names, sorted."""
-    return sorted(RECOVERY_STRATEGIES)
+def default_recovery(sequencer, remaining) -> bool:
+    """Try each rung of :data:`LADDER` in order.
 
-
-def make_recovery(names=None) -> RecoveryFn:
-    """Build a ladder that tries each named strategy in order.
-
-    Args:
-        names: Strategy names, cheapest first; defaults to :data:`DEFAULT_LADDER`.
-
-    Returns:
-        A callable matching :data:`RecoveryFn` that returns True as soon as one rung reports a
-        change, and False when every rung is exhausted — which the sequencer turns into a
-        ``deadlock``.
+    Matches :data:`RecoveryFn`: returns True as soon as one rung reports a change, and False
+    when every rung is exhausted — which the sequencer turns into a ``deadlock``.
     """
-    names = list(DEFAULT_LADDER if names is None else names)
-    unknown = [n for n in names if n not in RECOVERY_STRATEGIES]
-    if unknown:
-        raise ValueError(f"unknown recovery strategy {unknown} (choices: {available_recoveries()})")
-
-    def ladder(sequencer, remaining) -> bool:
-        for name in names:
-            if RECOVERY_STRATEGIES[name](sequencer, remaining):
-                sequencer._emit("recovery_step", {"strategy": name,
-                                                  "remaining": [i.item_id for i in remaining]})
-                return True
-        return False
-
-    return ladder
+    for rung in LADDER:
+        if rung(sequencer, remaining):
+            sequencer._emit("recovery_step", {"strategy": rung.__name__,
+                                              "remaining": [i.item_id for i in remaining]})
+            return True
+    return False

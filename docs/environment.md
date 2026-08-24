@@ -116,9 +116,8 @@ and no `ob.State(space)` constructor — allocate states with `space.allocState(
 `ob.GoalStates` exists (dishsim.planners uses it). `ob.PlannerData(si)` + `planner.getPlannerData(pd)` are
 bound and work (verified 2026-07-31, used by `scripts/evaluation/plan_visual.py`): `pd.getEdges(i)` returns
 a plain `list[int]`, `pd.getVertex(i).getTag()` gives RRT-Connect's tree tags (1 = start tree,
-2 = goal tree), vertex states support direct indexing, and `pd.printGraphML()` returns the GraphML
-document as a string (per-vertex reals in its `coords` attribute — the readback fallback
-`planning._coords_from_graphml` parses this).
+2 = goal tree), and vertex states support direct indexing for every registered planner
+(verified 2026-07-31 — the GraphML readback fallback this once needed is retired).
 
 ## Storage map
 

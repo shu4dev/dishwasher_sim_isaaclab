@@ -377,24 +377,6 @@ class CollisionWorld:
             obj.setTransform(_tf(T))
         self._static_mgr.update()
 
-    def set_static_transform(self, name: str, T_base_body: np.ndarray) -> None:
-        """Re-pose a static body's pieces to an ABSOLUTE base-frame transform.
-
-        The base-pose sweep re-expresses the machine statics under a candidate robot base
-        (``T_newbase_body = T_delta @ T_oldbase_body``, see :mod:`dishsim.base_sweep`); the
-        geometry never rebuilds — only the transforms move, so one loaded world serves
-        thousands of candidate poses. Later :meth:`set_static_offset` calls compose against
-        the pose set here, so a rack slide validated after a re-base slides the re-based rack.
-
-        Args:
-            T_base_body: New base-frame pose of the body, shape [4, 4].
-        """
-        T = np.asarray(T_base_body, dtype=float).copy()
-        self._static_T[name] = T
-        for obj in self._static_objs[name]:
-            obj.setTransform(_tf(T))
-        self._static_mgr.update()
-
     def carried_object_pieces(self) -> list[trimesh.Trimesh]:
         """Body-frame CoACD pieces of the carried object.
 

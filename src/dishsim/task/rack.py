@@ -45,7 +45,6 @@ class RackOutcome:
         target_m: Commanded final extension [m].
         achieved_m: Measured final extension [m], or ``None`` if never measured.
         error_m: ``|achieved - target|`` [m], or ``None``.
-        q_end: Arm configuration after the disengage, shape [6], or ``None``.
     """
 
     ok: bool
@@ -55,7 +54,6 @@ class RackOutcome:
     target_m: float = 0.0
     achieved_m: float | None = None
     error_m: float | None = None
-    q_end: np.ndarray | None = None
 
     def to_json(self) -> dict:
         return {
@@ -333,12 +331,11 @@ class RackAction:
         T_now = m.tcp_pose(arm_path[-1])
         T_off = T_now.copy()
         T_off[:3, 3] = T_now[:3, 3] - approach * config.RACK_APPROACH_HOVER_M
-        step = m.servo_line(T_now, T_off, 12, arm_path[-1], phase="rack-disengage",
-                            aperture=config.GRIPPER_APERTURE_OPEN_RAD,
-                            exclude=self.gripper_bodies, on_step=self.on_step)
         # A failed back-off is not fatal: the rack is already where it needs to be, and the
         # episode's return-home handles an arm left near the handle.
-        out.q_end = step.q_end if step.q_end is not None else arm_path[-1]
+        m.servo_line(T_now, T_off, 12, arm_path[-1], phase="rack-disengage",
+                     aperture=config.GRIPPER_APERTURE_OPEN_RAD,
+                     exclude=self.gripper_bodies, on_step=self.on_step)
         out.ok = True
         return out
 

@@ -232,7 +232,7 @@ scripts/run_kit.sh scripts/experiment/run_task.py --headless --enable_cameras \
 `--machine bosch800` switches the whole stack (machine USD, caches, cameras, scenarios) via
 `config.apply_machine`; `--placement side_winner` is the A2-measured UR5e mount (side-elevated,
 x +0.475, y −0.525, z 0.400, yaw +101.25°). The same two flags work on every setup script
-(`build_state`, `extract_geometry`, `parity_check`, `goal_configs`, `base_pose_sweep`).
+(`build_state`, `extract_geometry`, `parity_check`, `goal_configs`).
 Bosch numbers and their provenance: [docs/bosch800_source_data.md](docs/bosch800_source_data.md).
 
 **One-command bring-up** — everything in §2.2–2.3 (image build, container start,
@@ -485,7 +485,8 @@ class RRTConnectPlanner(OMPLPlanner):
         return planner
 ```
 
-Then add one line to `PLANNERS` in `registry.py`. `--planner my_planner` now works, and
+Then add one line to `PLANNERS` in `dishsim/planners/__init__.py`. `--planner my_planner`
+now works, and
 `tests/test_planners.py` covers it automatically — every registered planner must solve a
 stub-world query, respect the joint bounds, never return a colliding path, and describe itself
 for the trial record. Parameters are applied **inside** each subclass because the OMPL

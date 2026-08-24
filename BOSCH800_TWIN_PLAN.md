@@ -124,7 +124,8 @@ Key enabling facts (verified in-repo, session of 2026-08-10):
 
 1. Bring-up with the existing 14-class library: `build_state --machine bosch800` per state
    (extract → decompose → parity ≥95% → goal_configs).
-2. Extend `base_pose_sweep`: pedestal-height as a sweep dimension + side-mount region
+2. Extend `base_pose_sweep` (since completed; sweep tooling retired to git history):
+   pedestal-height as a sweep dimension + side-mount region
    (y beside the open door, z up to counter height, yaw toward the machine). Gates
    unchanged; rack pull/push now full-travel.
 3. Success bar per rack: lower-extended destinations > 0, middle-extended > 0, third-rack

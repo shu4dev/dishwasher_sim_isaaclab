@@ -47,7 +47,6 @@ class TaskItem:
         T_base_obj: Last measured pose in the robot-base frame, shape [4, 4].
         goal_slot: Allocated destination slot, or ``None`` until allocation.
         state: ``"pending"`` | ``"placed"`` | ``"failed"``.
-        radius_m: Footprint radius, carried through from the layout [m].
     """
 
     item_id: str
@@ -56,7 +55,6 @@ class TaskItem:
     T_base_obj: np.ndarray
     goal_slot: object | None = None
     state: str = "pending"
-    radius_m: float = 0.0
 
 
 @dataclass
@@ -71,7 +69,6 @@ class GraspCandidate:
     T_base_obj: np.ndarray
     T_base_grasp: np.ndarray
     grasp_q: np.ndarray | None = None
-    detail: str | None = None
 
 
 class PickPlaceFn(Protocol):
@@ -90,8 +87,6 @@ class PickOutcome:
     failure_detail: str | None = None
     plan_time_s: float = 0.0
     n_replans: int = 0
-    trial_path: str | None = None
-    trajectory_path: str | None = None
 
 
 #: ``(items) -> {item_id: {ids resting ON it}}``. Stage B.
@@ -268,8 +263,6 @@ class TaskSequencer:
                 rec.failure_detail = outcome.failure_detail
                 rec.plan_time_s = outcome.plan_time_s
                 rec.n_replans = outcome.n_replans
-                rec.trial_path = outcome.trial_path
-                rec.trajectory_path = outcome.trajectory_path
 
             result.picks.append(rec)
             self._emit("pick_end", {"item": item.item_id, "success": rec.success,

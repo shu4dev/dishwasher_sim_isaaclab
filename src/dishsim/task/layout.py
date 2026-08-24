@@ -59,18 +59,6 @@ class LayoutItem:
     radius_m: float
     support: str | None = None
 
-    def to_json(self) -> dict:
-        return {
-            "item_id": self.item_id,
-            "object_class": self.object_class,
-            "instance": self.instance,
-            "T_base_obj": np.asarray(self.T_base_obj).tolist(),
-            "xy_w": np.asarray(self.xy_w).tolist(),
-            "yaw_deg": float(self.yaw_deg),
-            "radius_m": float(self.radius_m),
-            "support": self.support,
-        }
-
 
 @dataclass
 class LayoutRejection:
@@ -164,10 +152,9 @@ def effective_rect(spec, rect: dict) -> dict:
 def stand_rotation(spec, yaw_deg: float) -> np.ndarray:
     """Rotation resting the object on the countertop, then yawing about world z.
 
-    This follows the COUNTERTOP staging convention of
-    :func:`dishsim.scene.countertop_pose_w` — the legacy Y-up mug stands via ``Rx(+90)`` and
-    everything else rests as authored — and deliberately NOT
-    :func:`dishsim.fill_plan._stand_R`, which is the *rack* convention. The two differ for
+    This follows the COUNTERTOP staging convention — the legacy Y-up mug stands via ``Rx(+90)``
+    and everything else rests as authored (run_trials.py's ``countertop_staging_rot``) — and
+    deliberately NOT :func:`dishsim.fill_plan._stand_R`, which is the *rack* convention. The two differ for
     length-along-x cutlery: the rack convention stands a fork head-up so it can drop into a
     basket bay, whereas on a counter a fork lies flat. Standing one on end here would spawn a
     9 mm footprint that topples during the settle and silently invalidates the layout.

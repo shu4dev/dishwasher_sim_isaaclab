@@ -25,7 +25,7 @@ TASK_DIR = os.path.join(SRC, "task")
 #: Modules a planner may import. `config` supplies planning scalars (budgets, resolutions,
 #: bounds margin) and `ur5e_kin` the joint limits that bound the state space; both are about the
 #: ROBOT, not the task. Anything else means the boundary has been crossed.
-PLANNER_ALLOWED = {"config", "ur5e_kin", "base", "ompl_base", "registry",
+PLANNER_ALLOWED = {"config", "ur5e_kin", "base", "ompl_base",
                    "rrt_connect", "rrt_star", "bit_star", "prm"}
 
 #: Task-level names the motion layer must never see. Being handed an object registry, a slot, or

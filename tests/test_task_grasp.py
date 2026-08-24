@@ -257,22 +257,12 @@ class StubSequencer:
         self.events.append((name, payload))
 
 
-def test_registry_contract():
-    assert R.available_recoveries() == sorted(R.RECOVERY_STRATEGIES)
-    assert set(R.DEFAULT_LADDER) <= set(R.available_recoveries())
-
-
-def test_unknown_strategy_raises_with_the_choices():
-    with pytest.raises(ValueError, match="unknown recovery strategy"):
-        R.make_recovery(["teleport_everything"])
-
-
 def test_the_ladder_tries_the_cheap_rung_first():
     motion = StubMotion(StubWorld())
     finder = G.GraspFinder({"mug": StubProfile()}, motion, n_yaws=4)
     seq = StubSequencer(grasp_fn=finder, motion=motion)
 
-    assert R.make_recovery()(seq, []) is True
+    assert R.default_recovery(seq, []) is True
     assert finder.n_yaws == int(config.TASK["grasp_yaw_samples_wide"])
     assert motion.held == [], "the cheap rung must not run physics"
     assert seq.events[0][1]["strategy"] == "widen_grasp_search"
@@ -283,23 +273,22 @@ def test_widening_only_pays_out_once_then_the_ladder_moves_on():
     motion = StubMotion(StubWorld())
     finder = G.GraspFinder({"mug": StubProfile()}, motion, n_yaws=4)
     seq = StubSequencer(grasp_fn=finder, motion=motion)
-    ladder = R.make_recovery()
 
-    assert ladder(seq, []) is True   # widened
-    assert ladder(seq, []) is True   # falls through to resettle
+    assert R.default_recovery(seq, []) is True   # widened
+    assert R.default_recovery(seq, []) is True   # falls through to resettle
     assert motion.held and motion.held[0][0] == "recovery-settle"
     assert seq.events[-1][1]["strategy"] == "resettle"
 
 
 def test_the_ladder_reports_exhaustion_when_no_rung_can_act():
     seq = StubSequencer(grasp_fn=None, motion=None)  # neither rung has anything to work with
-    assert R.make_recovery()(seq, []) is False
+    assert R.default_recovery(seq, []) is False
 
 
 def test_resettle_runs_the_configured_number_of_steps():
     motion = StubMotion(StubWorld())
-    seq = StubSequencer(grasp_fn=None, motion=motion)
-    assert R.make_recovery(["resettle"])(seq, []) is True
+    seq = StubSequencer(grasp_fn=None, motion=motion)  # no finder: widen skips, resettle acts
+    assert R.default_recovery(seq, []) is True
     assert motion.held == [("recovery-settle", int(config.TASK["recovery_settle_steps"]))]
 
 

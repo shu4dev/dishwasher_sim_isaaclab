@@ -29,7 +29,6 @@ from .. import config
 class PhaseItem:
     """One planned item of a phase, pinned to its slot by the capacity plan.
 
-    ``T_base_slot`` rides along so the runner can seed slot assignment without re-deriving;
     ``instance`` numbers the item within its class (globally across phases — item ids are
     scene prim names and must be unique).
     """
@@ -41,7 +40,6 @@ class PhaseItem:
     slot_name: str
     mode: str
     acquire: str
-    T_base_slot: np.ndarray | None = None
 
 
 @dataclass
@@ -76,8 +74,7 @@ def load_full_load_plan(path: str, *, machine: str, base_placement: str) -> list
         items = [PhaseItem(item_id=it["item_id"], object_class=it["object_class"],
                            instance=int(it["instance"]), slot_id=int(it["slot_id"]),
                            slot_name=str(it["slot_name"]), mode=it["mode"],
-                           acquire=it["acquire"],
-                           T_base_slot=np.array(it["T_base_slot"]))
+                           acquire=it["acquire"])
                  for it in ph.get("items", [])]
         if items:
             phases.append(Phase(state, items))

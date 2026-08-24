@@ -31,19 +31,18 @@ parser.add_argument("--seed", type=int, default=11)
 parser.add_argument("--out_dir", type=str, default=None,
                     help="Media dir (default: media/goals or media/goals/<scenario>).")
 parser.add_argument("--sheets_per_slot", type=int, default=6)
-parser.add_argument("--placement", type=str, default=None,
-                    help="Named base placement (see config.BASE_PLACEMENTS); default: the machine's.")
-parser.add_argument("--machine", type=str, default=None,
-                    help="Machine name (see config.MACHINES); default: the v1 baseline.")
-parser.add_argument("--object", type=str, default="mug", help="Carried object class (see config.OBJECTS).")
 parser.add_argument("--max_store", type=int, default=None,
                     help="Cap the goal configs STORED per slot (the funnel still measures the "
                          "full acceptance for the feasibility record). Reachable-rich states "
                          "accept thousands of wrap-expanded configs per slot while the runner "
                          "consumes at most GOALS_PER_PLAN=64; 256 keeps a 4x margin and cuts "
                          "the artifact ~10x. Default: store everything (legacy bakes).")
-parser.add_argument("--scenario", type=str, default=None,
-                    help="Rack-state scenario (default: the placement state scripts/experiment/run_trials.py reads).")
+
+from _selector import add_selector_args  # noqa: E402  scripts/setup shared flags (stdlib-only)
+
+add_selector_args(parser, scenario_default=None,
+                  scenario_help="Rack-state scenario (default: the placement state "
+                                "scripts/experiment/run_trials.py reads).")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -68,13 +67,9 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 from dishsim import config  # noqa: E402
 from dishsim.quats import xyzw_to_wxyz  # noqa: E402
 
-# scenario BEFORE scene/robots imports — they bind rack targets + the derived USD at import
-if args_cli.machine:
-    config.apply_machine(args_cli.machine)  # first: it resets scenario + base placement
-config.set_active_object(args_cli.object)
-config.apply_scenario(args_cli.scenario or config.PLACEMENT_STATE)
-if args_cli.placement:
-    config.apply_base_placement(args_cli.placement)  # after machine/scenario — they reset it
+# selection BEFORE scene/robots imports — they bind rack targets + the derived USD at import
+config.apply_selection(machine=args_cli.machine, object_name=args_cli.object,
+                       scenario=args_cli.scenario, placement=args_cli.placement)
 if args_cli.out_dir is None:
     args_cli.out_dir = config.scenario_media_dir("goals")
 

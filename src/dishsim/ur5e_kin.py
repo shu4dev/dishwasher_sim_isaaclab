@@ -294,38 +294,17 @@ def expand_2pi_wraps(
 
 
 def _self_check() -> None:
-    """Verify the Rz(pi) base-corrector identity against the raw URDF chain at fixed configs."""
+    """Verify the Rz(pi) base-corrector identity at fixed configs.
 
-    def rx(a):
-        c, s = np.cos(a), np.sin(a)
-        return np.array([[1, 0, 0, 0], [0, c, -s, 0], [0, s, c, 0], [0, 0, 0, 1.0]])
-
-    def rz(a):
-        c, s = np.cos(a), np.sin(a)
-        return np.array([[c, -s, 0, 0], [s, c, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1.0]])
-
-    def tr(x, y, z):
-        T = np.eye(4)
-        T[:3, 3] = (x, y, z)
-        return T
-
-    def urdf_fk(q):
-        # exact joint origins from the shipped ur_description UR5e URDF
-        T = rz(np.pi)  # base_link -> base_link_inertia
-        T = T @ tr(0, 0, 0.1625) @ rz(q[0])
-        T = T @ rx(np.pi / 2) @ rz(q[1])
-        T = T @ tr(-0.425, 0, 0) @ rz(q[2])
-        T = T @ tr(-0.3922, 0, 0.1333) @ rz(q[3])
-        T = T @ tr(0, -0.0997, 0) @ rx(np.pi / 2) @ rz(q[4])
-        T = T @ tr(0, 0.0996, 0) @ rx(-np.pi / 2) @ rz(q[5])
-        return T
-
+    ``fk_wrist3`` is the DH formulation; ``fk_all_links`` walks the URDF joint origins — two
+    independent derivations, so a DH-table typo cannot cancel itself out.
+    """
     for q in (
         np.zeros(6),
         np.array([0.3, -1.2, 1.9, -2.2, -1.3, 0.7]),
         np.array([-2.1, 0.4, -0.8, 1.1, 2.5, -3.0]),
     ):
-        err = np.max(np.abs(fk_wrist3(q) - urdf_fk(q)))
+        err = np.max(np.abs(fk_wrist3(q) - fk_all_links(q)["wrist_3_link"]))
         assert err < 1e-9, f"UR5e FK corrector identity violated (err={err:.3e}) — check DH table"
 
 

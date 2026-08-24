@@ -20,8 +20,7 @@ dishwasher_sim_isaaclab/
 │   │   ├── build_state.py            [bake one machine state's caches for N classes]
 │   │   ├── reach_map.py              [measure where on the counter a class can be picked]
 │   │   ├── preview_rack.py           [rack geometry preview PNGs]
-│   │   ├── capacity_fill.py          [fully-loaded scene generator + closability check]
-│   │   └── base_pose_sweep.py        [completed study: robot base-pose sweep (see below)]
+│   │   └── capacity_fill.py          [fully-loaded scene generator + closability check]
 │   │
 │   ├── experiment/                   [PHASE 2 — run algorithms, write artifacts]
 │   │   ├── run_trials.py             [ONE object: rack reconfigure -> pick -> plan -> place;
@@ -59,7 +58,6 @@ dishwasher_sim_isaaclab/
 │   ├── placement.py                  [slot derivation, goal poses and success per mode]
 │   ├── rack_ops.py                   [rack-handle engage + drive-synchronized slide]
 │   ├── fill_plan.py                  [deterministic full-load plan + FCL validation]
-│   ├── base_sweep.py                 [completed study: base-pose sweep engine (see below)]
 │   ├── trajectory.py                 [per-step recording format (Phase 2 -> Phase 3)]
 │   ├── replay.py                     [kinematic playback of a recording (Phase 3)]
 │   ├── plan_debug_io.py              [persist a planning query + search tree]
@@ -74,18 +72,18 @@ dishwasher_sim_isaaclab/
 │   │   ├── layout.py                 [seeded random countertop layouts, with stacking]
 │   │   ├── support.py                [which object rests on which (contact + geometric)]
 │   │   ├── grasp.py                  [state-dependent grasp availability + yaw sweep]
-│   │   ├── recovery.py               [bounded recovery ladder (a registry)]
+│   │   ├── recovery.py               [bounded recovery ladder]
 │   │   ├── rack.py                   [open the machine: engage a handle, slide a rack]
 │   │   ├── cost.py                   [swappable pick-order heuristics (a registry)]
 │   │   └── episode.py                [episode record + aggregation]
-│   └── planners/                     [the pluggable planner layer]
+│   └── planners/                     [the pluggable planner layer; the name registry
+│       │                              (PLANNERS/make_planner/available) lives in __init__.py]
 │       ├── base.py                   [PlanResult, PlanDebug, the Planner ABC]
 │       ├── ompl_base.py              [shared OMPL query: space, validity, goals, solve]
 │       ├── rrt_connect.py            [bidirectional RRT (default)]
 │       ├── rrt_star.py               [asymptotically optimal RRT]
 │       ├── bit_star.py               [Batch Informed Trees]
-│       ├── prm.py                    [probabilistic roadmap (single-goal here)]
-│       └── registry.py               [name -> class; make_planner(); available()]
+│       └── prm.py                    [probabilistic roadmap (single-goal here)]
 │
 ├── tests/                            [Kit-free pytest via scripts/run_py.sh]
 ├── docs/                             [environment, success criteria, measured reports]
@@ -107,13 +105,13 @@ a conformance test compares it to the runner's implementation signature-for-sign
 These produced results cited in [success_criteria.md](success_criteria.md) and are kept for
 reproducibility; they are not part of the routine pipeline:
 
-- **Base-pose sweep** — `scripts/setup/base_pose_sweep.py` (CLI) + `src/dishsim/base_sweep.py`
-  (engine; also the canonical home of `largest_rectangle`, which `reach_map.py` imports) +
-  `tests/test_base_sweep.py`. A 420-candidate sweep over robot base (x, y, yaw) proving the v4
+- **Base-pose sweep** — a 420-candidate sweep over robot base (x, y, yaw) proving the v4
   rack, not the base pose, was the binding reachability constraint: the winner matches the
   front placement on every slot criterion and only deepens the countertop pick band
-  (see "Reachability success bar" in success_criteria.md). Scorecards land in
-  `results/base_sweep/`.
+  (see "Reachability success bar" in success_criteria.md). Scorecards live in
+  `results/base_sweep/`; both winners are frozen in `config.BASE_PLACEMENTS`. The tooling
+  (`base_pose_sweep.py` CLI + `base_sweep.py` engine + its tests) is retired to git history —
+  restore from there to sweep a new machine or mount.
 - The rack-*design* harness that produced the v4 rack layout (`rack_design.py`) was retired
   after the design froze; it lives in git history, and its measured design rules are recorded
   in [known_limitations.md](known_limitations.md).

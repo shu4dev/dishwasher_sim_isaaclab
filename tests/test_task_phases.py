@@ -130,34 +130,19 @@ class TestLoadFullLoadPlan:
                                          base_placement="side_winner")
         assert len(out) == 1 and out[0].state == "placement"
         assert out[0].items[0].item_id == "cup_00"
-        assert out[0].items[0].T_base_slot.shape == (4, 4)
 
-    def test_machine_mismatch_fails(self, bosch, tmp_path):
+    @pytest.mark.parametrize("doc_kwargs, empty_items, match", [
+        (dict(machine="artvip_compact"), False, "re-run"),   # machine mismatch
+        (dict(placement="front"), False, "re-run"),          # placement mismatch
+        (dict(state="both_in"), False, "rack action"),       # rack-action phase state
+        (dict(), True, "no items"),                          # empty plan
+    ])
+    def test_rejects(self, bosch, tmp_path, doc_kwargs, empty_items, match):
+        doc = self._doc(**doc_kwargs)
+        if empty_items:
+            doc["phases"][0]["items"] = []
         p = tmp_path / "plan.json"
-        p.write_text(json.dumps(self._doc(machine="artvip_compact")))
-        with pytest.raises(SystemExit, match="re-run"):
-            phases.load_full_load_plan(str(p), machine="bosch800",
-                                       base_placement="side_winner")
-
-    def test_placement_mismatch_fails(self, bosch, tmp_path):
-        p = tmp_path / "plan.json"
-        p.write_text(json.dumps(self._doc(placement="front")))
-        with pytest.raises(SystemExit, match="re-run"):
-            phases.load_full_load_plan(str(p), machine="bosch800",
-                                       base_placement="side_winner")
-
-    def test_rack_action_phase_state_fails(self, bosch, tmp_path):
-        p = tmp_path / "plan.json"
-        p.write_text(json.dumps(self._doc(state="both_in")))
-        with pytest.raises(SystemExit, match="rack action"):
-            phases.load_full_load_plan(str(p), machine="bosch800",
-                                       base_placement="side_winner")
-
-    def test_empty_plan_fails(self, bosch, tmp_path):
-        p = tmp_path / "plan.json"
-        doc = self._doc()
-        doc["phases"][0]["items"] = []
         p.write_text(json.dumps(doc))
-        with pytest.raises(SystemExit, match="no items"):
+        with pytest.raises(SystemExit, match=match):
             phases.load_full_load_plan(str(p), machine="bosch800",
                                        base_placement="side_winner")

@@ -89,7 +89,7 @@ _CERTIFY_CONFIG_CAP = 256
 _CERTIFY_SCAN_CAP = 512
 
 #: Measured upright-settle reliability per (state, class) — release-at-goal probes,
-#: ``scripts/setup/probe_plate_settle.py``, 2026-08-14 (fractions of releases inside the
+#: ``probe_plate_settle.py`` (retired to git history), 2026-08-14 (fractions of releases inside the
 #: placement tolerances after SETTLE_STEPS). The Bosch racks' OEM wire lattice has 41-46 mm
 #: cells; scaled drinkware bases (~50-60 mm) wedge into them roughly half the time whatever
 #: the release alignment (wire-crossing anchoring measured 228/300 — better, still short).

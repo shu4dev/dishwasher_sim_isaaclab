@@ -45,13 +45,10 @@ parser.add_argument("--n_task", type=int, default=20)
 parser.add_argument("--seed", type=int, default=7)
 parser.add_argument("--out_dir", type=str, default=None,
                     help="Media dir (default: media/collision_world or media/collision_world/<scenario>).")
-parser.add_argument("--placement", type=str, default=None,
-                    help="Named base placement (see config.BASE_PLACEMENTS); default: the machine's.")
-parser.add_argument("--machine", type=str, default=None,
-                    help="Machine name (see config.MACHINES); default: the v1 baseline.")
-parser.add_argument("--object", type=str, default="mug", help="Carried object class (see config.OBJECTS).")
-parser.add_argument("--scenario", type=str, default="both_out",
-                    help="Rack-state scenario (see config.SCENARIOS).")
+
+from _selector import add_selector_args  # noqa: E402  scripts/setup shared flags (stdlib-only)
+
+add_selector_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -78,13 +75,9 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 from dishsim import config  # noqa: E402
 from dishsim.quats import xyzw_to_wxyz  # noqa: E402
 
-# scenario BEFORE scene/robots imports — they bind rack targets + the derived USD at import
-if args_cli.machine:
-    config.apply_machine(args_cli.machine)  # first: it resets scenario + base placement
-config.set_active_object(args_cli.object)
-config.apply_scenario(args_cli.scenario)
-if args_cli.placement:
-    config.apply_base_placement(args_cli.placement)  # after machine/scenario — they reset it
+# selection BEFORE scene/robots imports — they bind rack targets + the derived USD at import
+config.apply_selection(machine=args_cli.machine, object_name=args_cli.object,
+                       scenario=args_cli.scenario, placement=args_cli.placement)
 if args_cli.out_dir is None:
     args_cli.out_dir = config.scenario_media_dir("collision_world")
 

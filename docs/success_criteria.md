@@ -284,8 +284,8 @@ funnels, front base placement):
 | basket bays | 3 of 3 | **3 of 3** |
 | countertop pick band | > 0.12 m deep | **0.20 m** (86 cells, 4 yaws, 0.05 m grid) |
 
-A 420-candidate base-pose sweep (`scripts/setup/base_pose_sweep.py`, scorecards under
-`results/base_sweep/`) confirmed the v4 rack, not the base pose, was the binding constraint:
+A 420-candidate base-pose sweep (`base_pose_sweep.py`, retired to git history; scorecards
+under `results/base_sweep/`) confirmed the v4 rack, not the base pose, was the binding constraint:
 the sweep's best pose (`x +0.3375, y −0.375, yaw −18.75°`) matches the front placement on
 every slot criterion and differs only in pick-band depth (0.40 m vs 0.20 m — both above the
 bar), so the front placement was kept and the runner-up scorecards are retained as data for a
@@ -374,7 +374,7 @@ settle tolerances: `tol_lateral_m` 0.012 → **0.018**, `tol_tilt_deg` 12 → **
 values fit the ArtVIP bank's 40 mm pitch (free lateral half-play ≈ 11.7 mm); on the Bosch's
 50 mm pitch a released disc rolls until it rests against a tine — how real plates sit — at
 (50 − 3.2 − 14.4)/2 = 16.2 mm of play plus the matching extra lean. Probe of record
-(`scripts/setup/probe_plate_settle.py`, 3 gaps × 8 releases, physics-identical to a weld-off
+(`probe_plate_settle.py`, retired to git history; 3 gaps × 8 releases, physics-identical to a weld-off
 release): lateral mean 14.1 / p95 15.0 / max 15.2 mm, tilt p95 14.0 / max 14.1°, bottoms
 clean — 0/24 passed the v1 tolerances, 24/24 pass the derived ones. Validated end-to-end by a
 robot-placed `plate=1` episode (`cleared`, seed 5). The criterion is unchanged in spirit:

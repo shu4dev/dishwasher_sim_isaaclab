@@ -21,7 +21,7 @@ is booted. That keeps this module importable — and therefore testable — in t
 is how the sequencer tests run a whole episode with no simulator at all.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Protocol, Sequence
 
 import numpy as np
@@ -107,7 +107,6 @@ class MotionStats:
     n_plan_failures: int = 0
     plan_time_s: float = 0.0
     n_exec_steps: int = 0
-    per_phase_steps: dict = field(default_factory=dict)
 
 
 class MotionService:
@@ -117,16 +116,14 @@ class MotionService:
         planner: Any :class:`~dishsim.planners.base.Planner`; used only through ``plan()``.
         world: Collision world used for validity queries and planning.
         ctx: Live-simulator access (see :class:`ExecContext`).
-        contact_limit_n: Unexpected-contact force above which a segment is reported failed [N].
     """
 
-    def __init__(self, planner, world, ctx: ExecContext, *, contact_limit_n: float | None = None) -> None:
+    def __init__(self, planner, world, ctx: ExecContext) -> None:
         self.planner = planner
         self.world = world
         self.ctx = ctx
-        self.contact_limit_n = float(
-            config.RETRACT_GRAZE_MAX_N if contact_limit_n is None else contact_limit_n
-        )
+        #: Unexpected-contact force above which a segment is reported failed [N].
+        self.contact_limit_n = float(config.RETRACT_GRAZE_MAX_N)
         self.stats = MotionStats()
         self._T_w3_tcp = np.array(world.manifest["t_wrist3_tcp"])
         self._payload_key: str | None = None
@@ -250,14 +247,14 @@ class MotionService:
             peak, body = self.ctx.contact_peak(exclude=exclude)
             peak_seen = max(peak_seen, float(peak))
             if peak > self.contact_limit_n:
-                self._tally(phase, n)
+                self._tally(n)
                 return ExecResult(False, f"{phase}: {body} ({peak:.1f} N)", peak_seen, n, q_last)
             if gate is not None:
                 reason = gate()
                 if reason:
-                    self._tally(phase, n)
+                    self._tally(n)
                     return ExecResult(False, f"{phase}: {reason}", peak_seen, n, q_last)
-        self._tally(phase, n)
+        self._tally(n)
         return ExecResult(True, None, peak_seen, n, q_last)
 
     def servo_line(self, T_from, T_to, n: int, q_seed, *, phase: str,
@@ -281,7 +278,7 @@ class MotionService:
                 on_step(i + 1)
             peak, _ = self.ctx.contact_peak()
             peak_seen = max(peak_seen, float(peak))
-        self._tally(phase, steps)
+        self._tally(steps)
         return ExecResult(True, None, peak_seen, steps, self.ctx.arm_q())
 
     def set_aperture(self, aperture_rad: float, steps: int, *, phase: str, arm_q=None,
@@ -294,7 +291,7 @@ class MotionService:
         """
         self.ctx.set_phase(phase)
         out = self.ctx.ramp_aperture(aperture_rad, steps, arm_q=arm_q, on_step=on_step)
-        self._tally(phase, steps)
+        self._tally(steps)
         return out
 
     def current_q(self) -> np.ndarray:
@@ -316,9 +313,8 @@ class MotionService:
         q = self.ctx.arm_q() if q is None else np.asarray(q, dtype=float)
         return fk_wrist3(q) @ self._T_w3_tcp
 
-    def _tally(self, phase: str, n: int) -> None:
+    def _tally(self, n: int) -> None:
         self.stats.n_exec_steps += n
-        self.stats.per_phase_steps[phase] = self.stats.per_phase_steps.get(phase, 0) + n
 
     # ---- world state: geometry in, no identity -----------------------------------------------
 

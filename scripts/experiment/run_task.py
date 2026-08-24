@@ -307,8 +307,151 @@ def _make_run_dirs(args_cli, prefix: str) -> tuple[str, str, str]:
 def _measured_pose_base(scene, T_base_w, item_id: str) -> np.ndarray:
     """The item's MEASURED pose in the robot-base frame (physics-backed ``.data`` buffers)."""
     o = scene[item_id]
-    return T_base_w @ make_T(o.data.root_pos_w.torch[0].cpu().numpy(),
-                             o.data.root_quat_w.torch[0].cpu().numpy())
+    return T_base_w @ make_T(o.data.root_pos_w[0].cpu().numpy(),
+                             wxyz_to_xyzw(o.data.root_quat_w[0].cpu().numpy()))
+
+
+def _build_scene_and_rig(obj_specs, weld_T) -> tuple:
+    """Shared scene bring-up for both episode paths.
+
+    ``obj_specs`` carries each path's own spawn poses and contact-filter policy (all peers in
+    ``main()``, same-phase peers only in the full-load episode); ``weld_T`` maps item_id to the
+    wrist->object transform of its weld. Welds are authored (disabled after reset) BEFORE
+    ``sim.reset()``, as :func:`dishsim.scene.author_weld` requires.
+
+    Returns:
+        (sim, scene, welds, cam_specs, rig)
+    """
+    sim = SimulationContext(
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device)
+    )
+    scene = InteractiveScene(dscene.make_scene_cfg(
+        with_object=False, with_robot_contacts=True, objects=obj_specs))
+    welds = {item_id: dscene.author_weld(scene.stage, prim_name=item_id, T_wrist3_obj=T)
+             for item_id, T in weld_T.items()}
+    # The episode camera is appended LAST: render_videos.py takes `next(iter(cameras))` for its
+    # frame-count, variation and black-frame gates, so inserting a new name first would silently
+    # move those checks onto a different view.
+    ep = config.EPISODE_CAMERA
+    cam_specs = {**config.CAMERAS,
+                 "episode": (tuple(ep["eye"]), tuple(ep["target"]), dict(ep["lens"]))}
+    rig = CameraRig(cam_specs, hw=config.CAMERA_HW) if args_cli.enable_cameras else None
+    sim.reset()
+    if rig is not None:
+        rig.apply_poses(sim.device)
+    dscene.write_default_states(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
+    for path in welds.values():
+        dscene.set_weld_enabled(scene.stage, path, False)
+    # The whole contact story — grip gates and the support graph alike — reads force_matrix_w by
+    # zipping its filter axis against cfg.filter_prim_paths_expr. That ordering IS guaranteed
+    # element-for-element by Isaac Lab (verified against the sensor source and by scrambling the
+    # cfg order), and a filter expression matching zero or several bodies crashes at reset rather
+    # than misaligning silently. Asserting it once here costs nothing and pins the invariant
+    # every force reading in this file depends on.
+    for item_id in weld_T:
+        sensor = scene[f"{item_id}_contact"]
+        n_filters = len(sensor.cfg.filter_prim_paths_expr)
+        assert sensor.contact_physx_view.filter_count == n_filters, (
+            f"{item_id}: contact filter count {sensor.contact_physx_view.filter_count} != "
+            f"{n_filters} configured expressions — the force_matrix_w zip would be misaligned"
+        )
+    return sim, scene, welds, cam_specs, rig
+
+
+def _wire_ctx(sim, scene) -> tuple:
+    """The :class:`_Ctx` over a live scene plus the derived handles both episode paths share.
+
+    Returns:
+        (ctx, gripper_bodies, T_base_w)
+    """
+    robot = scene["robot"]
+    arm_ids, _ = robot.find_joints(config.ARM_JOINTS, preserve_order=True)
+    sensors = [scene["robot_contacts_arm"], scene["robot_contacts_gripper"]]
+    sensor_names = [list(getattr(s, "body_names", [])) for s in sensors]
+    ctx = _Ctx(scene, sim, sim.get_physics_dt(), robot, arm_ids, sensors, sensor_names,
+               dtraj.TrajectoryRecorder())
+    T_base_w = T_inv(make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W))
+    return ctx, tuple(sensor_names[1]), T_base_w
+
+
+def _anchor_start_home(pick_place) -> float:
+    """Measure the arm's drift from HOME_Q after the pre-pick settling, correct it if it
+    matters, and assert — an episode that begins somewhere other than home is not comparable
+    with any other episode.
+
+    Returns:
+        The start home error [rad], below ``TASK["home_tol_rad"]``.
+    """
+    tol = float(config.TASK["home_tol_rad"])
+    err = pick_place.home_error()
+    if err >= tol:
+        print(f"[INFO] arm drifted {err:.4f} rad from home during settling "
+              f"— returning before the first pick")
+        pick_place.return_home(phase="episode-start-home", settle_steps=30)
+        err = pick_place.home_error()
+    assert err < tol, (
+        f"episode did not start at HOME_Q: {err:.4f} rad > {tol} rad after a corrective retreat"
+    )
+    return err
+
+
+def _run_rack_prologue(motion, rack_world, restore_world, dw, gripper_bodies, capture):
+    """Run the scenario's rack action against the START-state world.
+
+    ``motion.world`` is restored to ``restore_world`` — the post-action view every pick plans
+    against — whether or not the pull succeeds. The caller decides what a failure means
+    (``main()`` errors the episode; the full-load path degrades it).
+
+    Returns:
+        The :class:`dishsim.task.rack` phase outcome from ``run_sequence``.
+    """
+    rack_joint_ids = dw.find_joints(RACK_ACTION["joint"])[0]
+    rack_runner = task_rack.RackAction(
+        motion, gripper_bodies=gripper_bodies, seed=args_cli.seed, on_step=capture,
+        measure_ext=lambda: float(dw.data.joint_pos[0, rack_joint_ids[0]]),
+    )
+    motion.world = rack_world
+    try:
+        return task_rack.run_sequence(
+            [task_rack.RackSpec.from_action(RACK_ACTION, rack_world)], rack_runner)
+    finally:
+        motion.world = restore_world
+
+
+def _closing_retreat(result, pick_place, pose_fn, placed_ids) -> bool:
+    """Park the arm and re-measure what was placed.
+
+    Runs AFTER the sequencer, whose placement verdicts are already decided — parking the arm
+    can never revise a pass/fail. It can still nudge a placed object if the un-collision-checked
+    lerp fallback fires, so the placed poses are snapshotted first and re-measured after.
+
+    Returns:
+        True when the retreat ran (the displacement fields are set), False when it failed.
+    """
+    placed_before = {i: pose_fn(i)[:3, 3].copy() for i in placed_ids}
+    try:
+        result.home_return_status = pick_place.return_home(phase="episode-home")
+        result.end_home_err_rad = pick_place.home_error()
+        result.post_home_displacement_mm = {
+            i: 1000.0 * float(np.linalg.norm(pose_fn(i)[:3, 3] - pos0))
+            for i, pos0 in placed_before.items()
+        }
+        return True
+    except Exception as exc:  # noqa: BLE001 — parking is evidence, not the experiment
+        print(f"[WARN] closing retreat failed: {exc}")
+        result.home_return_status = "failed"
+        return False
+
+
+def _motion_stats_json(stats) -> dict:
+    """The episode-record view of :class:`dishsim.task.motion.MotionStats`."""
+    return {"n_plans": stats.n_plans, "n_plan_failures": stats.n_plan_failures,
+            "plan_time_s": round(stats.plan_time_s, 3), "n_exec_steps": stats.n_exec_steps}
+
+
+def _write_latest(run_id: str) -> None:
+    with open(os.path.join(PROJECT_ROOT, "results", "experiments", "LATEST"), "w") as f:
+        f.write(run_id + "\n")
 
 
 def main() -> int:
@@ -506,9 +649,6 @@ def main() -> int:
           f"{rejection.unreachable} unreachable)")
 
     # ---- scene -------------------------------------------------------------------------------
-    sim = SimulationContext(
-        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device)
-    )
     peers = ["{ENV_REGEX_NS}/" + it.item_id for it in items_layout]
     obj_specs = []
     for it in items_layout:
@@ -519,60 +659,16 @@ def main() -> int:
             # peer filters let the support graph be read from real contacts (Stage B)
             "contact_filters": [p for p in peers if not p.endswith("/" + it.item_id)],
         })
-    scene = InteractiveScene(dscene.make_scene_cfg(
-        with_object=False, with_robot_contacts=True, objects=obj_specs))
-    welds = {
-        it.item_id: dscene.author_weld(
-            scene.stage, prim_name=it.item_id,
-            T_wrist3_obj=T_w3_tcp @ profiles[it.object_class].T_tcp_obj,
-        )
-        for it in items_layout
-    }
-    # The episode camera is appended LAST: render_videos.py takes `next(iter(cameras))` for its
-    # frame-count, variation and black-frame gates, so inserting a new name first would silently
-    # move those checks onto a different view.
-    ep = config.EPISODE_CAMERA
-    cam_specs = {**{k: v for k, v in config.CAMERAS.items()},
-                 "episode": (tuple(ep["eye"]), tuple(ep["target"]), dict(ep["lens"]))}
-    rig = CameraRig(cam_specs, hw=config.CAMERA_HW) if args_cli.enable_cameras else None
-    sim.reset()
-    if rig is not None:
-        rig.apply_poses(sim.device)
-    dscene.write_default_states(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
-    for path in welds.values():
-        dscene.set_weld_enabled(scene.stage, path, False)
-
-    # The whole contact story — grip gates and the support graph alike — reads force_matrix_w by
-    # zipping its filter axis against cfg.filter_prim_paths_expr. That ordering IS guaranteed
-    # element-for-element by Isaac Lab (verified against the sensor source and by scrambling the
-    # cfg order), and a filter expression matching zero or several bodies crashes at reset rather
-    # than misaligning silently. Asserting it once here costs nothing and pins the invariant
-    # every force reading in this file depends on.
-    for it in items_layout:
-        sensor = scene[f"{it.item_id}_contact"]
-        n_filters = len(sensor.cfg.filter_prim_paths_expr)
-        assert sensor.contact_physx_view.filter_count == n_filters, (
-            f"{it.item_id}: contact filter count {sensor.contact_physx_view.filter_count} != "
-            f"{n_filters} configured expressions — the force_matrix_w zip would be misaligned"
-        )
-
-    dt = sim.get_physics_dt()
-    robot = scene["robot"]
-    arm_ids, _ = robot.find_joints(config.ARM_JOINTS, preserve_order=True)
-    device = robot.data.joint_pos.device
-    sensors = [scene["robot_contacts_arm"], scene["robot_contacts_gripper"]]
-    sensor_names = [list(getattr(s, "body_names", [])) for s in sensors]
-    gripper_bodies = tuple(sensor_names[1])
-    T_base_w = T_inv(make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W))
-    rec = dtraj.TrajectoryRecorder()
-
-    ctx = _Ctx(scene, sim, dt, robot, arm_ids, sensors, sensor_names, rec)
+    sim, scene, welds, cam_specs, rig = _build_scene_and_rig(
+        obj_specs, {it.item_id: T_w3_tcp @ profiles[it.object_class].T_tcp_obj
+                    for it in items_layout})
+    ctx, gripper_bodies, T_base_w = _wire_ctx(sim, scene)
+    dt, rec = ctx.dt, ctx.rec
+    device = ctx.robot.data.joint_pos.device
 
     # ---- spawn -> settle -> reachability check -> resample --------------------------------------
     def measured(item_id: str) -> np.ndarray:
-        o = scene[item_id]
-        return T_base_w @ make_T(o.data.root_pos_w[0].cpu().numpy(),
-                                 wxyz_to_xyzw(o.data.root_quat_w[0].cpu().numpy()))
+        return _measured_pose_base(scene, T_base_w, item_id)
 
     def spawn_and_settle(layout):
         """Teleport to a layout, settle physics, and report the MEASURED poses.
@@ -622,7 +718,7 @@ def main() -> int:
             return 1
 
     items = [TaskItem(item_id=it.item_id, object_class=it.object_class, instance=it.instance,
-                      T_base_obj=poses[it.item_id], radius_m=it.radius_m)
+                      T_base_obj=poses[it.item_id])
              for it in items_layout]
     n_layout_attempts = attempt
 
@@ -706,25 +802,15 @@ def main() -> int:
         items, motion, pick_place=pick_place, grasp_fn=grasp_finder,
         slot_fn=allocate_slot, cost_fn=args_cli.cost_fn or config.TASK["cost_fn"],
         refresh_fn=refresh, support_fn=support_fn,
-        recovery=trecovery.make_recovery(),
+        recovery=trecovery.default_recovery,
         max_recoveries=int(config.TASK["max_recovery_attempts"]),
         on_event=lambda n, p: print(f"[INFO] {n}: {p}"),
     )
     # ---- start anchor -------------------------------------------------------------------------
     # The scene spawns the arm at HOME_Q and hold_targets re-arms the drives there, but the
-    # layout spawn->settle->resample loop above steps physics an unbounded number of times before
-    # the first pick. Measure the drift, correct it if it matters, and assert — an episode that
-    # begins somewhere other than home is not comparable with any other episode.
-    start_home_err = pick_place.home_error()
-    if start_home_err >= float(config.TASK["home_tol_rad"]):
-        print(f"[INFO] arm drifted {start_home_err:.4f} rad from home during layout settling "
-              f"— returning before the first pick")
-        pick_place.return_home(phase="episode-start-home", settle_steps=30)
-        start_home_err = pick_place.home_error()
-    assert start_home_err < float(config.TASK["home_tol_rad"]), (
-        f"episode did not start at HOME_Q: {start_home_err:.4f} rad > "
-        f"{config.TASK['home_tol_rad']} rad after a corrective retreat"
-    )
+    # layout spawn->settle->resample loop above steps physics an unbounded number of times
+    # before the first pick.
+    start_home_err = _anchor_start_home(pick_place)
 
     # ---- rack prologue --------------------------------------------------------------------------
     # A stowed rack has nowhere to place anything (0 of 15 slots have goal configurations,
@@ -734,18 +820,8 @@ def main() -> int:
     episode_id = f"ep{args_cli.seed:03d}"
     rack_phase, rack_detail = None, None
     if RACK_ACTION is not None:
-        rack_joint_ids = scene["dishwasher"].find_joints(RACK_ACTION["joint"])[0]
-        rack_runner = task_rack.RackAction(
-            motion, gripper_bodies=gripper_bodies, seed=args_cli.seed, on_step=capture,
-            measure_ext=lambda: float(
-                scene["dishwasher"].data.joint_pos[0, rack_joint_ids[0]]),
-        )
-        motion.world = rack_world
-        try:
-            rack_phase = task_rack.run_sequence(
-                [task_rack.RackSpec.from_action(RACK_ACTION, rack_world)], rack_runner)
-        finally:
-            motion.world = world          # picks always plan against the post-action world
+        rack_phase = _run_rack_prologue(motion, rack_world, world, scene["dishwasher"],
+                                        gripper_bodies, capture)
         for o in rack_phase.outcomes:
             print(f"[INFO] rack {o.joint}: ok={o.ok} target={o.target_m} m "
                   f"achieved={o.achieved_m} m err={o.error_m} m {o.stage or ''} {o.detail or ''}")
@@ -795,27 +871,13 @@ def main() -> int:
 
     # ---- closing retreat ----------------------------------------------------------------------
     # Runs BEFORE rec.end and _finish_media so the motion lands in the episode .npz and the MP4,
-    # and the final stills show the arm parked rather than extended mid-scene. It runs AFTER
-    # seq.run, whose placement verdicts are already decided — parking the arm can never revise a
-    # pass/fail. It can still nudge a placed object if the un-collision-checked lerp fallback
-    # fires, so the placed poses are snapshotted here and re-measured after.
-    placed_before = {p.item_id: scene_access.object_pose_base(p.item_id)[:3, 3].copy()
-                     for p in result.picks if p.success}
-    try:
-        result.home_return_status = pick_place.return_home(phase="episode-home")
-        result.end_home_err_rad = pick_place.home_error()
-        result.post_home_displacement_mm = {
-            item_id: 1000.0 * float(np.linalg.norm(
-                scene_access.object_pose_base(item_id)[:3, 3] - pos0))
-            for item_id, pos0 in placed_before.items()
-        }
+    # and the final stills show the arm parked rather than extended mid-scene.
+    if _closing_retreat(result, pick_place, scene_access.object_pose_base,
+                        [p.item_id for p in result.picks if p.success]):
         moved = {k: v for k, v in result.post_home_displacement_mm.items() if v > 1.0}
         print(f"[INFO] closing retreat: {result.home_return_status}, "
               f"home err {result.end_home_err_rad:.4f} rad"
               + (f", disturbed {moved}" if moved else ""))
-    except Exception as exc:  # noqa: BLE001 — parking is evidence, not the experiment
-        print(f"[WARN] closing retreat failed: {exc}")
-        result.home_return_status = "failed"
 
     traj_path = os.path.join(run_dir, "trajectories", f"{result.episode_id}.npz")
     tmeta = rec.end(traj_path, extra_meta={"status": result.status, "n_placed": result.n_placed})
@@ -827,13 +889,9 @@ def main() -> int:
         os.path.join(run_dir, "episodes", f"{result.episode_id}.json"), result,
         extra={"planner": planner.describe(), "scenario": SCENARIO, "post_state": POST_STATE,
                "run_id": run_id, "trajectory": os.path.relpath(traj_path, PROJECT_ROOT),
-               "motion_stats": {"n_plans": motion.stats.n_plans,
-                                "n_plan_failures": motion.stats.n_plan_failures,
-                                "plan_time_s": round(motion.stats.plan_time_s, 3),
-                                "n_exec_steps": motion.stats.n_exec_steps}},
+               "motion_stats": _motion_stats_json(motion.stats)},
     )
-    with open(os.path.join(PROJECT_ROOT, "results", "experiments", "LATEST"), "w") as f:
-        f.write(run_id + "\n")
+    _write_latest(run_id)
     _write_manifest(run_dir, run_id, planner)
 
     print(f"[INFO] episode {result.episode_id}: status={result.status} "
@@ -1070,12 +1128,8 @@ def _run_full_load_episode() -> int:  # noqa: PLR0915 — one episode, top to bo
         return reach_fn
 
     # ---- scene: every phase's items exist from the start, later waves parked off-workspace ---
-    sim = SimulationContext(
-        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device)
-    )
     obj_specs = []
     for k, (pi, it) in enumerate(all_items):
-        state = PHASE_LIST[pi].state
         # contact filters: gripper prims + SAME-PHASE peers only. Support graphs only ever
         # consult items sharing the counter within a phase, and full-load item counts would
         # otherwise grow the sensor pair count O(N^2) across phases.
@@ -1085,48 +1139,18 @@ def _run_full_load_episode() -> int:  # noqa: PLR0915 — one episode, top to bo
         obj_specs.append({"name": it.item_id,
                           "usd_path": config.OBJECTS[it.object_class].usd_path,
                           "pos": pos_w, "quat": quat, "contact_filters": peers})
-    scene = InteractiveScene(dscene.make_scene_cfg(
-        with_object=False, with_robot_contacts=True, objects=obj_specs))
-    welds = {
-        it.item_id: dscene.author_weld(
-            scene.stage, prim_name=it.item_id,
-            T_wrist3_obj=T_w3_tcp @ profiles[PHASE_LIST[pi].state][it.object_class].T_tcp_obj,
-        )
-        for pi, it in all_items
-    }
-    ep = config.EPISODE_CAMERA
-    cam_specs = {**{k: v for k, v in config.CAMERAS.items()},
-                 "episode": (tuple(ep["eye"]), tuple(ep["target"]), dict(ep["lens"]))}
-    rig = CameraRig(cam_specs, hw=config.CAMERA_HW) if args_cli.enable_cameras else None
-    sim.reset()
-    if rig is not None:
-        rig.apply_poses(sim.device)
-    dscene.write_default_states(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
-    for path in welds.values():
-        dscene.set_weld_enabled(scene.stage, path, False)
-    for pi, it in all_items:
-        sensor = scene[f"{it.item_id}_contact"]
-        n_filters = len(sensor.cfg.filter_prim_paths_expr)
-        assert sensor.contact_physx_view.filter_count == n_filters, (
-            f"{it.item_id}: contact filter count {sensor.contact_physx_view.filter_count} != "
-            f"{n_filters} configured expressions")
-
-    dt = sim.get_physics_dt()
-    robot, dw = scene["robot"], scene["dishwasher"]
-    arm_ids, _ = robot.find_joints(config.ARM_JOINTS, preserve_order=True)
-    device = robot.data.joint_pos.device
-    sensors = [scene["robot_contacts_arm"], scene["robot_contacts_gripper"]]
-    sensor_names = [list(getattr(s, "body_names", [])) for s in sensors]
-    gripper_bodies = tuple(sensor_names[1])
-    T_base_w = T_inv(make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W))
-    rec = dtraj.TrajectoryRecorder()
-    ctx = _Ctx(scene, sim, dt, robot, arm_ids, sensors, sensor_names, rec)
+    sim, scene, welds, cam_specs, rig = _build_scene_and_rig(
+        obj_specs,
+        {it.item_id: T_w3_tcp @ profiles[PHASE_LIST[pi].state][it.object_class].T_tcp_obj
+         for pi, it in all_items})
+    ctx, gripper_bodies, T_base_w = _wire_ctx(sim, scene)
+    dt, rec = ctx.dt, ctx.rec
+    device = ctx.robot.data.joint_pos.device
+    dw = scene["dishwasher"]
     episode_id = f"ep{args_cli.seed:03d}"
 
     def measured(item_id: str) -> np.ndarray:
-        o = scene[item_id]
-        return T_base_w @ make_T(o.data.root_pos_w[0].cpu().numpy(),
-                                 wxyz_to_xyzw(o.data.root_quat_w[0].cpu().numpy()))
+        return _measured_pose_base(scene, T_base_w, item_id)
 
     rack_joint_names = sorted(config.RACK_JOINT_TARGETS)
     rack_joint_ids, _ = dw.find_joints(rack_joint_names, preserve_order=True)
@@ -1198,26 +1222,10 @@ def _run_full_load_episode() -> int:  # noqa: PLR0915 — one episode, top to bo
             if pi == 0:
                 # start anchor (as in main: settle stepping happens before the first pick)
                 ctx.step(30)
-                start_home_err = pick_place.home_error()
-                if start_home_err >= float(config.TASK["home_tol_rad"]):
-                    pick_place.return_home(phase="episode-start-home", settle_steps=30)
-                    start_home_err = pick_place.home_error()
-                assert start_home_err < float(config.TASK["home_tol_rad"]), (
-                    f"episode did not start at HOME_Q: {start_home_err:.4f} rad")
-                master.start_home_err_rad = start_home_err
+                master.start_home_err_rad = _anchor_start_home(pick_place)
                 if RACK_ACTION is not None:
-                    rj = dw.find_joints(RACK_ACTION["joint"])[0]
-                    rack_runner = task_rack.RackAction(
-                        motion, gripper_bodies=gripper_bodies, seed=args_cli.seed,
-                        on_step=capture,
-                        measure_ext=lambda: float(dw.data.joint_pos[0, rj[0]]))
-                    motion.world = rack_world
-                    try:
-                        rack_phase = task_rack.run_sequence(
-                            [task_rack.RackSpec.from_action(RACK_ACTION, rack_world)],
-                            rack_runner)
-                    finally:
-                        motion.world = ref_worlds[state]
+                    rack_phase = _run_rack_prologue(motion, rack_world, ref_worlds[state],
+                                                    dw, gripper_bodies, capture)
                     master.rack_phase = rack_phase.to_json()
                     if not rack_phase.ok:
                         bad = next(o for o in rack_phase.outcomes if not o.ok)
@@ -1346,9 +1354,8 @@ def _run_full_load_episode() -> int:  # noqa: PLR0915 — one episode, top to bo
 
                 wave_items = [TaskItem(item_id=it.item_id, object_class=it.object_class,
                                        instance=it.instance,
-                                       T_base_obj=measured(it.item_id),
-                                       radius_m=items_layout[k].radius_m)
-                              for k, it in enumerate(wave)]
+                                       T_base_obj=measured(it.item_id))
+                              for it in wave]
                 for wit in wave_items:
                     on_counter[wit.item_id] = wit.object_class
                     set_obstacle_all(state, wit.item_id,
@@ -1376,7 +1383,7 @@ def _run_full_load_episode() -> int:  # noqa: PLR0915 — one episode, top to bo
                     slot_fn=lambda item: assignment.get(item.item_id),
                     cost_fn=args_cli.cost_fn or config.TASK["cost_fn"],
                     refresh_fn=refresh, support_fn=support_fn,
-                    recovery=trecovery.make_recovery(),
+                    recovery=trecovery.default_recovery,
                     max_recoveries=int(config.TASK["max_recovery_attempts"]),
                     on_event=lambda n, p: print(f"[INFO] {n}: {p}"))
                 wave_result = seq.run(episode_id=episode_id, seed=args_cli.seed,
@@ -1441,28 +1448,13 @@ def _run_full_load_episode() -> int:  # noqa: PLR0915 — one episode, top to bo
     if pick_place is not None:
         scene_access_final = _SceneAccess(scene, welds, [it for _, it in all_items],
                                           gripper_bodies, T_base_w, T_w3_tcp, {})
-        placed_before = {i: scene_access_final.object_pose_base(i)[:3, 3].copy()
-                         for i in placed}
-        try:
-            master.home_return_status = pick_place.return_home(phase="episode-home")
-            master.end_home_err_rad = pick_place.home_error()
-            master.post_home_displacement_mm = {
-                i: 1000.0 * float(np.linalg.norm(
-                    scene_access_final.object_pose_base(i)[:3, 3] - pos0))
-                for i, pos0 in placed_before.items()}
-        except Exception as exc:  # noqa: BLE001
-            print(f"[WARN] closing retreat failed: {exc}")
-            master.home_return_status = "failed"
+        _closing_retreat(master, pick_place, scene_access_final.object_pose_base, list(placed))
 
     master.status = full_load_status(master, n_planned=n_planned,
                                      transitions_ok=transitions_ok)
-    phase_meta_extra["motion_stats"] = {
-        "n_plans": motion.stats.n_plans, "n_plan_failures": motion.stats.n_plan_failures,
-        "plan_time_s": round(motion.stats.plan_time_s, 3),
-        "n_exec_steps": motion.stats.n_exec_steps}
+    phase_meta_extra["motion_stats"] = _motion_stats_json(motion.stats)
     flush()
-    with open(os.path.join(PROJECT_ROOT, "results", "experiments", "LATEST"), "w") as f:
-        f.write(run_id + "\n")
+    _write_latest(run_id)
 
     print(f"[INFO] FULL-LOAD episode {episode_id}: status={master.status} "
           f"placed={master.n_placed}/{n_planned}")

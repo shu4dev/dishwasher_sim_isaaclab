@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""PlanDebug instrumentation of Planner.plan: checker capture, PlannerData tree, GraphML fallback.
+"""PlanDebug instrumentation of Planner.plan: checker capture and the PlannerData tree.
 
 Kit-free and asset-free: the collision world is stubbed, so only ompl + numpy are exercised.
 Run with the project venv:
@@ -15,7 +15,6 @@ import numpy as np
 
 from dishsim import config
 from dishsim.planners import PlanDebug, make_planner
-from dishsim.planners.ompl_base import _coords_from_graphml
 from dishsim.ur5e_kin import JOINT_LIMITS
 
 from conftest import FreeWorld, WallWorld
@@ -72,22 +71,3 @@ def test_invalid_states_captured():
 def test_no_debug_is_noop():
     res = make_planner("rrt_connect", budget_s=2.0).plan(FreeWorld(), START, FREE_GOALS, seed=1)
     assert res.status == "solved" and res.path_q is not None
-
-
-def test_graphml_coords_parser():
-    # non-"key0" key id and out-of-order nodes: the parser must match the key by attr.name
-    # and order rows by the numeric node index.
-    xml = """<?xml version="1.0" encoding="UTF-8"?>
-<graphml xmlns="http://graphml.graphdrawing.org/xmlns">
-  <key id="k9" for="node" attr.name="coords" attr.type="string" />
-  <key id="k1" for="edge" attr.name="weight" attr.type="double" />
-  <graph id="G" edgedefault="directed">
-    <node id="n1"><data key="k9">1.0,1.1,1.2,1.3,1.4,1.5</data></node>
-    <node id="n0"><data key="k9">0.0,0.1,0.2,0.3,0.4,0.5</data></node>
-  </graph>
-</graphml>
-"""
-    coords = _coords_from_graphml(xml, 2)
-    assert coords.shape == (2, 6)
-    assert np.allclose(coords[0], [0.0, 0.1, 0.2, 0.3, 0.4, 0.5])
-    assert np.allclose(coords[1], [1.0, 1.1, 1.2, 1.3, 1.4, 1.5])

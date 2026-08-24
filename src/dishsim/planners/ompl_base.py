@@ -24,47 +24,6 @@ from ..ur5e_kin import JOINT_LIMITS
 from .base import PlanDebug, PlanResult, Planner
 
 
-def _coords_from_graphml(xml_text: str, n_expected: int) -> np.ndarray:
-    """Recover planner-tree vertex coordinates from ``PlannerData.printGraphML()`` output.
-
-    Fallback for OMPL builds whose ``PlannerDataVertex.getState()`` returns the method-less
-    base state: the GraphML serialization carries the per-vertex reals in a ``coords`` node
-    attribute instead.
-
-    Args:
-        xml_text: GraphML document produced by ``ob.PlannerData.printGraphML()``.
-        n_expected: Vertex count the document must contain (``pd.numVertices()``).
-
-    Returns:
-        Vertex coordinates ordered by graph index, shape [n_expected, dim].
-    """
-    import xml.etree.ElementTree as ET  # noqa: PLC0415
-
-    def local(tag: str) -> str:
-        return tag.rsplit("}", 1)[-1]  # strip the GraphML xmlns prefix
-
-    root = ET.fromstring(xml_text)
-    coords_key = next(
-        (el.get("id") for el in root.iter() if local(el.tag) == "key" and el.get("attr.name") == "coords"),
-        None,
-    )
-    if coords_key is None:
-        raise ValueError("GraphML has no 'coords' node attribute")
-
-    rows: list[tuple[int, list[float]]] = []
-    for el in root.iter():
-        if local(el.tag) != "node":
-            continue
-        for d in el:
-            if local(d.tag) == "data" and d.get("key") == coords_key:
-                rows.append((int(el.get("id").lstrip("n")), [float(v) for v in d.text.split(",")]))
-                break
-    if len(rows) != n_expected:
-        raise ValueError(f"GraphML has {len(rows)} coords rows, expected {n_expected}")
-    rows.sort(key=lambda r: r[0])
-    return np.array([r[1] for r in rows])
-
-
 def _extract_planner_data(planner, si, debug: PlanDebug) -> None:
     """Fill ``debug.tree_*`` from the planner's ``PlannerData`` (best effort, never raises)."""
     from ompl import base as ob  # noqa: PLC0415
@@ -76,12 +35,9 @@ def _extract_planner_data(planner, si, debug: PlanDebug) -> None:
         debug.tree_tag = np.array([pd.getVertex(i).getTag() for i in range(n)], dtype=int)
         edges = [(i, j) for i in range(n) for j in pd.getEdges(i)]
         debug.tree_edges = np.array(edges, dtype=int).reshape(-1, 2)
-        try:
-            debug.tree_q = np.array(
-                [[pd.getVertex(i).getState()[k] for k in range(6)] for i in range(n)]
-            ).reshape(n, 6)
-        except Exception:  # method-less base ob.State: fall back to the GraphML serialization
-            debug.tree_q = _coords_from_graphml(pd.printGraphML(), n)
+        debug.tree_q = np.array(
+            [[pd.getVertex(i).getState()[k] for k in range(6)] for i in range(n)]
+        ).reshape(n, 6)
         debug.planner_data_ok = True
     except Exception as e:  # noqa: BLE001 — instrumentation must never break planning
         debug.planner_data_error = f"{type(e).__name__}: {e}"
