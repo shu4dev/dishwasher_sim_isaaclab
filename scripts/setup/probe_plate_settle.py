@@ -51,9 +51,9 @@ import isaaclab.sim as sim_utils  # noqa: E402
 import torch  # noqa: E402
 from isaaclab.scene import InteractiveScene  # noqa: E402
 from isaaclab.sim import SimulationContext  # noqa: E402
-from isaaclab_physx.physics import PhysxCfg  # noqa: E402
 
 from dishsim import config  # noqa: E402
+from dishsim.quats import wxyz_to_xyzw, xyzw_to_wxyz  # noqa: E402
 
 if args_cli.machine:
     config.apply_machine(args_cli.machine)
@@ -83,7 +83,7 @@ def main() -> int:
         return 1
 
     sim = SimulationContext(
-        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg()))
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device))
     spec = config.OBJECTS[args_cli.object]
     scene = InteractiveScene(dscene.make_scene_cfg(
         with_object=False, with_robot_contacts=False,
@@ -94,7 +94,7 @@ def main() -> int:
     dscene.write_default_states(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
     dt = sim.get_physics_dt()
     obj = scene["probe"]
-    device = obj.data.root_pos_w.torch.device
+    device = obj.data.root_pos_w.device
     T_w_base = make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W)
     T_base_w = T_inv(T_w_base)
 
@@ -106,9 +106,9 @@ def main() -> int:
 
     def teleport(T_base_obj):
         pos_w, quat = T_to_pos_quat(T_w_base @ T_base_obj)
-        obj.write_root_pose_to_sim_index(root_pose=torch.tensor(
-            np.concatenate([pos_w, quat])[None], dtype=torch.float32, device=device))
-        obj.write_root_velocity_to_sim_index(
+        obj.write_root_pose_to_sim(root_pose=torch.tensor(
+            np.concatenate([pos_w, xyzw_to_wxyz(quat)])[None], dtype=torch.float32, device=device))
+        obj.write_root_velocity_to_sim(
             root_velocity=torch.zeros((1, 6), dtype=torch.float32, device=device))
 
     rng = np.random.default_rng(args_cli.seed)
@@ -119,8 +119,8 @@ def main() -> int:
             T_rel = placement.sample_goal_poses(slot, 1, rng)[0]
             teleport(T_rel)
             step(int(config.SETTLE_STEPS))
-            T_settled = T_base_w @ make_T(obj.data.root_pos_w.torch[0].cpu().numpy(),
-                                          obj.data.root_quat_w.torch[0].cpu().numpy())
+            T_settled = T_base_w @ make_T(obj.data.root_pos_w[0].cpu().numpy(),
+                                          wxyz_to_xyzw(obj.data.root_quat_w[0].cpu().numpy()))
             ev = placement.evaluate_placement(slot, T_settled)
             results.append({"slot": sid, "repeat": k, **{m: round(float(v), 5)
                             for m, v in ev.items() if m != "ok"}, "ok": bool(ev["ok"])})

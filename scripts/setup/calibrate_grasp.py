@@ -63,7 +63,9 @@ parser.add_argument("--out_dir", type=str, default=None,
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
+_enable_cameras = args_cli.enable_cameras  # 2.1's AppLauncher pops this off the namespace
 app_launcher = AppLauncher(args_cli)
+args_cli.enable_cameras = _enable_cameras
 simulation_app = app_launcher.app
 
 """Rest everything follows."""
@@ -76,7 +78,6 @@ import numpy as np
 import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
-from isaaclab_physx.physics import PhysxCfg
 
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
@@ -117,7 +118,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 def main() -> None:
     sim = SimulationContext(
-        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg())
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device)
     )
     scene = InteractiveScene(dscene.make_scene_cfg(with_object=True, with_robot_contacts=True))
     weld_path = dscene.author_weld(scene.stage)
@@ -137,7 +138,7 @@ def main() -> None:
     os.makedirs(args_cli.out_dir, exist_ok=True)
     video = None
     if rig is not None:
-        aim = obj.data.root_pos_w.torch[0].cpu().numpy()
+        aim = obj.data.root_pos_w[0].cpu().numpy()
         rig.set_view("iso", aim + np.array([-0.28, 0.28, 0.12]), aim, sim.device)
         video = VideoWriter(os.path.join(args_cli.out_dir, "close_open.mp4"), fps=config.CAMERA_FPS)
 
@@ -161,12 +162,12 @@ def main() -> None:
             capture()
 
     def weld_err_mm() -> float:
-        obj_pos = obj.data.root_pos_w.torch[0].cpu().numpy()
+        obj_pos = obj.data.root_pos_w[0].cpu().numpy()
         return float(np.linalg.norm(obj_pos - dscene.grasp_pose_w()[0])) * 1e3
 
     def finger_state() -> dict:
-        theta = float(robot.data.joint_pos.torch[0, fid[0]])
-        inner = {n: float(robot.data.joint_pos.torch[0, i]) for i, n in zip(if_ids, if_names)}
+        theta = float(robot.data.joint_pos[0, fid[0]])
+        inner = {n: float(robot.data.joint_pos[0, i]) for i, n in zip(if_ids, if_names)}
         return {"theta": theta, "inner": inner}
 
     # ---- 1. open-state gate ------------------------------------------------------------------
@@ -319,11 +320,11 @@ def main() -> None:
     # Newton's-third-law sign convention for unexpected_robot_contact: the pad body's own
     # net contact force should cancel against MINUS the force_matrix_w row (mug->pad reaction)
     names_row = dscene.object_contact_partners(scene)
-    fm = scene["object_contact"].data.force_matrix_w.torch[0].reshape(-1, 3)
+    fm = scene["object_contact"].data.force_matrix_w[0].reshape(-1, 3)
     sign_ok = True
     for pad in config.GRIP_PAD_BODIES:
         row = fm[names_row.index(pad)]
-        net = gsensor.data.net_forces_w.torch[0][gnames.index(pad)]
+        net = gsensor.data.net_forces_w[0][gnames.index(pad)]
         res_minus = float((net + row).norm())  # convention GRIP_REACTION_SIGN = -1
         res_plus = float((net - row).norm())  # wrong convention doubles instead of cancels
         print(f"[INFO] reaction-sign check {pad}: |net+row|={res_minus:.3f} N, "
@@ -336,7 +337,7 @@ def main() -> None:
         from PIL import Image  # noqa: PLC0415
 
         for tag, offset in (("A", (-0.28, 0.28, 0.12)), ("B", (0.30, -0.22, 0.05))):
-            aim = obj.data.root_pos_w.torch[0].cpu().numpy()
+            aim = obj.data.root_pos_w[0].cpu().numpy()
             rig.set_view("iso", aim + np.array(offset), aim, sim.device)
             for _ in range(3):
                 sim.step()
@@ -344,7 +345,7 @@ def main() -> None:
                 rig.update(dt)
             Image.fromarray(rig.grab()["iso"]).save(
                 os.path.join(args_cli.out_dir, f"pads_on_mug_closeup{tag}.png"))
-        aim = obj.data.root_pos_w.torch[0].cpu().numpy()
+        aim = obj.data.root_pos_w[0].cpu().numpy()
         rig.set_view("iso", aim + np.array([-0.28, 0.28, 0.12]), aim, sim.device)
 
     # ---- 6. open on camera, forces must vanish -----------------------------------------------

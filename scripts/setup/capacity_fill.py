@@ -40,7 +40,9 @@ parser.add_argument("--media", type=str, default=os.path.join(PROJECT_ROOT, "med
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
+_enable_cameras = args_cli.enable_cameras  # 2.1's AppLauncher pops this off the namespace
 app_launcher = AppLauncher(args_cli)
+args_cli.enable_cameras = _enable_cameras
 simulation_app = app_launcher.app
 
 """Rest everything follows."""
@@ -55,11 +57,11 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import RigidObjectCfg
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
-from isaaclab_physx.physics import PhysxCfg
 
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from dishsim import config  # noqa: E402
+from dishsim.quats import xyzw_to_wxyz  # noqa: E402
 
 config.apply_scenario("both_out")  # racks extended for loading; fill targets use this cache
 
@@ -76,7 +78,7 @@ def pose_w_tensor(T_base: np.ndarray, device, hover: float = 0.0) -> torch.Tenso
     T_w_base = make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W)
     pos, quat = T_to_pos_quat(T_w_base @ np.asarray(T_base, dtype=float))
     pos[2] += hover
-    return torch.tensor(np.concatenate([pos, quat])[None], dtype=torch.float32, device=device)
+    return torch.tensor(np.concatenate([pos, xyzw_to_wxyz(quat)])[None], dtype=torch.float32, device=device)
 
 
 def main() -> None:
@@ -92,7 +94,7 @@ def main() -> None:
     scene_cfg = dscene.make_scene_cfg(with_object=False, with_robot_contacts=False)
     # one rigid object per planned item, parked in a grid 2 m to the side
     for k, it in enumerate(items):
-        park = ((-2.0 - 0.35 * (k % 6), -1.5 + 0.35 * (k // 6), 0.10), (0.0, 0.0, 0.0, 1.0))
+        park = ((-2.0 - 0.35 * (k % 6), -1.5 + 0.35 * (k // 6), 0.10), (1.0, 0.0, 0.0, 0.0))  # WXYZ id
         setattr(
             scene_cfg,
             it.item_id,
@@ -107,7 +109,7 @@ def main() -> None:
         )
 
     sim = SimulationContext(
-        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg())
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device)
     )
     rig = None
     if args_cli.enable_cameras:
@@ -119,7 +121,7 @@ def main() -> None:
     dscene.write_default_states(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
     dscene.assert_frames(scene)
     dt = sim.get_physics_dt()
-    device = scene["robot"].data.joint_pos.torch.device
+    device = scene["robot"].data.joint_pos.device
     dw = scene["dishwasher"]
     rack_ids = [dw.find_joints(j)[0][0] for j in RACK_JOINTS]
 
@@ -147,14 +149,14 @@ def main() -> None:
     poses_settled = {}
     for it in items:
         obj = scene[it.item_id]
-        obj.write_root_pose_to_sim_index(root_pose=pose_w_tensor(it.T_base_obj, device, hover=fill_plan.SPAWN_HOVER_M))
-        obj.write_root_velocity_to_sim_index(root_velocity=torch.zeros((1, 6), dtype=torch.float32, device=device))
+        obj.write_root_pose_to_sim(root_pose=pose_w_tensor(it.T_base_obj, device, hover=fill_plan.SPAWN_HOVER_M))
+        obj.write_root_velocity_to_sim(root_velocity=torch.zeros((1, 6), dtype=torch.float32, device=device))
         hist = []
         for s in range(args_cli.settle_steps_item):
             step(1)
             if s >= args_cli.settle_steps_item - 30:
-                p = obj.data.root_pos_w.torch[0].cpu().numpy().copy()
-                q = obj.data.root_quat_w.torch[0].cpu().numpy().copy()
+                p = obj.data.root_pos_w[0].cpu().numpy().copy()
+                q = obj.data.root_quat_w[0].cpu().numpy().copy()
                 hist.append((p, q))
         drift_p = float(np.linalg.norm(hist[-1][0] - hist[0][0]))
         dq = abs(float(np.dot(hist[-1][1], hist[0][1])))
@@ -171,14 +173,14 @@ def main() -> None:
         if not stable:
             print(f"[WARN] {it.item_id}: unstable (drift {drift_p*1e3:.1f} mm / {drift_deg:.1f} deg, "
                   f"dev {dev_p*1e3:.1f} mm) — parked")
-            park = torch.tensor([[-2.5, 2.0, 0.10, 0, 0, 0, 1]], dtype=torch.float32, device=device)
-            obj.write_root_pose_to_sim_index(root_pose=park)
-            obj.write_root_velocity_to_sim_index(root_velocity=torch.zeros((1, 6), dtype=torch.float32, device=device))
+            park = torch.tensor([[-2.5, 2.0, 0.10, 1, 0, 0, 0]], dtype=torch.float32, device=device)  # WXYZ id
+            obj.write_root_pose_to_sim(root_pose=park)
+            obj.write_root_velocity_to_sim(root_velocity=torch.zeros((1, 6), dtype=torch.float32, device=device))
             step(10)
         else:
             poses_settled[it.item_id] = (
-                obj.data.root_pos_w.torch[0].cpu().numpy().copy(),
-                obj.data.root_quat_w.torch[0].cpu().numpy().copy(),
+                obj.data.root_pos_w[0].cpu().numpy().copy(),
+                obj.data.root_quat_w[0].cpu().numpy().copy(),
             )
         print(f"[INFO] {it.item_id}: {'stable' if stable else 'UNSTABLE'} "
               f"(drift {drift_p*1e3:.1f} mm, dev {dev_p*1e3:.1f} mm)")
@@ -190,7 +192,7 @@ def main() -> None:
     pre_slide = {k: v for k, v in poses_settled.items()}
     body_ids = {rack: dw.find_bodies(body)[0][0]
                 for rack, body in (("lower", "E_shelf_1_04"), ("upper", "E_shelf_03"))}
-    rack_pos_pre = {rack: dw.data.body_pos_w.torch[0, bi].cpu().numpy().copy()
+    rack_pos_pre = {rack: dw.data.body_pos_w[0, bi].cpu().numpy().copy()
                     for rack, bi in body_ids.items()}
     for s in range(args_cli.slide_steps):
         frac = (s + 1) / args_cli.slide_steps
@@ -201,14 +203,14 @@ def main() -> None:
     for _ in range(240):
         dscene.hold_targets(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
         step(1, cam="front")
-    rack_err = max(abs(float(dw.data.joint_pos.torch[0, i])) for i in rack_ids)
-    rack_ride = {rack: dw.data.body_pos_w.torch[0, bi].cpu().numpy() - rack_pos_pre[rack]
+    rack_err = max(abs(float(dw.data.joint_pos[0, i])) for i in rack_ids)
+    rack_ride = {rack: dw.data.body_pos_w[0, bi].cpu().numpy() - rack_pos_pre[rack]
                  for rack, bi in body_ids.items()}
     displaced = []
     for k, (p0, q0) in pre_slide.items():
         obj = scene[k]
-        p1 = obj.data.root_pos_w.torch[0].cpu().numpy()
-        q1 = obj.data.root_quat_w.torch[0].cpu().numpy()
+        p1 = obj.data.root_pos_w[0].cpu().numpy()
+        q1 = obj.data.root_quat_w[0].cpu().numpy()
         # expected: each item rides its rack — subtract the MEASURED rack displacement
         dp_ride = (p1 - p0) - rack_ride[results[k]["rack"]]
         slip = float(np.linalg.norm(dp_ride))

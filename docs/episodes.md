@@ -116,7 +116,7 @@ WAVES: as many items as fit the reachable spawn band (`TASK["wave_fill_factor"]`
 cleared, then restocked.
 
 ```bash
-# 1. plan the reachable full load (venv, no Kit) — writes the plan artifact + reach figure
+# 1. plan the reachable full load (run_py.sh, no Kit) — writes the plan artifact + reach figure
 scripts/setup/plan_full_load.py --machine bosch800 --placement side_winner
 
 # 2. run it (ask before launching: the certified 22-item load is a 1.5-2.5 h run; --cap in

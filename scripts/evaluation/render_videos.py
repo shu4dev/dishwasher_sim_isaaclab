@@ -66,7 +66,6 @@ import sys
 import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
-from isaaclab_physx.physics import PhysxCfg
 
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
@@ -105,7 +104,7 @@ def main() -> None:
 
     sim = SimulationContext(
         sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device,
-                                gravity=(0.0, 0.0, 0.0), physics=PhysxCfg())
+                                gravity=(0.0, 0.0, 0.0))
     )
     # order matters and mirrors the experiment runner: scene first, then the rig, then
     # reset, then poses (cameras created before the scene end up mis-posed)

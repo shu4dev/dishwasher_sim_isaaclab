@@ -1,15 +1,17 @@
 # Downloaded assets — never commit (see README for sources + licenses).
 # Includes derived USDs and the collision-world cache (assets/cache/), all regenerable.
-assets/
+# No trailing slash: on the corallab machine these are SYMLINKS onto the 2 TB drive, and
+# `name/` patterns match only real directories.
+/assets
 
 # Visual-evidence media and planning results stay on disk for review; only curated
 # copies under docs/figures/ are tracked.
-media/
-results/
+/media
+/results
 
 # Logs and outputs
-logs/
-outputs/
+/logs
+/outputs
 wandb/
 
 # Python

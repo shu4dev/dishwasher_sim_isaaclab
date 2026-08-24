@@ -43,7 +43,6 @@ import sys
 import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
-from isaaclab_physx.physics import PhysxCfg
 
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
@@ -63,7 +62,7 @@ from dishsim import scene as dscene  # noqa: E402
 
 def main() -> None:
     sim = SimulationContext(
-        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg(), use_fabric=False)
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, use_fabric=False)
     )
     scene = InteractiveScene(dscene.make_scene_cfg(with_object=True))
     dscene.author_weld(scene.stage)

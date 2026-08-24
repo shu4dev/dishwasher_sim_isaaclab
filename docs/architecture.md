@@ -66,6 +66,7 @@ dishwasher_sim_isaaclab/
 │   ├── metrics.py                    [Kit-free aggregation over trial records]
 │   ├── media.py                      [camera rig, video writer, contact sheets]
 │   ├── transforms.py                 [pose helpers (XYZW throughout)]
+│   ├── quats.py                      [XYZW <-> WXYZ at the Isaac Lab 2.1 boundary]
 │   ├── task/                         [the task layer — decides WHAT, never HOW to move]
 │   │   ├── sequencer.py              [which object next, in what order; support + grasp gates]
 │   │   ├── primitives.py             [one object's pick-and-place choreography]
@@ -86,10 +87,10 @@ dishwasher_sim_isaaclab/
 │       ├── prm.py                    [probabilistic roadmap (single-goal here)]
 │       └── registry.py               [name -> class; make_planner(); available()]
 │
-├── tests/                            [435 cases across 25 files; venv pytest, no Kit]
+├── tests/                            [Kit-free pytest via scripts/run_py.sh]
 ├── docs/                             [environment, success criteria, measured reports]
 ├── assets/  media/  results/         [generated, gitignored]
-├── requirements-planning.txt         [pinned planning-venv deps (measured working set)]
+├── requirements-planning.txt         [pinned planning deps, baked into the docker image]
 └── pyproject.toml
 ```
 

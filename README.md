@@ -5,8 +5,8 @@
     Classical motion planning · Imitation learning · Reinforcement learning
   </p>
   <p align="center">
-    <img src="https://img.shields.io/badge/Isaac%20Sim-6.0.1--rc.7-76B900?style=flat&logo=nvidia&logoColor=white" alt="Isaac Sim 6.0.1-rc.7"/>
-    <img src="https://img.shields.io/badge/Isaac%20Lab-3.0.0-76B900?style=flat&logo=nvidia&logoColor=white" alt="Isaac Lab 3.0.0"/>
+    <img src="https://img.shields.io/badge/Isaac%20Sim-4.5.0-76B900?style=flat&logo=nvidia&logoColor=white" alt="Isaac Sim 4.5.0"/>
+    <img src="https://img.shields.io/badge/Isaac%20Lab-2.1.1-76B900?style=flat&logo=nvidia&logoColor=white" alt="Isaac Lab 2.1.1"/>
     <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat&logo=python&logoColor=white" alt="Python 3.12"/>
     <img src="https://img.shields.io/badge/License-BSD--3--Clause-blue?style=flat" alt="BSD-3-Clause"/>
   </p>
@@ -22,11 +22,11 @@
   </tr>
 </table>
 
-> **Read this first.** Every Kit script runs through `scripts/run_kit.sh` (never bare
-> `isaaclab.sh -p` — it dies at boot with the planning venv present), success is judged from
-> **log content**, never exit codes (`isaaclab.sh -p` exits 0 on crashes), and the Isaac
-> Sim 6.0.1-rc.7 / Isaac Lab 3.0.0 pins must not be changed. The full list of launcher
-> landmines and why they exist: [docs/environment.md](docs/environment.md).
+> **Read this first.** Every Kit script runs through `scripts/run_kit.sh` (on the host it
+> forwards into the `dishsim-isaac` container), Kit-free python through `scripts/run_py.sh`,
+> success is judged from **log content**, never exit codes (`isaaclab.sh -p` exits 0 on
+> crashes), and the Isaac Sim 4.5.0 / Isaac Lab 2.1.1 pins must not be changed. The full
+> list of launcher landmines and why they exist: [docs/environment.md](docs/environment.md).
 
 ## 1 Overview
 
@@ -161,7 +161,7 @@ trials place in.
 
 | Doc | Contents |
 |---|---|
-| [docs/environment.md](docs/environment.md) | Hardware/software stack, venv recipe, Isaac Lab 3.0-vs-2.x API deltas, OMPL 2.0 nanobind notes, **launcher landmines (canonical)** |
+| [docs/environment.md](docs/environment.md) | Hardware/software stack, docker runtime, Isaac Lab 2.1 port notes, OMPL 2.0 nanobind notes, **launcher landmines (canonical)** |
 | [docs/architecture.md](docs/architecture.md) | Code structure, the task/planner layer boundary, completed one-off studies |
 | [docs/episodes.md](docs/episodes.md) | The multi-object episode runner manual (CLI, slot assignment, rack actions) |
 | [docs/success_criteria.md](docs/success_criteria.md) | Placement success definition per placement mode, slot model, the reachability success bar |
@@ -176,30 +176,27 @@ trials place in.
 
 ### 2.1 Prerequisites
 
-An Isaac Sim 6.0.1-rc.7 / Isaac Lab 3.0.0 install at `/workspace/isaaclab`. This repo nests
-inside that tree as an independent git repo. See the
-[official installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html),
-and [docs/environment.md](docs/environment.md) for this project's pinned versions. Developed
-and tested on a single NVIDIA **L4** (23 GB) / 8 vCPU / 30 GiB; OMPL planning is CPU-bound, so
-core count matters more than the GPU except when rendering. Everything runs `--headless`; only
-*rendering* additionally needs `--enable_cameras`.
+Docker with the NVIDIA container runtime and an NVIDIA driver ≥ 535.129 (the 4.5.0 pin's
+documented series). The whole runtime — Isaac Sim 4.5.0, Isaac Lab v2.1.1 and the planning
+deps — is baked into the repo-owned image; nothing installs on the host. Developed and
+tested on the corallab workstation (3× RTX 3090 / 36 cores; GPU 1 by default, `DISHSIM_GPU`
+overrides); OMPL planning is CPU-bound, so core count matters more than the GPU except when
+rendering. Everything runs `--headless`; only *rendering* additionally needs
+`--enable_cameras`.
 
-### 2.2 Planning venv
-
-Planning runs on CPU in a venv beside Kit (OMPL, FCL, CoACD are not part of the Kit
-environment). Create it at **exactly** this path — `isaaclab.sh` looks for a venv there and
-resolves Python to it, which is also why `run_kit.sh` has to re-export the Kit environment.
+### 2.2 Runtime image + container
 
 ```bash
-/isaac-sim/kit/python/bin/python3 -m venv --system-site-packages /workspace/isaaclab/env_isaaclab
-/workspace/isaaclab/env_isaaclab/bin/pip install -r requirements-planning.txt
-/workspace/isaaclab/env_isaaclab/bin/pip install -e .
+docker build -f docker/Dockerfile -t dishsim-isaac:4.5.0 .
+docker compose -f docker/compose.yaml up -d      # long-lived container `dishsim-isaac`
+scripts/setup/mirror_robot_usd.sh                # UR5e+2F-85 mirror (6.0 asset, see script header)
 ```
 
 `requirements-planning.txt` pins the measured working set (the table in
-[docs/environment.md](docs/environment.md) is the measurement of record). The optional
-archive tooling (§2.4) additionally needs
-`huggingface_hub requests pyyaml filelock tqdm fsspec` (unpinned).
+[docs/environment.md](docs/environment.md) is the measurement of record); the Dockerfile
+installs it plus pytest and the archive tooling into Kit's python — no venv. The compose
+file keeps every bulky mutable path (assets, media, results, Kit caches, `HF_HOME`) on
+`/media/corallab-s1/2tbhdd/brianshu/dishsim`; the repo's data dirs are symlinks there.
 
 ### 2.3 Assets (public archive — the one-command path)
 
@@ -210,8 +207,7 @@ exception by design — it is fetched from NVIDIA's public asset bucket at spawn
 redistributed. One command restores everything, no token needed:
 
 ```bash
-/workspace/isaaclab/env_isaaclab/bin/python scripts/tools/restore_assets.py \
-    --repo shu4dev/dishsim-assets --with_media
+scripts/run_py.sh scripts/tools/restore_assets.py --repo shu4dev/dishsim-assets --with_media
 ```
 
 The restore downloads the archive (built props, every geometry cache — the ~1.5 h-of-Kit
@@ -239,7 +235,7 @@ x +0.475, y −0.525, z 0.400, yaw +101.25°). The same two flags work on every 
 (`build_state`, `extract_geometry`, `parity_check`, `goal_configs`, `base_pose_sweep`).
 Bosch numbers and their provenance: [docs/bosch800_source_data.md](docs/bosch800_source_data.md).
 
-**One-command bring-up** — everything in §2.2–2.3 (venv, pinned deps, editable install,
+**One-command bring-up** — everything in §2.2–2.3 (image build, container start,
 archive restore + cache validation) in one idempotent script:
 
 ```bash
@@ -282,20 +278,20 @@ they live in git history; the archive ships their outputs.)
 
 ```bash
 scripts/run_kit.sh scripts/setup/kit_smoke.py --headless --enable_cameras
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m pytest tests/
+scripts/run_py.sh -m pytest tests/
 ```
 
 `kit_smoke.py` proves the planning stack imports *inside* the Kit process and that headless
 camera capture produces non-black frames. The suite is **435 test cases across 25 files**, all
 Kit-free.
 
-> **Note:** `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is required — the system site-packages carry
-> hydra, whose pytest plugin imports `yaml`, a module that only exists inside Kit.
+> **Note:** `run_py.sh` sets `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` itself — hydra's pytest
+> plugin breaks collection outside Kit.
 
 ## 3 Reproduce the results
 
-The end-to-end path from a fresh setup to the Results table in §5. Venv scripts use
-`$PY = /workspace/isaaclab/env_isaaclab/bin/python`.
+The end-to-end path from a fresh setup to the Results table in §5. Kit-free scripts run
+through `scripts/run_py.sh` (aliased `$PY` below).
 
 ```bash
 # 1. install (§2.1–2.2), then restore the public archive (§2.3) — it ships every collision
@@ -321,7 +317,7 @@ the rack to sub-millimetre error (the forks are an open item — see §6).
 
 ## 4 Running
 
-Run from the repo root. Kit scripts go through `scripts/run_kit.sh`; venv scripts use `$PY`.
+Run from the repo root. Kit scripts go through `scripts/run_kit.sh`; Kit-free scripts use `$PY = scripts/run_py.sh`.
 
 ### 4.1 Phase 1 — Setup: build the world
 

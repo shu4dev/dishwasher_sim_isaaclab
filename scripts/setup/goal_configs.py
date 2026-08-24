@@ -47,7 +47,9 @@ parser.add_argument("--scenario", type=str, default=None,
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
+_enable_cameras = args_cli.enable_cameras  # 2.1's AppLauncher pops this off the namespace
 app_launcher = AppLauncher(args_cli)
+args_cli.enable_cameras = _enable_cameras
 simulation_app = app_launcher.app
 
 """Rest everything follows."""
@@ -60,11 +62,11 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
-from isaaclab_physx.physics import PhysxCfg
 
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from dishsim import config  # noqa: E402
+from dishsim.quats import xyzw_to_wxyz  # noqa: E402
 
 # scenario BEFORE scene/robots imports — they bind rack targets + the derived USD at import
 if args_cli.machine:
@@ -198,7 +200,7 @@ def main() -> None:
 
     # ---- Kit pass: pose the robot and shoot contact sheets --------------------------------
     sim = SimulationContext(
-        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg(),
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device,
                                 gravity=(0.0, 0.0, 0.0))
     )
     scene = InteractiveScene(dscene.make_scene_cfg(with_object=True))
@@ -215,7 +217,7 @@ def main() -> None:
         scene.write_data_to_sim()
         sim.step()
         scene.update(dt)
-    joint_template = robot.data.joint_pos.torch.clone()
+    joint_template = robot.data.joint_pos.clone()
     arm_ids, _ = robot.find_joints(config.ARM_JOINTS, preserve_order=True)
     device = joint_template.device
     T_w_base = make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W)
@@ -226,14 +228,14 @@ def main() -> None:
     def pose_at(q: np.ndarray) -> None:
         full = joint_template.clone()
         full[:, arm_ids] = torch.tensor(q, dtype=full.dtype, device=device)
-        robot.write_joint_position_to_sim_index(position=full)
-        robot.write_joint_velocity_to_sim_index(velocity=torch.zeros_like(full))
-        robot.set_joint_position_target_index(target=full)
+        robot.write_joint_position_to_sim(position=full)
+        robot.write_joint_velocity_to_sim(velocity=torch.zeros_like(full))
+        robot.set_joint_position_target(target=full)
         T_w_obj = T_w_base @ fk_wrist3(q) @ T_w3_obj
         pos, quat = T_to_pos_quat(T_w_obj)
-        pose_t = torch.tensor(np.concatenate([pos, quat])[None], dtype=full.dtype, device=device)
-        obj.write_root_pose_to_sim_index(root_pose=pose_t)
-        obj.write_root_velocity_to_sim_index(root_velocity=torch.zeros((1, 6), dtype=full.dtype, device=device))
+        pose_t = torch.tensor(np.concatenate([pos, xyzw_to_wxyz(quat)])[None], dtype=full.dtype, device=device)
+        obj.write_root_pose_to_sim(root_pose=pose_t)
+        obj.write_root_velocity_to_sim(root_velocity=torch.zeros((1, 6), dtype=full.dtype, device=device))
         for _ in range(2):
             scene.write_data_to_sim()
             sim.step()

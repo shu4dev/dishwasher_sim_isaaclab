@@ -104,16 +104,18 @@ parser.add_argument("--video_camera", type=str, default=None,
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
+_enable_cameras = args_cli.enable_cameras  # 2.1's AppLauncher pops this off the namespace
 app_launcher = AppLauncher(args_cli)  # boot Kit BEFORE importing dishsim/isaaclab scene modules
+args_cli.enable_cameras = _enable_cameras
 simulation_app = app_launcher.app
 
 import isaaclab.sim as sim_utils  # noqa: E402
 import torch  # noqa: E402
 from isaaclab.scene import InteractiveScene  # noqa: E402
 from isaaclab.sim import SimulationContext  # noqa: E402
-from isaaclab_physx.physics import PhysxCfg  # noqa: E402
 
 from dishsim import config  # noqa: E402
+from dishsim.quats import wxyz_to_xyzw, xyzw_to_wxyz  # noqa: E402
 from dishsim.task import phases as tphases  # noqa: E402  (Kit-free: config + numpy only)
 
 if args_cli.machine:
@@ -477,7 +479,7 @@ def main() -> int:
 
     # ---- scene -------------------------------------------------------------------------------
     sim = SimulationContext(
-        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg())
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device)
     )
     peers = ["{ENV_REGEX_NS}/" + it.item_id for it in items_layout]
     obj_specs = []
@@ -521,15 +523,15 @@ def main() -> int:
     for it in items_layout:
         sensor = scene[f"{it.item_id}_contact"]
         n_filters = len(sensor.cfg.filter_prim_paths_expr)
-        assert sensor.contact_view.filter_count == n_filters, (
-            f"{it.item_id}: contact filter count {sensor.contact_view.filter_count} != "
+        assert sensor.contact_physx_view.filter_count == n_filters, (
+            f"{it.item_id}: contact filter count {sensor.contact_physx_view.filter_count} != "
             f"{n_filters} configured expressions — the force_matrix_w zip would be misaligned"
         )
 
     dt = sim.get_physics_dt()
     robot = scene["robot"]
     arm_ids, _ = robot.find_joints(config.ARM_JOINTS, preserve_order=True)
-    device = robot.data.joint_pos.torch.device
+    device = robot.data.joint_pos.device
     sensors = [scene["robot_contacts_arm"], scene["robot_contacts_gripper"]]
     sensor_names = [list(getattr(s, "body_names", [])) for s in sensors]
     gripper_bodies = tuple(sensor_names[1])
@@ -541,8 +543,8 @@ def main() -> int:
     # ---- spawn -> settle -> reachability check -> resample --------------------------------------
     def measured(item_id: str) -> np.ndarray:
         o = scene[item_id]
-        return T_base_w @ make_T(o.data.root_pos_w.torch[0].cpu().numpy(),
-                                 o.data.root_quat_w.torch[0].cpu().numpy())
+        return T_base_w @ make_T(o.data.root_pos_w[0].cpu().numpy(),
+                                 wxyz_to_xyzw(o.data.root_quat_w[0].cpu().numpy()))
 
     def spawn_and_settle(layout):
         """Teleport to a layout, settle physics, and report the MEASURED poses.
@@ -552,10 +554,10 @@ def main() -> int:
         """
         for it in layout:
             pos_w, quat = _pose_w(it)
-            scene[it.item_id].write_root_pose_to_sim_index(
-                root_pose=torch.tensor(np.concatenate([pos_w, quat])[None],
+            scene[it.item_id].write_root_pose_to_sim(
+                root_pose=torch.tensor(np.concatenate([pos_w, xyzw_to_wxyz(quat)])[None],
                                        dtype=torch.float32, device=device))
-            scene[it.item_id].write_root_velocity_to_sim_index(
+            scene[it.item_id].write_root_velocity_to_sim(
                 root_velocity=torch.zeros((1, 6), dtype=torch.float32, device=device))
         ctx.step(int(config.TASK["settle_steps"]))
         return {it.item_id: measured(it.item_id) for it in layout}
@@ -708,7 +710,7 @@ def main() -> int:
         rack_runner = task_rack.RackAction(
             motion, gripper_bodies=gripper_bodies, seed=args_cli.seed, on_step=capture,
             measure_ext=lambda: float(
-                scene["dishwasher"].data.joint_pos.torch[0, rack_joint_ids[0]]),
+                scene["dishwasher"].data.joint_pos[0, rack_joint_ids[0]]),
         )
         motion.world = rack_world
         try:
@@ -1063,7 +1065,7 @@ def _run_full_load_episode() -> int:  # noqa: PLR0915 — one episode, top to bo
 
     # ---- scene: every phase's items exist from the start, later waves parked off-workspace ---
     sim = SimulationContext(
-        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg())
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device)
     )
     obj_specs = []
     for k, (pi, it) in enumerate(all_items):
@@ -1099,14 +1101,14 @@ def _run_full_load_episode() -> int:  # noqa: PLR0915 — one episode, top to bo
     for pi, it in all_items:
         sensor = scene[f"{it.item_id}_contact"]
         n_filters = len(sensor.cfg.filter_prim_paths_expr)
-        assert sensor.contact_view.filter_count == n_filters, (
-            f"{it.item_id}: contact filter count {sensor.contact_view.filter_count} != "
+        assert sensor.contact_physx_view.filter_count == n_filters, (
+            f"{it.item_id}: contact filter count {sensor.contact_physx_view.filter_count} != "
             f"{n_filters} configured expressions")
 
     dt = sim.get_physics_dt()
     robot, dw = scene["robot"], scene["dishwasher"]
     arm_ids, _ = robot.find_joints(config.ARM_JOINTS, preserve_order=True)
-    device = robot.data.joint_pos.torch.device
+    device = robot.data.joint_pos.device
     sensors = [scene["robot_contacts_arm"], scene["robot_contacts_gripper"]]
     sensor_names = [list(getattr(s, "body_names", [])) for s in sensors]
     gripper_bodies = tuple(sensor_names[1])
@@ -1117,19 +1119,19 @@ def _run_full_load_episode() -> int:  # noqa: PLR0915 — one episode, top to bo
 
     def measured(item_id: str) -> np.ndarray:
         o = scene[item_id]
-        return T_base_w @ make_T(o.data.root_pos_w.torch[0].cpu().numpy(),
-                                 o.data.root_quat_w.torch[0].cpu().numpy())
+        return T_base_w @ make_T(o.data.root_pos_w[0].cpu().numpy(),
+                                 wxyz_to_xyzw(o.data.root_quat_w[0].cpu().numpy()))
 
     rack_joint_names = sorted(config.RACK_JOINT_TARGETS)
     rack_joint_ids, _ = dw.find_joints(rack_joint_names, preserve_order=True)
 
     def measure_exts() -> dict:
-        jp = dw.data.joint_pos.torch[0].cpu().numpy()
+        jp = dw.data.joint_pos[0].cpu().numpy()
         return {j: float(jp[i]) for j, i in zip(rack_joint_names, rack_joint_ids)}
 
     def measure_body_pos(body: str) -> np.ndarray:
         bi = dw.body_names.index(body)
-        pos_w = dw.data.body_link_pos_w.torch[0, bi].cpu().numpy()
+        pos_w = dw.data.body_link_pos_w[0, bi].cpu().numpy()
         return (T_base_w @ np.append(pos_w, 1.0))[:3]
 
     # ---- episode state ------------------------------------------------------------------------
@@ -1202,7 +1204,7 @@ def _run_full_load_episode() -> int:  # noqa: PLR0915 — one episode, top to bo
                     rack_runner = task_rack.RackAction(
                         motion, gripper_bodies=gripper_bodies, seed=args_cli.seed,
                         on_step=capture,
-                        measure_ext=lambda: float(dw.data.joint_pos.torch[0, rj[0]]))
+                        measure_ext=lambda: float(dw.data.joint_pos[0, rj[0]]))
                     motion.world = rack_world
                     try:
                         rack_phase = task_rack.run_sequence(
@@ -1312,10 +1314,10 @@ def _run_full_load_episode() -> int:  # noqa: PLR0915 — one episode, top to bo
                     # class, in request order — re-key onto the wave's global item ids
                     for it, li in zip(wave, items_layout):
                         pos_w, quat = _pose_w(li)
-                        scene[it.item_id].write_root_pose_to_sim_index(
-                            root_pose=torch.tensor(np.concatenate([pos_w, quat])[None],
+                        scene[it.item_id].write_root_pose_to_sim(
+                            root_pose=torch.tensor(np.concatenate([pos_w, xyzw_to_wxyz(quat)])[None],
                                                    dtype=torch.float32, device=device))
-                        scene[it.item_id].write_root_velocity_to_sim_index(
+                        scene[it.item_id].write_root_velocity_to_sim(
                             root_velocity=torch.zeros((1, 6), dtype=torch.float32,
                                                       device=device))
                     ctx.step(int(config.TASK["settle_steps"]))
@@ -1534,7 +1536,7 @@ class _Ctx:
         dscene.hold_targets(self.scene, aperture=self._aperture, arm_q=self._arm_q)
 
     def arm_q(self):
-        return self.robot.data.joint_pos.torch[0, self.arm_ids].cpu().numpy().astype(float)
+        return self.robot.data.joint_pos[0, self.arm_ids].cpu().numpy().astype(float)
 
     def contact_peak(self, exclude=()):
         key = f"{self._payload}_contact" if self._payload else None
@@ -1577,8 +1579,8 @@ class _SceneAccess:
 
     def object_pose_base(self, item_id: str) -> np.ndarray:
         o = self.scene[item_id]
-        return self.T_base_w @ make_T(o.data.root_pos_w.torch[0].cpu().numpy(),
-                                      o.data.root_quat_w.torch[0].cpu().numpy())
+        return self.T_base_w @ make_T(o.data.root_pos_w[0].cpu().numpy(),
+                                      wxyz_to_xyzw(o.data.root_quat_w[0].cpu().numpy()))
 
     def set_weld(self, item_id: str, enabled: bool) -> None:
         dscene.set_weld_enabled(self.scene.stage, self.welds[item_id], enabled)
@@ -1604,12 +1606,12 @@ class _SceneAccess:
         obj = self.scene[item_id]
         # full base transform: position AND quaternion compose with the (possibly yawed) base
         pos_w, quat = T_to_pos_quat(self.T_w_base @ T_base_obj)  # XYZW, as everywhere here
-        pose = torch.tensor(np.concatenate([pos_w, quat]), dtype=torch.float32,
-                            device=obj.data.root_pos_w.torch.device).unsqueeze(0)
-        obj.write_root_pose_to_sim_index(root_pose=pose)
+        pose = torch.tensor(np.concatenate([pos_w, xyzw_to_wxyz(quat)]), dtype=torch.float32,
+                            device=obj.data.root_pos_w.device).unsqueeze(0)
+        obj.write_root_pose_to_sim(root_pose=pose)
         # zero the velocity too: the object arrives carrying whatever motion its countertop
         # settle left it with, and a moving body fights the weld the instant it is enabled
-        obj.write_root_velocity_to_sim_index(root_velocity=torch.zeros_like(pose[:, :6]))
+        obj.write_root_velocity_to_sim(root_velocity=torch.zeros_like(pose[:, :6]))
 
 
 def _peer_forces(scene, items, peer_ids) -> dict:
@@ -1626,7 +1628,7 @@ def _peer_forces(scene, items, peer_ids) -> dict:
         if mat is None:
             out[it.item_id] = {}
             continue
-        mags = np.linalg.norm(mat.torch[0, 0].cpu().numpy(), axis=-1)
+        mags = np.linalg.norm(mat[0, 0].cpu().numpy(), axis=-1)
         names = [p.rsplit("/", 1)[-1] for p in sensor.cfg.filter_prim_paths_expr]
         out[it.item_id] = {n: float(m) for n, m in zip(names, mags) if n in peer_ids}
     return out
@@ -1663,8 +1665,8 @@ def _grip_forces_named(scene, item_id: str, peer_ids=()) -> dict:
     mat = getattr(sensor.data, "force_matrix_w", None)
     if mat is None:
         return {"partners": {}, "peers": {}, "pads_n": [0.0, 0.0], "external_n": 0.0, "net_n": 0.0}
-    fm = mat.torch[0, 0].cpu().numpy()  # [n_filters, 3]; filter order matches the cfg list
-    net_vec = sensor.data.net_forces_w.torch[0, 0].cpu().numpy()
+    fm = mat[0, 0].cpu().numpy()  # [n_filters, 3]; filter order matches the cfg list
+    net_vec = sensor.data.net_forces_w[0, 0].cpu().numpy()
     names = [p.rsplit("/", 1)[-1] for p in sensor.cfg.filter_prim_paths_expr]
     mags = np.linalg.norm(fm, axis=-1)
     everything = {n: float(m) for n, m in zip(names, mags)}

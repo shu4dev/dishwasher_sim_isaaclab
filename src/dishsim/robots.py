@@ -39,6 +39,7 @@ from isaaclab.assets import ArticulationCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 from . import ASSETS_DIR, config
+from .quats import xyzw_to_wxyz
 from .usd_prep import make_dishwasher_v0_usd
 
 # ---------------------------------------------------------------------------------------------
@@ -86,7 +87,7 @@ UR5E_ROBOTIQ_2F_85_CFG = ArticulationCfg(
             ".*_outer_.*_joint": 0.0,
         },
         pos=(0.0, 0.0, 0.0),
-        rot=(0.0, 0.0, 0.0, 1.0),
+        rot=(1.0, 0.0, 0.0, 0.0),  # identity (WXYZ, Isaac Lab 2.1 order)
     ),
     actuators={
         # UR5e joint torque limits: 150 N*m (shoulder/elbow), 28 N*m (wrists); max speed ~pi rad/s.
@@ -191,7 +192,7 @@ DISHWASHER_CFG = ArticulationCfg(
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.0),
-        rot=(0.0, 0.0, 0.0, 1.0),
+        rot=(1.0, 0.0, 0.0, 0.0),  # identity (WXYZ, Isaac Lab 2.1 order)
         joint_pos={
             DISHWASHER_DOOR_JOINT: 0.0,  # door closed
             DISHWASHER_RACK_JOINTS[0]: 0.0,  # racks stowed
@@ -262,7 +263,7 @@ DISHWASHER_V0_CFG = ArticulationCfg(
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=config.DISHWASHER_POS_W,
-        rot=config.DISHWASHER_QUAT_W,
+        rot=xyzw_to_wxyz(config.DISHWASHER_QUAT_W),
         joint_pos={
             DISHWASHER_DOOR_JOINT: config.DOOR_INIT_RAD,
             "PrismaticJoint_dishwasher_2_up": config.RACK_UPPER_EXT_M,

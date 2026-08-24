@@ -11,7 +11,7 @@ name = "dishsim"
 version = "0.1.0"
 description = "Classical motion planning (OMPL) for dishwasher loading with a UR5e + Robotiq 2F-85 in Isaac Sim"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 license = { text = "BSD-3-Clause" }
 # Runtime dependencies are deliberately not pinned here: Kit-side runs use the Isaac Sim python
 # (torch/isaaclab/pxr preinstalled), and planning-side deps (ompl, python-fcl, coacd, trimesh,
@@ -24,7 +24,7 @@ where = ["src"]
 
 [tool.ruff]
 line-length = 110
-target-version = "py312"
+target-version = "py310"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

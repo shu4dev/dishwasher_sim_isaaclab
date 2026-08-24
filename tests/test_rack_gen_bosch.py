@@ -177,13 +177,15 @@ def test_build_dispatch(bosch):
 # v1 byte-stability (the frozen-baseline invariant)
 # ---------------------------------------------------------------------------------------------
 
-# Recorded 2026-08-10 against the pre-Bosch generator (RACK_GEN_VERSION 4, v1 machine). The
-# v1 racks are FROZEN: any drift here silently invalidates every baked collision cache and
-# the frozen mug baseline — this test must only ever fail because someone changed v1 geometry
-# or the builder's v1 code path, and both are bugs.
+# Recorded 2026-08-23 on the corallab environment (numpy 1.26 under Isaac Sim 4.5's Kit
+# python; RACK_GEN_VERSION 4, v1 machine). Byte digests are pinned per numeric environment —
+# the same builder on the Brev numpy-2.x stack hashed differently at ULP level (2026-08-10
+# values: 95146089757e0b34…/d9d80e69f3604348…), with identical part counts and params_hash.
+# The v1 racks stay FROZEN: within one environment this test must only ever fail because
+# someone changed v1 geometry or the builder's v1 code path, and both are bugs.
 _V1_DIGESTS = {
-    "E_shelf_1_04": "95146089757e0b34b2bfe51caa322af9061a47512cdfe50dd78c6d73c56a2597",
-    "E_shelf_03": "d9d80e69f36043485aa4c19838fdbd80b2b2e27af4367124152661d9fffe9438",
+    "E_shelf_1_04": "dd81e44947c0f35603c51c44ad02868af97b82fe76e70bda9088ba5cee6e63aa",
+    "E_shelf_03": "8bfc4714940fcec09b525e9407dd77cac1dbed5c6a9931bac722e43b92804c8d",
 }
 _V1_PARAMS_HASH = "d6df107a9bca8510"
 _V1_PART_COUNTS = {"E_shelf_1_04": 421, "E_shelf_03": 166}

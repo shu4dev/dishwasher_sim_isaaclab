@@ -64,7 +64,9 @@ parser.add_argument("--scenario", type=str, default="both_out",
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
+_enable_cameras = args_cli.enable_cameras  # 2.1's AppLauncher pops this off the namespace
 app_launcher = AppLauncher(args_cli)
+args_cli.enable_cameras = _enable_cameras
 simulation_app = app_launcher.app
 
 """Rest everything follows."""
@@ -78,11 +80,11 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
-from isaaclab_physx.physics import PhysxCfg
 
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from dishsim import config  # noqa: E402
+from dishsim.quats import wxyz_to_xyzw, xyzw_to_wxyz  # noqa: E402
 
 # scenario BEFORE scene/robots imports — they bind rack targets + the derived USD at import
 config.set_active_object(args_cli.object)
@@ -274,7 +276,7 @@ def main() -> None:
 
     # ---- scene --------------------------------------------------------------------------------
     sim = SimulationContext(
-        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg())
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device)
     )
     scene = InteractiveScene(dscene.make_scene_cfg(with_object=True, with_robot_contacts=True))
     weld_path = dscene.author_weld(scene.stage)
@@ -291,7 +293,7 @@ def main() -> None:
     arm_ids, _ = robot.find_joints(config.ARM_JOINTS, preserve_order=True)
     dw = scene["dishwasher"]
     rack_jids = dw.find_joints(rack_joint)[0] if rack_joint is not None else None
-    device = robot.data.joint_pos.torch.device
+    device = robot.data.joint_pos.device
     sensors = [scene["robot_contacts_arm"], scene["robot_contacts_gripper"]]
     sensor_names = [list(getattr(s, "body_names", [])) for s in sensors]
     gripper_bodies = tuple(sensor_names[1])
@@ -300,7 +302,7 @@ def main() -> None:
         (pos_w, yaw_deg) = config.OBJECT_COUNTERTOP_POSES_W[instance]
         rot = countertop_staging_rot(yaw_deg)
         return torch.tensor(
-            np.concatenate([np.array(pos_w), rot.as_quat()])[None], dtype=torch.float32, device=device
+            np.concatenate([np.array(pos_w), xyzw_to_wxyz(rot.as_quat())])[None], dtype=torch.float32, device=device
         )
 
     # settle once with jaws open: the teleport template for every trial reset
@@ -309,14 +311,14 @@ def main() -> None:
         scene.write_data_to_sim()
         sim.step()
         scene.update(dt)
-    obj.write_root_pose_to_sim_index(root_pose=mug_pose_t())
-    obj.write_root_velocity_to_sim_index(root_velocity=torch.zeros((1, 6), dtype=torch.float32, device=device))
+    obj.write_root_pose_to_sim(root_pose=mug_pose_t())
+    obj.write_root_velocity_to_sim(root_velocity=torch.zeros((1, 6), dtype=torch.float32, device=device))
     for _ in range(90):
         dscene.hold_targets(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
         scene.write_data_to_sim()
         sim.step()
         scene.update(dt)
-    template_open = robot.data.joint_pos.torch.clone()
+    template_open = robot.data.joint_pos.clone()
 
     def step_sim(n: int = 1) -> None:
         for _ in range(n):
@@ -332,18 +334,18 @@ def main() -> None:
         set_weld(False)
         dscene.set_rack_target_override(None)
         full = template_open.clone()
-        robot.write_joint_position_to_sim_index(position=full)
-        robot.write_joint_velocity_to_sim_index(velocity=torch.zeros_like(full))
-        dw.write_joint_position_to_sim_index(position=dw.data.default_joint_pos.torch.clone())
-        dw.write_joint_velocity_to_sim_index(velocity=torch.zeros_like(dw.data.default_joint_pos.torch))
+        robot.write_joint_position_to_sim(position=full)
+        robot.write_joint_velocity_to_sim(velocity=torch.zeros_like(full))
+        dw.write_joint_position_to_sim(position=dw.data.default_joint_pos.clone())
+        dw.write_joint_velocity_to_sim(velocity=torch.zeros_like(dw.data.default_joint_pos))
         if START_WELDED:
             q_arm = template_open[0, arm_ids].cpu().numpy().astype(float)
             pos, quat = dscene.grasp_pose_w(q_arm)
-            pose = torch.tensor(np.concatenate([pos, quat])[None], dtype=torch.float32, device=device)
-            obj.write_root_pose_to_sim_index(root_pose=pose)
+            pose = torch.tensor(np.concatenate([pos, xyzw_to_wxyz(quat)])[None], dtype=torch.float32, device=device)
+            obj.write_root_pose_to_sim(root_pose=pose)
         else:
-            obj.write_root_pose_to_sim_index(root_pose=mug_pose_t())
-        obj.write_root_velocity_to_sim_index(root_velocity=torch.zeros((1, 6), dtype=torch.float32, device=device))
+            obj.write_root_pose_to_sim(root_pose=mug_pose_t())
+        obj.write_root_velocity_to_sim(root_velocity=torch.zeros((1, 6), dtype=torch.float32, device=device))
         if START_WELDED:
             set_weld(True)
         dscene.hold_targets(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
@@ -356,12 +358,12 @@ def main() -> None:
         rec.set_weld(enabled)
 
     def object_pose_base() -> np.ndarray:
-        p = obj.data.root_pos_w.torch[0].cpu().numpy()
-        q = obj.data.root_quat_w.torch[0].cpu().numpy()
+        p = obj.data.root_pos_w[0].cpu().numpy()
+        q = wxyz_to_xyzw(obj.data.root_quat_w[0].cpu().numpy())
         return T_base_w @ make_T(p, q)
 
     def arm_q_now() -> np.ndarray:
-        return robot.data.joint_pos.torch[0, arm_ids].cpu().numpy().astype(float)
+        return robot.data.joint_pos[0, arm_ids].cpu().numpy().astype(float)
 
     def ik_track(T_tcp_from: np.ndarray, T_tcp_to: np.ndarray, n: int, q_seed: np.ndarray) -> np.ndarray | None:
         """Branch-continuous IK along a straight TCP segment (rotation held; used for the
@@ -558,7 +560,7 @@ def main() -> None:
                             step_sim(1)
                             capture()
                         rec.set_phase("rack-settle")
-                        rack_err = abs(float(dw.data.joint_pos.torch[0, rack_jids[0]]) - e1)
+                        rack_err = abs(float(dw.data.joint_pos[0, rack_jids[0]]) - e1)
                         record["rack_final_err_m"] = round(rack_err, 4)
                         if rack_err > config.RACK_SLIDE_TOL_M:
                             record["failure_stage"] = "rack-slide-fault"
@@ -672,7 +674,7 @@ def main() -> None:
                             step_sim(1)
                             capture()
                         rec.set_phase("pick-weld-verify")
-                        obj_pos = obj.data.root_pos_w.torch[0].cpu().numpy()
+                        obj_pos = obj.data.root_pos_w[0].cpu().numpy()
                         weld_err = float(np.linalg.norm(obj_pos - dscene.grasp_pose_w(seg[-1])[0])) * 1e3
                         record["pick_weld_err_mm"] = round(weld_err, 2)
                         if weld_err > 5.0:

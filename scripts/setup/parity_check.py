@@ -55,7 +55,9 @@ parser.add_argument("--scenario", type=str, default="both_out",
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
+_enable_cameras = args_cli.enable_cameras  # 2.1's AppLauncher pops this off the namespace
 app_launcher = AppLauncher(args_cli)
+args_cli.enable_cameras = _enable_cameras
 simulation_app = app_launcher.app
 
 """Rest everything follows."""
@@ -70,11 +72,11 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
-from isaaclab_physx.physics import PhysxCfg
 
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from dishsim import config  # noqa: E402
+from dishsim.quats import xyzw_to_wxyz  # noqa: E402
 
 # scenario BEFORE scene/robots imports — they bind rack targets + the derived USD at import
 if args_cli.machine:
@@ -173,7 +175,7 @@ def main() -> None:
     # ---- Isaac ground truth ------------------------------------------------------------------
     sim = SimulationContext(
         sim_utils.SimulationCfg(
-            dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg(), gravity=(0.0, 0.0, 0.0)
+            dt=config.SIM_DT, device=args_cli.device, gravity=(0.0, 0.0, 0.0)
         )
     )
     scene_cfg = dscene.make_scene_cfg(with_object=True, with_robot_contacts=True)
@@ -188,7 +190,7 @@ def main() -> None:
     robot = scene["robot"]
     obj = scene["carried_object"]
     arm_ids, _ = robot.find_joints(config.ARM_JOINTS, preserve_order=True)
-    device = robot.data.joint_pos.torch.device
+    device = robot.data.joint_pos.device
 
     # settle ONCE so the mimic finger cluster reaches its consistent closed-on-the-mug state;
     # the settled joint vector is the teleport template. (Teleporting mimics to inconsistent
@@ -200,7 +202,7 @@ def main() -> None:
         scene.write_data_to_sim()
         sim.step()
         scene.update(dt)
-    joint_template = robot.data.joint_pos.torch.clone()
+    joint_template = robot.data.joint_pos.clone()
     grip_ok, grip_detail = dscene.grip_gate(scene)
     print(f"[INFO] settled grip gate: {'OK' if grip_ok else 'FAIL — ' + grip_detail}")
 
@@ -213,14 +215,14 @@ def main() -> None:
     def isaac_contact(q: np.ndarray) -> tuple[bool, float, str]:
         full = joint_template.clone()
         full[:, arm_ids] = torch.tensor(q, dtype=full.dtype, device=device)
-        robot.write_joint_position_to_sim_index(position=full)
-        robot.write_joint_velocity_to_sim_index(velocity=torch.zeros_like(full))
-        robot.set_joint_position_target_index(target=full)
+        robot.write_joint_position_to_sim(position=full)
+        robot.write_joint_velocity_to_sim(velocity=torch.zeros_like(full))
+        robot.set_joint_position_target(target=full)
         T_w_obj = T_w_base @ fk_wrist3(q) @ T_w3_obj
         pos, quat = T_to_pos_quat(T_w_obj)
-        pose = torch.tensor(np.concatenate([pos, quat])[None], dtype=full.dtype, device=device)
-        obj.write_root_pose_to_sim_index(root_pose=pose)
-        obj.write_root_velocity_to_sim_index(root_velocity=torch.zeros((1, 6), dtype=full.dtype, device=device))
+        pose = torch.tensor(np.concatenate([pos, xyzw_to_wxyz(quat)])[None], dtype=full.dtype, device=device)
+        obj.write_root_pose_to_sim(root_pose=pose)
+        obj.write_root_velocity_to_sim(root_velocity=torch.zeros((1, 6), dtype=full.dtype, device=device))
         peak, peak_body = 0.0, ""
         for step in range(4):
             scene.write_data_to_sim()
@@ -274,7 +276,7 @@ def main() -> None:
         disagreements = (isaac_only + fcl_only)[:3]
         for k, r in enumerate(disagreements):
             isaac_contact(np.array(r["q"]))  # pose it
-            tcp = scene["ee_frame"].data.target_pos_w.torch[0, 0].cpu().numpy()
+            tcp = scene["ee_frame"].data.target_pos_w[0, 0].cpu().numpy()
             rig.set_view("iso", tcp + np.array([-0.35, 0.35, 0.25]), tcp, sim.device)
             for _ in range(3):
                 sim.step()

@@ -37,6 +37,7 @@ from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.utils.configclass import configclass
 
 from . import config
+from .quats import wxyz_to_xyzw, xyzw_to_wxyz
 from .robots import DISHWASHER_V0_CFG, UR5E_ROBOTIQ_2F_85_CFG
 from .transforms import T_inv, T_to_pos_quat, make_T
 from .ur5e_kin import fk_wrist3
@@ -176,7 +177,7 @@ def make_scene_cfg(
         prim_path="{ENV_REGEX_NS}/Robot",
         init_state=UR5E_ROBOTIQ_2F_85_CFG.init_state.replace(
             pos=config.ROBOT_BASE_POS_W,
-            rot=config.ROBOT_BASE_QUAT_W,
+            rot=xyzw_to_wxyz(config.ROBOT_BASE_QUAT_W),
             joint_pos={**UR5E_ROBOTIQ_2F_85_CFG.init_state.joint_pos, **robot_joint_pos},
         ),
     )
@@ -200,8 +201,12 @@ def make_scene_cfg(
         dishwasher = DISHWASHER_V0_CFG.replace(prim_path="{ENV_REGEX_NS}/Dishwasher")
 
         # TCP + fingertip frames (offsets measured, see docs/joint_report.md)
+        # source must NOT share a leaf name with any target: 2.1's FrameTransformer maps
+        # frames by leaf body name, and the arm's base_link would swallow the gripper-base
+        # ee_tcp target (both leaves are "base_link"). wrist_3_link is unique; only world-
+        # frame outputs are consumed, so the source choice is otherwise free.
         ee_frame = FrameTransformerCfg(
-            prim_path="{ENV_REGEX_NS}/Robot/base_link",
+            prim_path="{ENV_REGEX_NS}/Robot/wrist_3_link",
             debug_vis=False,
             target_frames=[
                 FrameTransformerCfg.FrameCfg(
@@ -263,7 +268,7 @@ def make_scene_cfg(
                         rigid_props=sim_utils.RigidBodyPropertiesCfg(max_depenetration_velocity=5.0),
                         activate_contact_sensors=True,
                     ),
-                    init_state=RigidObjectCfg.InitialStateCfg(pos=tuple(pos), rot=tuple(quat)),
+                    init_state=RigidObjectCfg.InitialStateCfg(pos=tuple(pos), rot=tuple(xyzw_to_wxyz(quat))),
                 ),
             )
             # net contact force on the carried object — must stay ~0 while welded (any
@@ -325,7 +330,7 @@ def _add_object(scene_cfg, spec: dict, gripper_filters: list) -> None:
                 activate_contact_sensors=True,
             ),
             init_state=RigidObjectCfg.InitialStateCfg(
-                pos=tuple(spec["pos"]), rot=tuple(spec["quat"])
+                pos=tuple(spec["pos"]), rot=tuple(xyzw_to_wxyz(list(spec["quat"])))
             ),
         ),
     )
@@ -452,7 +457,7 @@ def hold_targets(scene, aperture: float | None = None, arm_q=None) -> None:
     if aperture is None:
         aperture = _resolve_grasp_aperture()
     robot = scene["robot"]
-    targets = robot.data.default_joint_pos.torch.clone()
+    targets = robot.data.default_joint_pos.clone()
     if arm_q is not None:
         arm_ids, _ = robot.find_joints(config.ARM_JOINTS, preserve_order=True)
         targets[:, arm_ids] = torch.as_tensor(
@@ -468,15 +473,15 @@ def hold_targets(scene, aperture: float | None = None, arm_q=None) -> None:
         for jid, jname in zip(if_ids, if_names):
             targets[:, jid] = config.GRIPPER_INNER_FINGER_SIGNS[jname] * aperture
     else:
-        targets[:, if_ids] = robot.data.joint_pos.torch[:, if_ids]
-    robot.set_joint_position_target_index(target=targets)
+        targets[:, if_ids] = robot.data.joint_pos[:, if_ids]
+    robot.set_joint_position_target(target=targets)
     dw = scene["dishwasher"]
-    dw_targets = dw.data.default_joint_pos.torch.clone()
+    dw_targets = dw.data.default_joint_pos.clone()
     if _RACK_TARGET_OVERRIDE:
         for jname, val in _RACK_TARGET_OVERRIDE.items():
             jids, _ = dw.find_joints(jname)
             dw_targets[:, jids[0]] = float(val)
-    dw.set_joint_position_target_index(target=dw_targets)
+    dw.set_joint_position_target(target=dw_targets)
 
 
 def ramp_gripper(
@@ -504,7 +509,7 @@ def ramp_gripper(
     robot = scene["robot"]
     ids, _ = robot.find_joints(config.GRIPPER_JOINT)
     dt = sim.get_physics_dt()
-    start = float(robot.data.joint_pos.torch[0, ids[0]])
+    start = float(robot.data.joint_pos[0, ids[0]])
     for i in range(steps):
         frac = (i + 1) / steps
         hold_targets(scene, aperture=start + frac * (end_aperture - start), arm_q=arm_q)
@@ -516,7 +521,7 @@ def ramp_gripper(
             step_fn(1)
         if per_step is not None:
             per_step(i)
-    return float(robot.data.joint_pos.torch[0, ids[0]])
+    return float(robot.data.joint_pos[0, ids[0]])
 
 
 def _obj_key(instance: int = 0) -> str:
@@ -539,8 +544,8 @@ def grip_forces(scene, instance: int = 0) -> dict:
     """
     sensor = scene[_obj_key(instance)]
     names = object_contact_partners(scene, instance)
-    net_vec = sensor.data.net_forces_w.torch[0].reshape(-1, 3).sum(dim=0)
-    fm = sensor.data.force_matrix_w.torch[0].reshape(-1, 3)
+    net_vec = sensor.data.net_forces_w[0].reshape(-1, 3).sum(dim=0)
+    fm = sensor.data.force_matrix_w[0].reshape(-1, 3)
     partners = {n: float(m) for n, m in zip(names, fm.norm(dim=-1))}
     for pad in config.GRIP_PAD_BODIES:
         assert pad in partners, f"pad body {pad} missing from the object_contact filter list"
@@ -609,14 +614,14 @@ def unexpected_robot_contact(scene, sensors, sensor_names, exclude=(), instance:
         sensor_obj = scene[key]
         if sensor_obj.data.force_matrix_w is not None:
             names = [p.rsplit("/", 1)[-1] for p in sensor_obj.cfg.filter_prim_paths_expr]
-            fm = sensor_obj.data.force_matrix_w.torch[0].reshape(-1, 3)
+            fm = sensor_obj.data.force_matrix_w[0].reshape(-1, 3)
             for pad in config.GRIP_PAD_BODIES:
                 if pad in names:
                     pad_rows[pad] = fm[names.index(pad)]
     skip = set(config.PARITY_BODY_EXCLUDE) | set(exclude)
     peak, peak_body = 0.0, ""
     for si, sensor in enumerate(sensors):
-        forces = sensor.data.net_forces_w.torch[0]
+        forces = sensor.data.net_forces_w[0]
         for bi in range(forces.shape[0]):
             name = sensor_names[si][bi] if bi < len(sensor_names[si]) else f"s{si}b{bi}"
             if name in skip:
@@ -634,19 +639,19 @@ def write_default_states(scene, aperture: float | None = None) -> None:
     """Standalone-script reset dance: write default root/joint states, reset, re-arm targets."""
     for name in ("robot", "dishwasher"):
         art = scene[name]
-        root_pose = art.data.default_root_pose.torch.clone()
+        root_pose = art.data.default_root_state[:, :7].clone()
         root_pose[:, :3] += scene.env_origins
-        art.write_root_pose_to_sim_index(root_pose=root_pose)
-        art.write_root_velocity_to_sim_index(root_velocity=art.data.default_root_vel.torch.clone())
-        art.write_joint_position_to_sim_index(position=art.data.default_joint_pos.torch.clone())
-        art.write_joint_velocity_to_sim_index(velocity=art.data.default_joint_vel.torch.clone())
+        art.write_root_pose_to_sim(root_pose=root_pose)
+        art.write_root_velocity_to_sim(root_velocity=art.data.default_root_state[:, 7:].clone())
+        art.write_joint_position_to_sim(position=art.data.default_joint_pos.clone())
+        art.write_joint_velocity_to_sim(velocity=art.data.default_joint_vel.clone())
     for key in scene.keys():
         if key == "carried_object" or key.startswith("carried_object_"):
             obj = scene[key]
-            root_pose = obj.data.default_root_pose.torch.clone()
+            root_pose = obj.data.default_root_state[:, :7].clone()
             root_pose[:, :3] += scene.env_origins
-            obj.write_root_pose_to_sim_index(root_pose=root_pose)
-            obj.write_root_velocity_to_sim_index(root_velocity=obj.data.default_root_vel.torch.clone())
+            obj.write_root_pose_to_sim(root_pose=root_pose)
+            obj.write_root_velocity_to_sim(root_velocity=obj.data.default_root_state[:, 7:].clone())
     # scene.reset() clears command buffers — targets must be re-armed AFTER it (a finger target
     # set before reset silently reverts to the open pose; found the hard way during scene bring-up)
     scene.reset()
@@ -655,8 +660,8 @@ def write_default_states(scene, aperture: float | None = None) -> None:
 
 def assert_frames(scene) -> None:
     """Assert the single frame convention this whole project relies on."""
-    base_pos = scene["robot"].data.root_pos_w.torch[0].cpu().numpy()
-    base_quat = scene["robot"].data.root_quat_w.torch[0].cpu().numpy()
+    base_pos = scene["robot"].data.root_pos_w[0].cpu().numpy()
+    base_quat = wxyz_to_xyzw(scene["robot"].data.root_quat_w[0].cpu().numpy())
     assert np.allclose(base_pos, config.ROBOT_BASE_POS_W, atol=1e-4), f"robot base at {base_pos}"
     # sign-agnostic: q and -q are the same rotation, and the sim may hand back either sign
     assert np.allclose(base_quat, config.ROBOT_BASE_QUAT_W, atol=1e-4) or np.allclose(
@@ -673,7 +678,7 @@ def statics_report(scene) -> dict:
     door_ids, _ = dw.find_joints("RevoluteJoint_dishwasher_2_middle")
     down_ids, _ = dw.find_joints("PrismaticJoint_dishwasher_2_down")
     up_ids, _ = dw.find_joints("PrismaticJoint_dishwasher_2_up")
-    jp = dw.data.joint_pos.torch[0]
+    jp = dw.data.joint_pos[0]
     return {
         "door_deg": math.degrees(float(jp[door_ids[0]])),
         "rack_lower_m": float(jp[down_ids[0]]),
@@ -688,10 +693,10 @@ def measure_tcp(scene) -> dict:
     """Live wrist_3 -> TCP transform (the constant frozen into config after ``--measure``)."""
     robot = scene["robot"]
     w3_ids, _ = robot.find_bodies("wrist_3_link")
-    w3_pos = robot.data.body_link_pos_w.torch[0, w3_ids[0]].cpu().numpy()
-    w3_quat = robot.data.body_link_quat_w.torch[0, w3_ids[0]].cpu().numpy()
-    tcp_pos = scene["ee_frame"].data.target_pos_w.torch[0, 0].cpu().numpy()
-    tcp_quat = scene["ee_frame"].data.target_quat_w.torch[0, 0].cpu().numpy()
+    w3_pos = robot.data.body_link_pos_w[0, w3_ids[0]].cpu().numpy()
+    w3_quat = wxyz_to_xyzw(robot.data.body_link_quat_w[0, w3_ids[0]].cpu().numpy())
+    tcp_pos = scene["ee_frame"].data.target_pos_w[0, 0].cpu().numpy()
+    tcp_quat = wxyz_to_xyzw(scene["ee_frame"].data.target_quat_w[0, 0].cpu().numpy())
     from .transforms import T_inv, mat_to_quat, quat_to_mat  # noqa: PLC0415
 
     T_w_w3 = make_T(w3_pos, w3_quat)

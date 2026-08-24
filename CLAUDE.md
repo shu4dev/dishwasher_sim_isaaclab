@@ -15,37 +15,41 @@ mode. `scripts/setup/capacity_fill.py` physically settles a full 29-item load. T
 door-opening pipeline lives on the `archive/rl-door-opening` branch. See the README for the
 full overview and `docs/architecture.md` for the code tree.
 
-Two runners, deliberately separate. `run_trials.py` is the frozen single-object baseline (one
-object, one slot, per trial) and is held at **zero diff** — it anchors the v0 mug result.
+Two runners, deliberately separate. `run_trials.py` is the single-object baseline (one
+object, one slot, per trial) — the v0 mug result it anchors is pinned by git history (the
+Brev-era zero-diff freeze ended with the 2.1 port; keep its diffs mechanical and minimal).
 `run_task.py` runs multi-object EPISODES over the layered task stack in `src/dishsim/task/`
 (sequencer → pick-and-place → motion → planner); see `docs/episodes.md`.
 
-Runs on Isaac Sim **6.0.1-rc.7** + Isaac Lab **3.0.0** at `/workspace/isaaclab` (this repo is
-nested inside that tree, but is an independent git repo). Never upgrade or downgrade Isaac Sim /
-Isaac Lab. Everything runs `--headless` on a single NVIDIA L4 / 8 vCPU / 30 GiB; media capture
-additionally needs `--enable_cameras`.
+Runs on Isaac Sim **4.5.0** + Isaac Lab **v2.1.1** inside the repo-owned docker image
+(`docker/Dockerfile` + `docker/compose.yaml`, container `dishsim-isaac`) on the corallab
+workstation — the newest Isaac release for the host's 535 driver; the host's Ubuntu 20.04
+cannot run Isaac natively. Never upgrade or downgrade Isaac Sim / Isaac Lab. Everything runs
+`--headless` (GPU 1 of 3× RTX 3090 by default, `DISHSIM_GPU` overrides); media capture
+additionally needs `--enable_cameras`. Bulk data (assets/media/results/logs/outputs, Kit
+caches, HF_HOME) lives on `/media/corallab-s1/2tbhdd/brianshu/dishsim` — the root disk is
+nearly full and carries only the docker image; the repo's data dirs are symlinks onto that
+drive. Full environment details: `docs/environment.md`.
 
-The parent tree's `CLAUDE.md`/`AGENTS.md` (IsaacLab contributor rules) mostly targets the Isaac
-Lab source itself — its changelog-fragment and `./isaaclab.sh -f` pre-commit workflow do **not**
-apply here. What does carry over: commit-message conventions and **no AI attribution/co-author
-lines in commits**.
+Commit conventions: imperative subjects and **no AI attribution/co-author lines in commits**.
 
 **Git is handled by the user, not by Claude** — no branches, commits, or pushes from sessions;
 end each work phase with a summary and a suggested commit message instead.
 
 ## Commands
 
-Isaac-side work goes through `scripts/run_kit.sh` (exports the Isaac env, then
-`exec isaaclab.sh -p "$@"` — required because the venv-resolved interpreter lacks
-`EXP_PATH`/`LD_LIBRARY_PATH`; bare `isaaclab.sh -p` dies at Kit boot with `KeyError: 'EXP_PATH'`).
-Pure planning work uses the venv python directly. Run from this project root:
+Isaac-side work goes through `scripts/run_kit.sh` — on the host it forwards itself into the
+`dishsim-isaac` container (start once with `docker compose -f docker/compose.yaml up -d`);
+inside, it execs `isaaclab.sh -p`. Kit-free python (pytest, planners, tools) goes through
+`scripts/run_py.sh` the same way (plugin autoload for pytest is disabled in the wrapper —
+hydra's plugin breaks outside Kit). Run from this project root:
 
 ```bash
 # scene inspection: regenerates docs/joint_report.md, stability + passive-door tests
 scripts/run_kit.sh scripts/setup/inspect_scene.py --headless --test_door
 
-# planning-stack tests (venv, no Kit; plugin autoload off — hydra's plugin breaks outside Kit)
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m pytest tests/
+# planning-stack tests (no Kit boot)
+scripts/run_py.sh -m pytest tests/
 
 # one multi-object episode from a stowed machine (robot pulls the lower rack out first)
 scripts/run_kit.sh scripts/experiment/run_task.py --headless --enable_cameras \
@@ -68,7 +72,7 @@ scripts/setup/build_state.py --machine bosch800 --placement side_winner --state 
 #               capacity_fill, build_state, reach_map, base_pose_sweep (completed study)
 #               (asset authoring — build_object_assets, make_prop_physics_usd — retired to
 #               git history with the public-asset release; the archive ships their outputs)
-#   experiment/ run_trials (single object, FROZEN), run_task (episodes)
+#   experiment/ run_trials (single object, v0 baseline), run_task (episodes)
 #               --planner selects the algorithm for both
 #   evaluation/ compute_metrics, render_videos, verify_replay, plan_visual
 #   tools/      archive_assets, restore_assets
@@ -88,17 +92,19 @@ crashes or silent import shadowing, not clean errors:
 2. **The package is `dishsim`, deliberately not matching the repo directory name** — Kit's
    extension scan turns a same-named directory into a namespace package that shadows the real
    one. Keep module-scope `pxr`/`omni` imports out of the package.
-3. **Isaac Lab 3.0 API**: quaternions are **XYZW** everywhere; data buffers are `ProxyArray` —
-   append `.torch` (and `.torch.clone()`); kinematic writes use the keyword-only `*_index`
-   methods.
+3. **Isaac Lab 2.1 API**: isaaclab is **WXYZ**-quaternion; the project stays **XYZW**
+   internally and converts at every isaaclab read/write via `dishsim.quats`
+   (`xyzw_to_wxyz` / `wxyz_to_xyzw`) — never anywhere else. Data buffers are plain
+   `torch.Tensor`; kinematic writes are `write_*_to_sim(...)` / `set_joint_*_target(...)`
+   (no `_index` variants; 3.0-era tutorials are wrong on all three counts).
 4. **Fabric staleness**: live-stage prim transforms are stale mid-sim. Extract geometry from
    file stages pre-boot, right after `sim.reset()`, or with `use_fabric=False`. Physics-backed
    `.data` buffers are always correct.
 
 ## Architecture
 
-`src/dishsim/` (single project package; `scripts/*` add `src/` to `sys.path`, the venv installs
-it editable). Full module tree: `docs/architecture.md`. Load-bearing traps, encoded in the
+`src/dishsim/` (single project package; `scripts/*` add `src/` to `sys.path`, the container
+start installs it editable). Full module tree: `docs/architecture.md`. Load-bearing traps, encoded in the
 modules' docstrings and not to be "simplified" away:
 
 - `config.py` machine selector (v2) — `apply_machine("bosch800")` swaps the world to the
@@ -149,8 +155,9 @@ Numeric provenance: every prim path, joint name, frame offset, and placement num
 and `docs/asset_survey.md`. If you change the dishwasher variant, robot home pose, or scene
 layout, re-run the inspection script and take the new numbers from the report — don't eyeball
 them. Two traps encoded there: spawn poses place the articulation **root link** frame (for the
-dishwasher that's `E_body_5`, not the asset origin), and this Isaac Lab is XYZW-quaternion /
-`.torch`-ProxyArray throughout (2.x tutorial snippets are wrong on both counts).
+dishwasher that's `E_body_5`, not the asset origin), and this Isaac Lab (2.1) is
+WXYZ-quaternion at its API surface while the project is XYZW internally — cross only via
+`dishsim.quats`.
 
 ## Ground rules
 

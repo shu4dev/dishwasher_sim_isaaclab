@@ -43,7 +43,9 @@ parser.add_argument("--wiggle_seconds", type=float, default=10.0)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
+_enable_cameras = args_cli.enable_cameras  # 2.1's AppLauncher pops this off the namespace
 app_launcher = AppLauncher(args_cli)
+args_cli.enable_cameras = _enable_cameras
 simulation_app = app_launcher.app
 
 """Rest everything follows."""
@@ -58,11 +60,12 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
-from isaaclab_physx.physics import PhysxCfg
 
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from dishsim import config  # noqa: E402
+from dishsim.geometry import dedup_body_names  # noqa: E402
+from dishsim.quats import wxyz_to_xyzw  # noqa: E402
 from dishsim import scene as dscene  # noqa: E402
 from dishsim.media import CameraRig, VideoWriter  # noqa: E402
 from dishsim.transforms import T_inv, make_T, rot_angle_deg  # noqa: E402
@@ -79,8 +82,8 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 def body_pose_np(articulation, body_name: str) -> tuple[np.ndarray, np.ndarray]:
     ids, _ = articulation.find_bodies(body_name)
-    pos = articulation.data.body_link_pos_w.torch[0, ids[0]].cpu().numpy()
-    quat = articulation.data.body_link_quat_w.torch[0, ids[0]].cpu().numpy()
+    pos = articulation.data.body_link_pos_w[0, ids[0]].cpu().numpy()
+    quat = wxyz_to_xyzw(articulation.data.body_link_quat_w[0, ids[0]].cpu().numpy())
     return pos, quat
 
 
@@ -120,7 +123,7 @@ def main() -> None:
         )
 
     sim = SimulationContext(
-        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg())
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device)
     )
     sim.set_camera_view([1.8, -1.8, 1.2], [0.4, 0.0, 0.4])
 
@@ -158,12 +161,12 @@ def main() -> None:
     check("lower rack extended", statics["rack_lower_err_m"] < 2e-3, f"err {statics['rack_lower_err_m']*1e3:.2f} mm")
     check("upper rack at scenario target", statics["rack_upper_err_m"] < 2e-3, f"err {statics['rack_upper_err_m']*1e3:.2f} mm")
 
-    vels = robot.data.joint_vel.torch[0]
+    vels = robot.data.joint_vel[0]
     check("robot settled, no NaN", bool(torch.isfinite(vels).all()) and float(vels.abs().max()) < 0.5)
 
     # gripper fully open after the settle
     fid, _ = robot.find_joints(config.GRIPPER_JOINT)
-    aperture = float(robot.data.joint_pos.torch[0, fid[0]])
+    aperture = float(robot.data.joint_pos[0, fid[0]])
     check("gripper open after settle", abs(aperture - config.GRIPPER_APERTURE_OPEN_RAD) < 0.05,
           f"{aperture:.3f} rad")
 
@@ -199,11 +202,11 @@ def main() -> None:
                 scene.write_data_to_sim()
                 sim.step()
                 scene.update(dt)
-            theta_meas = float(robot.data.joint_pos.torch[0, fid[0]])
-            tcp_p = scene["ee_frame"].data.target_pos_w.torch[0, 0].cpu().numpy()
-            tcp_q = scene["ee_frame"].data.target_quat_w.torch[0, 0].cpu().numpy()
+            theta_meas = float(robot.data.joint_pos[0, fid[0]])
+            tcp_p = scene["ee_frame"].data.target_pos_w[0, 0].cpu().numpy()
+            tcp_q = wxyz_to_xyzw(scene["ee_frame"].data.target_quat_w[0, 0].cpu().numpy())
             T_tcp_w = T_inv(make_T(tcp_p, tcp_q))
-            pads_w = scene["ee_frame"].data.target_pos_w.torch[0, 1:3].cpu().numpy()
+            pads_w = scene["ee_frame"].data.target_pos_w[0, 1:3].cpu().numpy()
             pads_tcp = [(T_tcp_w @ np.append(p, 1.0))[:3] for p in pads_w]
             sep_vec = pads_tcp[0] - pads_tcp[1]
             sep = float(np.linalg.norm(sep_vec))
@@ -273,7 +276,7 @@ def main() -> None:
         # -- visible close onto the mug (the on-camera grasp) --------------------------------
         close_writer = None
         if rig is not None:
-            aim = obj.data.root_pos_w.torch[0].cpu().numpy()
+            aim = obj.data.root_pos_w[0].cpu().numpy()
             rig.set_view("iso", aim + np.array([-0.28, 0.28, 0.12]), aim, sim.device)
             close_writer = VideoWriter(
                 os.path.join(args_cli.out_dir, "grasp_close_open.mp4"), fps=config.CAMERA_FPS
@@ -291,7 +294,7 @@ def main() -> None:
             scene.write_data_to_sim()
             sim.step()
             scene.update(dt)
-        aperture = float(robot.data.joint_pos.torch[0, fid[0]])
+        aperture = float(robot.data.joint_pos[0, fid[0]])
         # tolerance is wider than the open check: the settle is contact-limited (the pads stop
         # on the mug wall, slightly short of the over-commanded target)
         check("gripper holds grasp aperture under contact",
@@ -309,8 +312,8 @@ def main() -> None:
                 rig.update(dt)
 
         # -- weld verification -------------------------------------------------------------
-        obj_pos = obj.data.root_pos_w.torch[0].cpu().numpy()
-        obj_quat = obj.data.root_quat_w.torch[0].cpu().numpy()
+        obj_pos = obj.data.root_pos_w[0].cpu().numpy()
+        obj_quat = wxyz_to_xyzw(obj.data.root_quat_w[0].cpu().numpy())
         pred_pos, pred_quat = dscene.grasp_pose_w()
         weld_pos_err_mm = float(np.linalg.norm(obj_pos - pred_pos)) * 1e3
         weld_rot_err = rot_angle_deg(make_T(pred_pos, pred_quat), make_T(obj_pos, obj_quat))
@@ -320,7 +323,7 @@ def main() -> None:
         # -- diagnostics: finger state + net contact force on the welded object --------------
         finger_names = [n for n in robot.joint_names if "finger" in n or "knuckle" in n]
         fids, fnames = robot.find_joints(finger_names, preserve_order=True)
-        fpos = robot.data.joint_pos.torch[0, fids].cpu().numpy()
+        fpos = robot.data.joint_pos[0, fids].cpu().numpy()
         print("[INFO] finger joints:", {n: round(float(v), 3) for n, v in zip(fnames, fpos)})
         print("[INFO] robot bodies:", robot.body_names)
         f_diag = dscene.grip_forces(scene)
@@ -334,12 +337,12 @@ def main() -> None:
         print("[INFO] contact partners (N):",
               {n: round(v, 2) for n, v in f_diag["partners"].items() if v > 0.01})
         # gripper-body positions in the TCP frame (locates interpenetration numerically)
-        tcp_pos_d = scene["ee_frame"].data.target_pos_w.torch[0, 0].cpu().numpy()
-        tcp_quat_d = scene["ee_frame"].data.target_quat_w.torch[0, 0].cpu().numpy()
+        tcp_pos_d = scene["ee_frame"].data.target_pos_w[0, 0].cpu().numpy()
+        tcp_quat_d = wxyz_to_xyzw(scene["ee_frame"].data.target_quat_w[0, 0].cpu().numpy())
         T_tcp_w = T_inv(make_T(tcp_pos_d, tcp_quat_d))
-        for bname in robot.body_names:
+        for bi, bname in enumerate(dedup_body_names(list(robot.body_names))):
             if "finger" in bname or "knuckle" in bname or bname == "base_link_0":
-                bpos, _ = body_pose_np(robot, bname)
+                bpos = robot.data.body_link_pos_w[0, bi].cpu().numpy()
                 p = (T_tcp_w @ np.append(bpos, 1.0))[:3]
                 print(f"[INFO]   {bname} in TCP frame: ({p[0]:.3f}, {p[1]:.3f}, {p[2]:.3f})")
         obj_in_tcp = (T_tcp_w @ np.append(obj_pos, 1.0))[:3]
@@ -391,11 +394,11 @@ def main() -> None:
                 "robot_base": {"pos": [round(float(v), 5) for v in dscene.world_to_base(pos)]},
             }
 
-        log_pose("robot_base", robot.data.root_pos_w.torch[0].cpu().numpy(),
-                 robot.data.root_quat_w.torch[0].cpu().numpy())
+        log_pose("robot_base", robot.data.root_pos_w[0].cpu().numpy(),
+                 wxyz_to_xyzw(robot.data.root_quat_w[0].cpu().numpy()))
         log_pose("wrist_3_link", w3_pos, w3_quat)
-        tcp_pos = scene["ee_frame"].data.target_pos_w.torch[0, 0].cpu().numpy()
-        tcp_quat = scene["ee_frame"].data.target_quat_w.torch[0, 0].cpu().numpy()
+        tcp_pos = scene["ee_frame"].data.target_pos_w[0, 0].cpu().numpy()
+        tcp_quat = wxyz_to_xyzw(scene["ee_frame"].data.target_quat_w[0, 0].cpu().numpy())
         log_pose("tcp", tcp_pos, tcp_quat)
         dw = scene["dishwasher"]
         for body in ("E_body_5", "E_door_4", "E_shelf_1_04", "E_shelf_03"):
@@ -441,8 +444,8 @@ def main() -> None:
                         wr.add(frames[name])
                 # weld drift: live wrist->object vs the analytic weld transform
                 w3_p, w3_q = body_pose_np(robot, "wrist_3_link")
-                o_p = obj.data.root_pos_w.torch[0].cpu().numpy()
-                o_q = obj.data.root_quat_w.torch[0].cpu().numpy()
+                o_p = obj.data.root_pos_w[0].cpu().numpy()
+                o_q = wxyz_to_xyzw(obj.data.root_quat_w[0].cpu().numpy())
                 T_live = T_inv(make_T(w3_p, w3_q)) @ make_T(o_p, o_q)
                 max_drift_mm = max(
                     max_drift_mm, float(np.linalg.norm(T_live[:3, 3] - w3_obj_target[:3, 3])) * 1e3
@@ -471,7 +474,7 @@ def main() -> None:
 
         # -- visible open: jaws release the (still-welded) mug, forces drop to zero ----------
         if rig is not None:
-            aim = obj.data.root_pos_w.torch[0].cpu().numpy()
+            aim = obj.data.root_pos_w[0].cpu().numpy()
             rig.set_view("iso", aim + np.array([-0.28, 0.28, 0.12]), aim, sim.device)
         dscene.ramp_gripper(scene, sim, config.GRIPPER_APERTURE_OPEN_RAD,
                             config.GRIPPER_OPEN_RAMP_STEPS, per_step=ramp_capture)

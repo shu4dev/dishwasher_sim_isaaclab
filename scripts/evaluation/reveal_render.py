@@ -29,9 +29,9 @@ import isaaclab.sim as sim_utils  # noqa: E402
 import torch  # noqa: E402
 from isaaclab.scene import InteractiveScene  # noqa: E402
 from isaaclab.sim import SimulationContext  # noqa: E402
-from isaaclab_physx.physics import PhysxCfg  # noqa: E402
 
 from dishsim import config  # noqa: E402
+from dishsim.quats import xyzw_to_wxyz  # noqa: E402
 
 config.apply_machine("bosch800")
 config.apply_base_placement("side_winner")
@@ -62,7 +62,7 @@ def main() -> int:
           f"{len(all_ids) - len(placed_p0)} from phase-1 poses")
 
     sim = SimulationContext(
-        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg()))
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device))
     obj_specs = [{"name": k, "usd_path": config.OBJECTS[k.rsplit("_", 1)[0]].usd_path,
                   "pos": (-2.0 - 0.3 * (i % 6), -1.5 + 0.3 * (i // 6), 0.10),
                   "quat": (0.0, 0.0, 0.0, 1.0), "contact_filters": []}
@@ -95,17 +95,19 @@ def main() -> int:
 
     step(700)  # third rack slides out empty and settles
 
-    device = scene[all_ids[0]].data.root_pos_w.torch.device
+    device = scene[all_ids[0]].data.root_pos_w.device
     for k, pose in tableau.items():
-        scene[k].write_root_pose_to_sim_index(root_pose=torch.tensor(
-            np.asarray(pose, dtype=np.float32)[None], device=device))
-        scene[k].write_root_velocity_to_sim_index(
+        # recorded pose is pos + XYZW; isaaclab 2.1 wants pos + WXYZ
+        pose_wxyz = np.concatenate([np.asarray(pose[:3]), xyzw_to_wxyz(np.asarray(pose[3:]))])
+        scene[k].write_root_pose_to_sim(root_pose=torch.tensor(
+            pose_wxyz.astype(np.float32)[None], device=device))
+        scene[k].write_root_velocity_to_sim(
             root_velocity=torch.zeros((1, 6), dtype=torch.float32, device=device))
     step(150)  # settle: recorded poses must be physically self-consistent
 
     drift = {}
     for k, pose in tableau.items():
-        p = scene[k].data.root_pos_w.torch[0].cpu().numpy()
+        p = scene[k].data.root_pos_w[0].cpu().numpy()
         drift[k] = float(np.linalg.norm(p - np.asarray(pose[:3]))) * 1e3
     print("[INFO] settle drift mm:", {k: round(v, 1) for k, v in drift.items()})
 

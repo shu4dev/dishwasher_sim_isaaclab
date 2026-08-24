@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import config
+from .geometry import dedup_body_names
+from .quats import wxyz_to_xyzw
 
 #: Bumped when the array set or meta contract changes incompatibly.
 SCHEMA_VERSION = 1
@@ -130,10 +132,10 @@ class TrajectoryRecorder:
         self._objs = [scene[k] for k in self._object_keys]
         self._obj = self._objs[0]
         self._robot, self._dw = robot, dw
-        device = robot.data.joint_pos.torch.device
-        self._n_rq = int(robot.data.joint_pos.torch.shape[1])
-        self._n_dq = int(dw.data.joint_pos.torch.shape[1])
-        self._n_body = int(robot.data.body_link_pos_w.torch.shape[1])
+        device = robot.data.joint_pos.device
+        self._n_rq = int(robot.data.joint_pos.shape[1])
+        self._n_dq = int(dw.data.joint_pos.shape[1])
+        self._n_body = int(robot.data.body_link_pos_w.shape[1])
 
         width = self._n_rq + self._n_dq + 7 * len(self._objs)
         self._buf = torch.empty((self.max_steps, width), dtype=torch.float32, device=device)
@@ -153,7 +155,7 @@ class TrajectoryRecorder:
                 "sim_dt": float(config.SIM_DT),
                 "robot_joint_names": list(robot.joint_names),
                 "dishwasher_joint_names": list(dw.joint_names),
-                "robot_body_names": list(robot.body_names),
+                "robot_body_names": dedup_body_names(list(robot.body_names)),
                 "quat_convention": "xyzw",
                 "frame": "world",
                 "phase_legend": {str(k): v for k, v in PHASE_LEGEND.items()},
@@ -178,17 +180,17 @@ class TrajectoryRecorder:
             raise RuntimeError(f"trajectory buffer full ({self.max_steps} steps)")
         k = self._n
         a, b = self._n_rq, self._n_rq + self._n_dq
-        self._buf[k, :a] = self._robot.data.joint_pos.torch[0]
-        self._buf[k, a:b] = self._dw.data.joint_pos.torch[0]
+        self._buf[k, :a] = self._robot.data.joint_pos[0]
+        self._buf[k, a:b] = self._dw.data.joint_pos[0]
         for i, obj in enumerate(self._objs):
             o = b + 7 * i
-            self._buf[k, o : o + 3] = obj.data.root_pos_w.torch[0]
-            self._buf[k, o + 3 : o + 7] = obj.data.root_quat_w.torch[0]
+            self._buf[k, o : o + 3] = obj.data.root_pos_w[0]
+            self._buf[k, o + 3 : o + 7] = wxyz_to_xyzw(obj.data.root_quat_w[0])
         self._phase[k] = self.phase
         self._weld[k] = self.weld
         if k % self.check_stride == 0:
-            self._check[self._n_check, :, :3] = self._robot.data.body_link_pos_w.torch[0]
-            self._check[self._n_check, :, 3:] = self._robot.data.body_link_quat_w.torch[0]
+            self._check[self._n_check, :, :3] = self._robot.data.body_link_pos_w[0]
+            self._check[self._n_check, :, 3:] = wxyz_to_xyzw(self._robot.data.body_link_quat_w[0])
             self._check_idx.append(k)
             self._n_check += 1
         self._n = k + 1

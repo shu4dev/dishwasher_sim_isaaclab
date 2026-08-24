@@ -105,14 +105,14 @@ class CameraRig:
         frame, per extra camera — which is what makes adding a wide episode view look expensive
         when it is not.
         """
-        frame = self.cams[name].data.output["rgb"].torch[0].detach().cpu().numpy()
+        frame = self.cams[name].data.output["rgb"][0].detach().cpu().numpy()
         return frame[..., :3].astype(np.uint8)
 
     def grab(self) -> dict[str, np.ndarray]:
         """Latest RGB frame per camera as HxWx3 uint8 (call :meth:`update` first)."""
         out = {}
         for name, cam in self.cams.items():
-            frame = cam.data.output["rgb"].torch[0].detach().cpu().numpy()
+            frame = cam.data.output["rgb"][0].detach().cpu().numpy()
             out[name] = frame[..., :3].astype(np.uint8)
         return out
 

@@ -70,8 +70,10 @@ def safe_extract(tar_path: str) -> dict:
         mf = tf.extractfile("MANIFEST.json")
         if mf is not None:
             manifest = json.load(mf)
+        # every member is prefix-vetted above; "data" would refuse the deliberate
+        # assets/media/results symlinks onto the big disk (OutsideDestinationError)
         tf.extractall(PROJECT_ROOT, members=[m for m in tf.getmembers()
-                                             if m.name != "MANIFEST.json"], filter="data")
+                                             if m.name != "MANIFEST.json"], filter="fully_trusted")
     print(f"[INFO] extracted {os.path.basename(tar_path)} "
           f"({manifest.get('n_files', '?')} files, git {manifest.get('git_sha', '?')})")
     return manifest

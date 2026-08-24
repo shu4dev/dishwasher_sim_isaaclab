@@ -44,7 +44,6 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.sensors import Camera, CameraCfg
 from isaaclab.sim import SimulationContext
-from isaaclab_physx.physics import PhysxCfg
 
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
@@ -96,7 +95,7 @@ def main() -> None:
     test_inprocess_plan()
 
     # --- minimal scene: ground, light, one falling cube -----------------------------------
-    sim = SimulationContext(sim_utils.SimulationCfg(dt=1.0 / 60.0, device=args_cli.device, physics=PhysxCfg()))
+    sim = SimulationContext(sim_utils.SimulationCfg(dt=1.0 / 60.0, device=args_cli.device))
     sim_utils.GroundPlaneCfg().func("/World/ground", sim_utils.GroundPlaneCfg())
     light_cfg = sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75))
     light_cfg.func("/World/light", light_cfg)
@@ -135,7 +134,7 @@ def main() -> None:
         camera.update(dt)
 
     def grab() -> np.ndarray:
-        data = camera.data.output["rgb"].torch[0]
+        data = camera.data.output["rgb"][0]
         frame = data.detach().cpu().numpy()
         return frame[..., :3].astype(np.uint8)
 

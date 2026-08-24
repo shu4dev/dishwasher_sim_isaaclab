@@ -28,6 +28,8 @@ joint ordering differs from the machine that produced it.
 import numpy as np
 
 from . import config
+from .geometry import dedup_body_names
+from .quats import wxyz_to_xyzw, xyzw_to_wxyz
 
 
 def scene_objects_for(recording) -> list:
@@ -94,7 +96,7 @@ class TrajectoryPlayer:
         self._obj_keys = list(recording.meta.get("object_keys") or ["carried_object"])
         self.objs = [scene[k] for k in self._obj_keys]
         self.obj = self.objs[0]
-        self.device = self.robot.data.joint_pos.torch.device
+        self.device = self.robot.data.joint_pos.device
         self._torch = torch
 
         origins = scene.env_origins
@@ -112,14 +114,19 @@ class TrajectoryPlayer:
             f"recording holds {poses.shape[1] // 7} object pose block(s) but the scene was given "
             f"{len(self.objs)} object key(s): {self._obj_keys}"
         )
-        self._obj_pose = [self._to_device(poses[:, 7 * i : 7 * (i + 1)]) for i in range(len(self.objs))]
+        # recorded pose blocks are pos + XYZW; isaaclab's write_root_pose_to_sim wants WXYZ
+        self._obj_pose = [
+            self._to_device(np.concatenate(
+                [poses[:, 7 * i : 7 * i + 3], xyzw_to_wxyz(poses[:, 7 * i + 3 : 7 * i + 7])], axis=1))
+            for i in range(len(self.objs))
+        ]
         self._zero_rq = torch.zeros((1, self._robot_q.shape[1]), dtype=torch.float32, device=self.device)
         self._zero_dq = torch.zeros((1, self._dw_q.shape[1]), dtype=torch.float32, device=self.device)
         self._zero_v6 = torch.zeros((1, 6), dtype=torch.float32, device=self.device)
 
         # body-name remap for the checksum comparison
         rec_bodies = recording.meta["robot_body_names"]
-        live_bodies = list(self.robot.body_names)
+        live_bodies = dedup_body_names(list(self.robot.body_names))
         assert set(rec_bodies) == set(live_bodies), "robot body sets differ between recording and scene"
         index = {name: i for i, name in enumerate(rec_bodies)}
         self._body_cols = np.array([index[name] for name in live_bodies], dtype=int)
@@ -136,20 +143,20 @@ class TrajectoryPlayer:
         drives still act during the propagation step and pull the arm toward whatever target
         was last commanded — measured as up to 21 mm of link drift per frame.
         """
-        self.robot.write_joint_position_to_sim_index(position=self._robot_q[step : step + 1])
-        self.robot.write_joint_velocity_to_sim_index(velocity=self._zero_rq)
+        self.robot.write_joint_position_to_sim(position=self._robot_q[step : step + 1])
+        self.robot.write_joint_velocity_to_sim(velocity=self._zero_rq)
         self.robot.set_joint_position_target(self._robot_q[step : step + 1])
-        self.dw.write_joint_position_to_sim_index(position=self._dw_q[step : step + 1])
-        self.dw.write_joint_velocity_to_sim_index(velocity=self._zero_dq)
+        self.dw.write_joint_position_to_sim(position=self._dw_q[step : step + 1])
+        self.dw.write_joint_velocity_to_sim(velocity=self._zero_dq)
         self.dw.set_joint_position_target(self._dw_q[step : step + 1])
         for obj, pose in zip(self.objs, self._obj_pose):
-            obj.write_root_pose_to_sim_index(root_pose=pose[step : step + 1])
-            obj.write_root_velocity_to_sim_index(root_velocity=self._zero_v6)
+            obj.write_root_pose_to_sim(root_pose=pose[step : step + 1])
+            obj.write_root_velocity_to_sim(root_velocity=self._zero_v6)
 
     def read_body_poses(self) -> tuple[np.ndarray, np.ndarray]:
         """Read-back robot link poses, ordered like the recording's ``robot_body_names``."""
-        pos = self.robot.data.body_link_pos_w.torch[0].cpu().numpy()
-        quat = self.robot.data.body_link_quat_w.torch[0].cpu().numpy()
+        pos = self.robot.data.body_link_pos_w[0].cpu().numpy()
+        quat = wxyz_to_xyzw(self.robot.data.body_link_quat_w[0].cpu().numpy())
         inv = np.argsort(self._body_cols)
         return pos[inv], quat[inv]
 

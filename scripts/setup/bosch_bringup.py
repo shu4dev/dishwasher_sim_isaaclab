@@ -35,7 +35,9 @@ parser.add_argument("--out_dir", type=str, default=os.path.join(PROJECT_ROOT, "m
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
+_enable_cameras = args_cli.enable_cameras  # 2.1's AppLauncher pops this off the namespace
 app_launcher = AppLauncher(args_cli)
+args_cli.enable_cameras = _enable_cameras
 simulation_app = app_launcher.app
 
 import sys  # noqa: E402
@@ -47,7 +49,6 @@ import isaaclab.sim as sim_utils  # noqa: E402
 from isaaclab.scene import InteractiveScene  # noqa: E402
 from isaaclab.sensors import Camera, CameraCfg  # noqa: E402
 from isaaclab.sim import SimulationContext  # noqa: E402
-from isaaclab_physx.physics import PhysxCfg  # noqa: E402
 
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
@@ -74,7 +75,7 @@ def main() -> None:
     # moves them (measured: static rack-slide video, moving joint states). Extraction
     # needs USD-readable state; MEDIA needs Fabric.
     sim = SimulationContext(
-        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg())
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device)
     )
     scene = InteractiveScene(dscene.make_scene_cfg(with_object=False))
 
@@ -107,8 +108,8 @@ def main() -> None:
     # --- joint gates -------------------------------------------------------------------------
     dw = scene["dishwasher"]
     joint_names = list(dw.joint_names)
-    q = dw.data.joint_pos.torch[0].detach().cpu().numpy()
-    qd = dw.data.joint_vel.torch[0].detach().cpu().numpy()
+    q = dw.data.joint_pos[0].detach().cpu().numpy()
+    qd = dw.data.joint_vel[0].detach().cpu().numpy()
 
     for jn, target in config.RACK_JOINT_TARGETS.items():
         idx = joint_names.index(jn)
@@ -121,7 +122,7 @@ def main() -> None:
     check("door inside the clamped band", lo - 0.2 <= door_deg <= hi + 0.2, f"{door_deg:.2f} deg in [{lo}, {hi}]")
     check("machine at rest", float(np.abs(qd).max()) < 5e-3, f"max |qd| {np.abs(qd).max():.2e}")
 
-    root_vel = dw.data.root_vel_w.torch[0].detach().cpu().numpy()
+    root_vel = dw.data.root_vel_w[0].detach().cpu().numpy()
     check("base not moving (fix_root_link)", float(np.abs(root_vel).max()) < 1e-4, "")
 
     # --- media evidence ----------------------------------------------------------------------
@@ -131,7 +132,7 @@ def main() -> None:
         import imageio  # noqa: PLC0415
 
         def grab() -> np.ndarray:
-            data = camera.data.output["rgb"].torch[0]
+            data = camera.data.output["rgb"][0]
             return data.detach().cpu().numpy()[..., :3].astype(np.uint8)
 
         def look(name: str) -> None:
@@ -187,7 +188,7 @@ def main() -> None:
             scene.update(dt)
 
         # the slide must end back at the scenario target
-        q2 = dw.data.joint_pos.torch[0].detach().cpu().numpy()
+        q2 = dw.data.joint_pos[0].detach().cpu().numpy()
         err = abs(q2[joint_names.index(lower_joint)] - start)
         check("rack back at scenario target after slide", err < 8e-3, f"err {err * 1e3:.1f} mm")
 

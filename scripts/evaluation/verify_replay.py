@@ -56,7 +56,6 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
-from isaaclab_physx.physics import PhysxCfg
 
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
@@ -82,7 +81,7 @@ def main() -> None:
 
     sim = SimulationContext(
         sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device,
-                                gravity=(0.0, 0.0, 0.0), physics=PhysxCfg())
+                                gravity=(0.0, 0.0, 0.0))
     )
     # no weld is authored and no contact sensors are needed: nothing is simulated, every body
     # is written from the recording each frame

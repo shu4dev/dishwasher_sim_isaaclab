@@ -25,6 +25,7 @@ import os
 import numpy as np
 
 from . import config
+from .quats import wxyz_to_xyzw
 
 MESH_DIR = "meshes"
 MANIFEST = "scene_state.json"
@@ -39,6 +40,22 @@ def dishwasher_bodies() -> list[str]:
     return DISHWASHER_BODIES + (["E_shelf_third"] if config.HAS_THIRD_RACK else [])
 #: arm links whose meshes move with fk_all_links
 ARM_LINKS = ["base_link", "shoulder_link", "upper_arm_link", "forearm_link", "wrist_1_link", "wrist_2_link", "wrist_3_link"]
+
+def dedup_body_names(names) -> list:
+    """Isaac Lab 3.0-style labels for duplicate body names (2.1 reports them verbatim).
+
+    The UR5e+gripper asset has TWO bodies named ``base_link`` (arm base + gripper base);
+    3.0's PhysX view suffixed the second one ``base_link_0`` and every measured name in the
+    caches/recordings uses that label. 2.1 keeps duplicates verbatim, so every consumer of
+    ``robot.body_names`` goes through this to stay label-compatible.
+    """
+    out, seen = [], {}
+    for n in names:
+        k = seen.get(n, 0)
+        seen[n] = k + 1
+        out.append(n if k == 0 else f"{n}_{k - 1}")
+    return out
+
 
 
 def config_hash() -> str:
@@ -90,13 +107,61 @@ def config_hash() -> str:
 # ---------------------------------------------------------------------------------------------
 
 
+#: Geom prim types the extractor understands (Isaac Lab 2.1 ships no ``utils.mesh`` — the
+#: 3.0 helpers this replaces returned exactly these plus ``Mesh``).
+_GEOM_TYPES = ("Cube", "Sphere", "Cylinder", "Capsule", "Cone")
+
+
 def _mesh_prims_under(prim):
-    from isaaclab.utils.mesh import PRIMITIVE_MESH_TYPES  # noqa: PLC0415
     import isaaclab.sim as sim_utils  # noqa: PLC0415
 
     return sim_utils.get_all_matching_child_prims(
-        prim.GetPath(), lambda p: p.GetTypeName() in PRIMITIVE_MESH_TYPES + ["Mesh"]
+        prim.GetPath(), lambda p: p.GetTypeName() in _GEOM_TYPES + ("Mesh",)
     )
+
+
+def _trimesh_from_geom_prim(mesh_prim) -> "object":
+    """A ``trimesh.Trimesh`` of one Mesh/primitive geom prim, in the prim's LOCAL frame."""
+    import numpy as _np  # noqa: PLC0415
+    import trimesh  # noqa: PLC0415
+    from pxr import UsdGeom  # noqa: PLC0415
+
+    t = mesh_prim.GetTypeName()
+    if t == "Mesh":
+        geom = UsdGeom.Mesh(mesh_prim)
+        pts = _np.asarray(geom.GetPointsAttr().Get() or [], dtype=float)
+        counts = _np.asarray(geom.GetFaceVertexCountsAttr().Get() or [], dtype=int)
+        idx = _np.asarray(geom.GetFaceVertexIndicesAttr().Get() or [], dtype=int)
+        if len(pts) == 0 or len(counts) == 0:
+            return None
+        faces, o = [], 0
+        for c in counts:  # fan-triangulate n-gons
+            for k in range(1, c - 1):
+                faces.append((idx[o], idx[o + k], idx[o + k + 1]))
+            o += c
+        return trimesh.Trimesh(vertices=pts, faces=_np.asarray(faces, dtype=int), process=False)
+    if t == "Cube":
+        size = float(UsdGeom.Cube(mesh_prim).GetSizeAttr().Get())
+        return trimesh.creation.box(extents=(size, size, size))
+    axis_rot = {"X": [0.0, 1.0, 0.0, 90.0], "Y": [1.0, 0.0, 0.0, -90.0], "Z": None}
+    if t == "Sphere":
+        return trimesh.creation.icosphere(radius=float(UsdGeom.Sphere(mesh_prim).GetRadiusAttr().Get()))
+    if t in ("Cylinder", "Capsule", "Cone"):
+        geom = {"Cylinder": UsdGeom.Cylinder, "Capsule": UsdGeom.Capsule, "Cone": UsdGeom.Cone}[t](mesh_prim)
+        r, h = float(geom.GetRadiusAttr().Get()), float(geom.GetHeightAttr().Get())
+        if t == "Cylinder":
+            m = trimesh.creation.cylinder(radius=r, height=h)
+        elif t == "Capsule":
+            m = trimesh.creation.capsule(radius=r, height=h)
+        else:
+            m = trimesh.creation.cone(radius=r, height=h)
+            m.apply_translation((0.0, 0.0, -h / 2.0))  # USD cones are center-origin
+        rot = axis_rot[str(geom.GetAxisAttr().Get() or "Z")]
+        if rot is not None:
+            m.apply_transform(trimesh.transformations.rotation_matrix(
+                _np.radians(rot[3]), rot[:3]))
+        return m
+    return None
 
 
 def extract_prim_mesh(body_prim, stage) -> "object":
@@ -106,23 +171,19 @@ def extract_prim_mesh(body_prim, stage) -> "object":
         A ``trimesh.Trimesh`` (body-frame vertices [m]) or None if no meshes found.
     """
     import trimesh  # noqa: PLC0415
-    import isaaclab.sim as sim_utils  # noqa: PLC0415
-    from isaaclab.utils.mesh import create_trimesh_from_geom_mesh, create_trimesh_from_geom_shape  # noqa: PLC0415
+    from pxr import Usd, UsdGeom  # noqa: PLC0415
 
-    from .transforms import make_T  # noqa: PLC0415
-
+    cache = UsdGeom.XformCache(Usd.TimeCode.Default())
+    inv_body = cache.GetLocalToWorldTransform(body_prim).GetInverse()
     parts = []
     for mesh_prim in _mesh_prims_under(body_prim):
-        mesh = (
-            create_trimesh_from_geom_mesh(mesh_prim)
-            if mesh_prim.GetTypeName() == "Mesh"
-            else create_trimesh_from_geom_shape(mesh_prim)
-        )
+        mesh = _trimesh_from_geom_prim(mesh_prim)
         if mesh is None or len(mesh.vertices) == 0:
             continue
-        mesh.apply_scale(sim_utils.resolve_prim_scale(mesh_prim))
-        rel_pos, rel_quat = sim_utils.resolve_prim_pose(mesh_prim, body_prim)
-        mesh.apply_transform(make_T(rel_pos, rel_quat))
+        # full mesh->body transform (scale included); Gf matrices are row-vector, transpose
+        # to the column convention trimesh/make_T use
+        rel = cache.GetLocalToWorldTransform(mesh_prim) * inv_body
+        mesh.apply_transform(np.array(rel, dtype=float).T)
         parts.append(mesh)
     if not parts:
         return None
@@ -162,8 +223,8 @@ def dump_cache(scene, sim, cache_dir: str = config.CACHE_DIR) -> str:
 
     def body_pose_w(articulation, body_name):
         ids, _ = articulation.find_bodies(body_name)
-        pos = articulation.data.body_link_pos_w.torch[0, ids[0]].cpu().numpy()
-        quat = articulation.data.body_link_quat_w.torch[0, ids[0]].cpu().numpy()
+        pos = articulation.data.body_link_pos_w[0, ids[0]].cpu().numpy()
+        quat = wxyz_to_xyzw(articulation.data.body_link_quat_w[0, ids[0]].cpu().numpy())
         return make_T(pos, quat)
 
     def save_mesh(name, mesh):
@@ -237,9 +298,11 @@ def dump_cache(scene, sim, cache_dir: str = config.CACHE_DIR) -> str:
 
     # -- gripper links: rigid relative to wrist_3 at the frozen aperture ----------------------
     T_w_wrist3 = body_pose_w(robot, "wrist_3_link")
-    gripper_names = [n for n in robot.body_names if n not in ARM_LINKS]
+    body_labels = dedup_body_names(list(robot.body_names))
     gripper_prim_base = f"{env_path}/Robot/Gripper/Robotiq_2F_85"
-    for name in gripper_names:
+    for body_i, name in enumerate(body_labels):
+        if name in ARM_LINKS:
+            continue
         prim_name = "base_link" if name == "base_link_0" else name
         prim = stage.GetPrimAtPath(f"{gripper_prim_base}/{prim_name}")
         if not prim.IsValid():
@@ -247,7 +310,9 @@ def dump_cache(scene, sim, cache_dir: str = config.CACHE_DIR) -> str:
         mesh = extract_prim_mesh(prim, stage)
         if mesh is None:
             continue
-        T_wrist3_link = T_inv(T_w_wrist3) @ body_pose_w(robot, name)
+        T_w_link = make_T(robot.data.body_link_pos_w[0, body_i].cpu().numpy(),
+                          wxyz_to_xyzw(robot.data.body_link_quat_w[0, body_i].cpu().numpy()))
+        T_wrist3_link = T_inv(T_w_wrist3) @ T_w_link
         manifest["gripper_links"][name] = {
             "mesh": save_mesh(f"gripper_{name}", mesh),
             "T_wrist3_link": T_wrist3_link.tolist(),
@@ -259,7 +324,7 @@ def dump_cache(scene, sim, cache_dir: str = config.CACHE_DIR) -> str:
     mesh = extract_prim_mesh(obj_prim, stage)
     assert mesh is not None, "no meshes under CarriedObject"
     T_wrist3_obj_live = T_inv(T_w_wrist3) @ make_T(
-        obj.data.root_pos_w.torch[0].cpu().numpy(), obj.data.root_quat_w.torch[0].cpu().numpy()
+        obj.data.root_pos_w[0].cpu().numpy(), wxyz_to_xyzw(obj.data.root_quat_w[0].cpu().numpy())
     )
     T_wrist3_obj_analytic = dscene.t_wrist3_obj()
     weld_dev = float(np.linalg.norm(T_wrist3_obj_live[:3, 3] - T_wrist3_obj_analytic[:3, 3]))
