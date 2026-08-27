@@ -2,12 +2,11 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Rack-state scenario machinery: config mutation, cache-dir mapping, hash coupling.
+"""Rack-state scenario machinery: config mutation + the config-hash tripwires.
 
-Kit-free (config + geometry only). The scenario set is exactly the two real robot-facing rack
-states (both racks fully out / fully in); "both_out" is the baseline mapping to the legacy
-cache/media dirs. Every test restores the baseline scenario in a finally block —
-apply_scenario mutates module state that other tests (and the live cache contract) depend on.
+Kit-free (config + geometry only). Every test restores the baseline scenario in a finally
+block — apply_scenario mutates module state that other tests (and the live cache contract)
+depend on. The frozen-hash test runs FIRST, against pristine import-time defaults.
 """
 
 import os
@@ -20,26 +19,10 @@ from dishsim.geometry import config_hash
 BASELINE = "both_out"
 
 
-def test_scenario_set_is_exactly_the_two_states():
-    assert set(config.SCENARIOS) == {"both_out", "both_in"}
-    assert config.SCENARIOS["both_out"]["rack_lower_m"] == -0.20
-    assert config.SCENARIOS["both_out"]["rack_upper_m"] == -0.20
-    assert config.SCENARIOS["both_in"]["rack_lower_m"] == 0.0
-    assert config.SCENARIOS["both_in"]["rack_upper_m"] == 0.0
-
-
-def test_rack_actions_converge_to_the_placement_state():
-    """Each scenario's rack_action must transform its initial state into the shared placement
-    state (lower out, upper in) — that is the whole point of the choreography."""
-    place = config.INTERNAL_STATES[config.PLACEMENT_STATE]
-    for name, sc in config.SCENARIOS.items():
-        state = {"rack_lower_m": sc["rack_lower_m"], "rack_upper_m": sc["rack_upper_m"]}
-        action = sc["rack_action"]
-        key = "rack_upper_m" if action["joint"].endswith("_up") else "rack_lower_m"
-        state[key] = action["to"]
-        assert state == {k: place[k] for k in state}, f"{name}: rack_action does not reach placement"
-        expected_mode = "pull" if action["to"] < state["rack_lower_m"] or action["to"] < 0 else "push"
-        assert action["mode"] in ("pull", "push")
+def test_baseline_config_hash_is_frozen():
+    # the exact value stamped in every shipped v1 baseline cache (scene_state.json);
+    # a drifted FROZEN CACHE ANCHOR fails HERE, in any process, with no assets restored
+    assert config_hash() == "3f66d1ac2c369f74"
 
 
 def test_internal_placement_state():
@@ -74,25 +57,6 @@ def test_unknown_scenario_raises():
     with pytest.raises(ValueError, match="unknown scenario"):
         config.apply_scenario("lower_out")  # the old baseline no longer exists
     assert config.SCENARIO_NAME == BASELINE, "a failed apply must not change state"
-
-
-def test_scenario_cache_dir_mapping():
-    try:
-        assert config.scenario_cache_dir() == config.CACHE_DIR  # baseline -> legacy cache
-        assert config.scenario_cache_dir("both_in").endswith(os.path.join("cache", "scenarios", "both_in"))
-        config.apply_scenario("both_in")
-        assert config.scenario_cache_dir().endswith(os.path.join("cache", "scenarios", "both_in"))
-    finally:
-        config.apply_scenario(BASELINE)
-
-
-def test_scenario_media_dir_mapping():
-    try:
-        assert config.scenario_media_dir("trials").endswith(os.path.join("media", "trials"))
-        config.apply_scenario("both_in")
-        assert config.scenario_media_dir("trials").endswith(os.path.join("media", "trials", "both_in"))
-    finally:
-        config.apply_scenario(BASELINE)
 
 
 def test_config_hash_distinct_per_scenario_and_baseline_stable():

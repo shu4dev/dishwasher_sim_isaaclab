@@ -4,10 +4,9 @@
 
 """Kit-free sanity checks on the multi-object registry (config.OBJECTS).
 
-Covers: per-spec geometry/mass sanity, jaw clearance at the grasp patch, the grasp-chain
-math for every family (the grasped feature must land on the tool axis at rim_tcp_z), the
-mug entry reproducing the frozen v0 constants bit-exactly (baseline cache protection),
-set_active_object mutate/restore, and per-object cache-dir separation.
+Covers: per-spec geometry/mass sanity, the grasp-chain math for every family (its output IS
+the config_hash "grasp" key — baseline cache protection), set_active_object mutate/restore,
+and per-object cache-dir separation.
 """
 
 import numpy as np
@@ -16,9 +15,6 @@ import pytest
 from dishsim import config
 from dishsim.geometry import config_hash
 from dishsim.transforms import make_T
-
-JAW_MAX_M = 0.085
-
 
 @pytest.fixture(autouse=True)
 def _restore_active_object():
@@ -46,25 +42,6 @@ def test_spec_sanity(name):
         "upside_down", "stem_scallop", "flat_lay",
     )
     assert spec.placement.rack in ("lower", "upper", "basket")
-    if spec.robot_demo:
-        assert len(spec.countertop_poses_w) >= 2, "demo classes need 2 staging poses"
-        assert spec.grasp.family != "stem_pinch", "stem_pinch is registry-only"
-
-
-@pytest.mark.parametrize("name", sorted(config.OBJECTS))
-def test_jaw_clearance_at_grasp(name):
-    spec = config.OBJECTS[name]
-    # The object width between the pads must fit the 85 mm jaw with clearance. Floor = 3.5 mm:
-    # the tightest measured-working pinch is the scan mug's 81.2 mm wall (calibrated
-    # 2026-08-10 — zero contact at full open, clean hold and release at 3.8 mm clearance).
-    assert spec.grasp.grasp_width_m + 0.0035 < JAW_MAX_M, name
-
-
-@pytest.mark.parametrize("name", sorted(config.OBJECTS))
-def test_calibrated_aperture_bounds(name):
-    ap = config.OBJECTS[name].grasp.aperture_rad
-    if ap is not None:
-        assert 0.0 < ap < 0.82
 
 
 # ---------------------------------------------------------------------------------------------
@@ -101,47 +78,9 @@ def test_grasp_chain_maps_grasp_point_to_tcp_axis(name):
     assert np.allclose(p_tcp, (0.0, 0.0, spec.grasp.rim_tcp_z_m), atol=1e-6), (name, p_tcp)
 
 
-@pytest.mark.parametrize("name", sorted(config.OBJECTS))
-def test_carry_orientation_per_family(name):
-    """The carried object's axis direction in the TCP frame matches its family's carry."""
-    spec = config.OBJECTS[name]
-    _, quat = config.grasp_transform(spec)
-    T = make_T((0.0, 0.0, 0.0), quat)
-    axis_tcp = T[:3, :3] @ np.array(spec.axis_obj)
-    fam = spec.grasp.family
-    if fam in ("rim_diam", "rim_edge", "stem_pinch"):
-        # upright carry: object axis anti-parallel to tool z (opening toward the gripper)
-        assert np.allclose(axis_tcp, (0.0, 0.0, -1.0), atol=1e-6), (name, axis_tcp)
-    elif fam == "edge_pinch":
-        # on-edge carry: disc axis along the jaw axis (y_tcp), either sign
-        assert abs(abs(axis_tcp[1]) - 1.0) < 1e-6, (name, axis_tcp)
-    elif fam == "handle_pinch":
-        # flat carry: long axis perpendicular to tool z
-        assert abs(axis_tcp[2]) < 1e-6, (name, axis_tcp)
-
-
 # ---------------------------------------------------------------------------------------------
-# 3. the mug entry reproduces the frozen v0 constants (baseline cache protection)
+# 3. baseline cache protection
 # ---------------------------------------------------------------------------------------------
-
-
-def test_mug_entry_matches_frozen_constants():
-    spec = config.OBJECTS["mug"]
-    assert spec.object_name == "025_mug"
-    assert spec.usd_path == config.OBJECT_USD
-    assert spec.mass_kg == config.OBJECT_MASS_KG
-    assert spec.bbox_half == config.OBJECT_BBOX_HALF
-    assert spec.axis_obj == config.OBJECT_AXIS_OBJ
-    assert spec.body_center_uv == config.OBJECT_BODY_CENTER_XZ
-    assert spec.rim_radius_m == config.OBJECT_RIM_RADIUS_M
-    assert spec.height_m == config.OBJECT_HEIGHT_M
-    assert spec.grasp.aperture_rad == config.GRIPPER_APERTURE_GRASP_RAD
-    assert spec.grasp.force_min_n == config.GRIP_FORCE_MIN_N
-    assert spec.grasp.force_max_n == config.GRIP_FORCE_MAX_N
-    pos, quat = config.grasp_transform(spec)
-    # bit-exact against the module literals: the cache hash JSON-serializes these floats
-    assert pos == config.GRASP_TCP_OBJ_POS
-    assert quat == config.GRASP_TCP_OBJ_QUAT
 
 
 def test_set_active_object_mug_is_hash_stable():
@@ -174,14 +113,6 @@ def test_set_active_object_mutates_and_restores():
 def test_unknown_object_raises():
     with pytest.raises(ValueError):
         config.set_active_object("chandelier")
-
-
-def test_uncalibrated_aperture_estimate_sane():
-    config.set_active_object("cup")  # not yet calibrated
-    est = config.GRIPPER_APERTURE_GRASP_RAD
-    assert 0.0 < est < 0.82
-    # linear-jaw estimate: a 65 mm cup needs a smaller close than an 80 mm mug
-    assert est > 0.058
 
 
 def test_cache_dirs_distinct_per_object_and_state():

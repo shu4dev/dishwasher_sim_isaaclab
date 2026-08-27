@@ -2,27 +2,13 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Shared test stubs and fixtures (import the stubs/markers with ``from conftest import ...``)."""
+"""Shared test fixtures (import the markers with ``from conftest import ...``)."""
 
 import os
 
 import pytest
 
 from dishsim import config
-
-
-class FreeWorld:
-    """Stub collision world: everything is valid."""
-
-    def in_collision(self, q):
-        return False
-
-
-class WallWorld:
-    """Joint-space slab: q1 in (-1.2, -0.8) is blocked unless q0 > 0.5 (forces a detour)."""
-
-    def in_collision(self, q):
-        return (-1.2 < q[1] < -0.8) and (q[0] <= 0.5)
 
 
 #: Skip when the baseline geometry cache has not been baked on this machine.

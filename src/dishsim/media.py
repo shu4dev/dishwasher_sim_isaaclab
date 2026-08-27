@@ -35,10 +35,9 @@ class CameraRig:
         from isaaclab.sensors import Camera, CameraCfg  # noqa: PLC0415
 
         # COPY, never alias. Callers pass config.CAMERAS itself, and set_view writes into
-        # _specs — so aliasing let a temporary close-up permanently overwrite the module-level
-        # pose. run_trials.py re-aims "iso" for a final still and then "restores" it from
-        # config.CAMERAS["iso"], which by then held the close-up: the restore was a no-op from
-        # the second trial onward, and every later recording stored the wrong camera.
+        # _specs — so aliasing lets a temporary close-up permanently overwrite the module-level
+        # pose (measured: a re-aimed "iso" made every later restore-from-config a no-op, and
+        # each subsequent recording stored the wrong camera).
         from . import config  # noqa: PLC0415
 
         self._specs = {k: (tuple(v[0]), tuple(v[1])) for k, v in cam_specs.items()}

@@ -9,7 +9,7 @@ per-machine / per-state / per-placement hash separation, the conditional "machin
 "base_placement" hash keys against the frozen v1 manifest, the machine-aware cache and
 media layout vs. the v1 legacy carve-outs, named base placements, third-rack plumbing
 through apply_scenario / resolve_rack_state, and the per-machine scalar overrides
-(RACK_SLIDE_STEPS, RACK_TRAVEL_LIMITS_M). Every test restores the baseline machine —
+(RACK_TRAVEL_LIMITS_M). Every test restores the baseline machine —
 apply_machine("artvip_compact") rewrites all mutated globals back, including the active
 scenario and base placement.
 """
@@ -135,54 +135,12 @@ def test_bosch_cache_dirs_fully_regular_for_every_object():
             assert d.endswith(os.path.join("objects", obj, state))
 
 
-def test_restored_cache_dirs_keep_v1_carveouts():
-    config.apply_machine(BOSCH)
-    config.apply_machine(BASELINE)
-    assert config.scenario_cache_dir("both_out", object_name="mug") == config.CACHE_DIR
-    assert config.scenario_cache_dir("placement", object_name="mug") == os.path.join(
-        config.ASSETS_DIR, "cache", "scenarios", "placement"
-    )
-    assert config.scenario_cache_dir("both_out", object_name="bowl") == os.path.join(
-        config.ASSETS_DIR, "cache", "objects", "bowl", "both_out"
-    )
-
-
-def test_media_dirs_machine_aware_and_restored():
-    config.apply_machine(BOSCH)
-    assert config.scenario_media_dir("trials").endswith(
-        os.path.join("media", "trials", BOSCH, "both_out")
-    )
-    assert config.scenario_media_dir("trials", "third_out").endswith(
-        os.path.join("media", "trials", BOSCH, "third_out")
-    )
-    config.apply_machine(BASELINE)
-    assert config.scenario_media_dir("trials").endswith(os.path.join("media", "trials"))
-    assert config.scenario_media_dir("trials", "placement").endswith(
-        os.path.join("media", "trials", "placement")
-    )
 
 
 # ---------------------------------------------------------------------------------------------
 # 5. named base placements
 # ---------------------------------------------------------------------------------------------
 
-
-def test_apply_base_placement_rewrites_base_and_pedestal():
-    config.apply_machine(BOSCH)
-    # bosch default is the neutral BAKE REFERENCE (v1-identical "front"); the elevated
-    # mounts are sweep candidates applied explicitly
-    assert config.BASE_PLACEMENT == "front"
-    assert config.ROBOT_BASE_POS_W == config.BASE_PLACEMENTS[BOSCH]["front"]["base_pos_w"]
-    config.apply_base_placement("side_high")
-    side = config.BASE_PLACEMENTS[BOSCH]["side_high"]
-    assert config.ROBOT_BASE_POS_W == side["base_pos_w"]
-    config.apply_base_placement("front_high")
-    front_high = config.BASE_PLACEMENTS[BOSCH]["front_high"]
-    assert config.BASE_PLACEMENT == "front_high"
-    assert config.ROBOT_BASE_POS_W == front_high["base_pos_w"]
-    assert config.ROBOT_BASE_QUAT_W == front_high["base_quat_w"]
-    assert config.PEDESTAL_SIZE == front_high["pedestal_size"]
-    assert config.PEDESTAL_POS_W == front_high["pedestal_pos_w"]
 
 
 def test_unknown_base_placement_raises_listing_choices():
@@ -263,22 +221,4 @@ def test_machine_override_keys_are_validated():
 # ---------------------------------------------------------------------------------------------
 
 
-def test_rack_slide_steps_and_travel_limits_override():
-    config.apply_machine(BOSCH)
-    assert config.RACK_SLIDE_STEPS == 672
-    assert config.RACK_TRAVEL_LIMITS_M == (-0.56, 0.0)
-    assert config.RACK_TRAVEL_LIMITS_BY_JOINT_M == {
-        "PrismaticJoint_dishwasher_2_down": (-0.56, 0.0),
-        "PrismaticJoint_dishwasher_2_up": (-0.51, 0.0),
-        "PrismaticJoint_dishwasher_2_third": (-0.51, 0.0),
-    }
-    config.apply_machine(BASELINE)
-    assert config.RACK_SLIDE_STEPS == 240
-    assert config.RACK_TRAVEL_LIMITS_M == (-0.20, 0.0)
-    assert set(config.RACK_TRAVEL_LIMITS_BY_JOINT_M) == {
-        "PrismaticJoint_dishwasher_2_down",
-        "PrismaticJoint_dishwasher_2_up",
-    }
-    assert all(
-        v == config.RACK_TRAVEL_LIMITS_M for v in config.RACK_TRAVEL_LIMITS_BY_JOINT_M.values()
-    )
+

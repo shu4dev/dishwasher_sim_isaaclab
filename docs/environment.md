@@ -5,8 +5,8 @@ the same launchable. This is the **canonical home of the launcher landmines** �
 `CLAUDE.md` link here rather than restating them.
 
 > The project's RL door-opening pipeline lives in git history (branch
-> `archive/rl-door-opening`). OMPL planning is CPU-bound, so the vCPU count below matters more
-> than the GPU.
+> `archive/rl-door-opening`). The FCL planning stack is CPU-bound, so the vCPU count below
+> matters more than the GPU.
 
 ## Hardware
 
@@ -115,25 +115,14 @@ below (the table stays the measurement of record).
 | Item | Value |
 |---|---|
 | venv | `/workspace/isaaclab/env_isaaclab` (`--system-site-packages`, wrapper-native path) |
-| ompl | 2.0.1 (cp312 manylinux wheel; **nanobind bindings** — see API notes below) |
 | python-fcl | 0.7.0.11 |
 | coacd | 1.0.11 |
 | trimesh | 4.12.2 in the venv (in-Kit resolves to 4.11.1 from `omni.pip.compute` via PYTHONPATH precedence) |
 | matplotlib | 3.11.1 |
 | imageio | 2.37.4 in the venv (in-Kit: 2.37.2 from the prebundle) |
 | imageio-ffmpeg | 0.6.0 (preinstalled, bundled static ffmpeg 7.0.2 — no system ffmpeg) |
-| pin (Pinocchio) | 4.1.0 (preinstalled — validates the hand-rolled UR5e analytic IK in `tests/`) |
+| pin (Pinocchio) | 4.1.0 (preinstalled) |
 | pytest | 9.1.1 (system site) |
-
-**OMPL 2.0 nanobind API notes** (differs from the old Py++ bindings all tutorials show):
-`setStateValidityChecker` accepts a plain Python callable; there is no `ob.StateValidityCheckerFn`
-and no `ob.State(space)` constructor — allocate states with `space.allocState()` and index them.
-`ob.GoalStates` exists (dishsim.planners uses it). `ob.PlannerData(si)` + `planner.getPlannerData(pd)` are
-bound and work (verified 2026-07-31, used by `scripts/evaluation/plan_visual.py`): `pd.getEdges(i)` returns
-a plain `list[int]`, `pd.getVertex(i).getTag()` gives RRT-Connect's tree tags (1 = start tree,
-2 = goal tree), vertex states support direct indexing, and `pd.printGraphML()` returns the GraphML
-document as a string (per-vertex reals in its `coords` attribute — the readback fallback
-`planning._coords_from_graphml` parses this).
 
 ### Venv/wrapper interactions (hard-won, 2026-07-29)
 

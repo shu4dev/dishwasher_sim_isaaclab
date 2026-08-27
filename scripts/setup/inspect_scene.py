@@ -2,11 +2,11 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Scene inspection for the dishwasher-manipulation project.
+"""Scene inspection for the dishwasher arrangement project.
 
-Spawns ground plane, dome light, the ArtVIP dishwasher (fixed base), a UR5e + Robotiq 2F-85 on a
-pedestal in front of it, and (optionally) a YCB mug on a side table. Writes a joint report for
-both articulations to ``docs/joint_report.md``, steps physics and asserts stability.
+Spawns ground plane, dome light, the ArtVIP dishwasher (fixed base), a pedestal, and
+(optionally) a YCB mug on a side table. Writes the dishwasher joint report to
+``docs/joint_report.md``, steps physics and asserts stability.
 
 Modes:
   default            dishwasher uses the passive-door RL config (``DISHWASHER_CFG``): the door
@@ -59,7 +59,6 @@ from isaaclab.sensors import FrameTransformerCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.sim import SimulationContext
 from isaaclab.utils.configclass import configclass
-from isaaclab.utils.math import matrix_from_quat
 from isaaclab_physx.physics import PhysxCfg
 
 from pxr import Gf, Usd, UsdGeom, UsdPhysics
@@ -67,18 +66,16 @@ from pxr import Gf, Usd, UsdGeom, UsdPhysics
 # make the (not necessarily pip-installed) project package importable
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
-from dishsim.robots import DISHWASHER_CFG, UR5E_ROBOTIQ_2F_85_CFG, UR5E_USD_PATH  # noqa: E402
+from dishsim.machine import DISHWASHER_CFG  # noqa: E402
 from dishsim.usd_prep import make_dishwasher_rl_usd  # noqa: E402
 
 DISHWASHER_DIR = os.path.join(PROJECT_ROOT, "assets", "artvip", "Articulated_objects", "major_appliances", "dishwasher")
 
 # scene geometry (meters). The dishwasher door is bottom-hinged at its front face and sweeps a
-# ~0.36 m arc toward the robot when opening; the dishwasher stands far enough back that the fully
-# open door clears the pedestal (see the swept-arc numbers in the generated report).
+# ~0.36 m arc toward the base anchor when opening; the dishwasher stands far enough back that
+# the fully open door clears the pedestal (see the swept-arc numbers in the generated report).
 PEDESTAL_SIZE = (0.25, 0.25, 0.25)
-ROBOT_BASE_HEIGHT = PEDESTAL_SIZE[2]
-# world-frame target for the closed-door handle: reachable (UR5e reach 0.85 m from base at
-# (0, 0, 0.25)) and centered in front of the robot
+# world-frame target for the closed-door handle (the fixed spawn convention)
 HANDLE_TARGET_XY = (0.64, 0.0)
 
 
@@ -214,15 +211,6 @@ def analyze_dishwasher_usd(usd_path: str) -> dict:
     return info
 
 
-def analyze_robot_usd() -> dict:
-    """Joint table + collision audit of the UR5e USD with the 2F-85 variant selected."""
-    stage = Usd.Stage.Open(UR5E_USD_PATH)
-    root = stage.GetDefaultPrim()
-    vset = root.GetVariantSet("Gripper")
-    vset.SetVariantSelection("Robotiq_2f_85")
-    return {"joints": usd_joint_table(stage), "collision": usd_collision_audit(stage)}
-
-
 def make_preserve_drives_cfg(usd_path: str, prim_path: str) -> ArticulationCfg:
     """Dishwasher cfg that keeps the USD-authored drives (the honest 'before' picture)."""
     return ArticulationCfg(
@@ -246,16 +234,6 @@ def quat_from_yaw(yaw_deg: float) -> tuple[float, float, float, float]:
     """XYZW quaternion for a rotation about +Z."""
     half = math.radians(yaw_deg) / 2.0
     return (0.0, 0.0, math.sin(half), math.cos(half))
-
-
-def body_pose(articulation, body_name: str):
-    """World position/orientation of a named body (env 0)."""
-    ids, names = articulation.find_bodies(body_name)
-    if not ids:
-        return None, None, None
-    pos = articulation.data.body_link_pos_w.torch[0, ids[0]]
-    quat = articulation.data.body_link_quat_w.torch[0, ids[0]]
-    return pos, quat, names[0]
 
 
 def fmt(value, digits: int = 3) -> str:
@@ -307,7 +285,6 @@ def main():
     dishwasher_usd = resolve_dishwasher_usd(args_cli.dishwasher)
     print(f"[INFO] Dishwasher USD: {dishwasher_usd}")
     dw_info = analyze_dishwasher_usd(dishwasher_usd)
-    robot_info = analyze_robot_usd()
     if dw_info["door_joint"] is None:
         raise RuntimeError("No revolute door joint found in the dishwasher USD.")
     print(f"[INFO] Door joint: {dw_info['door_joint']['name']}, racks: {[j['name'] for j in dw_info['rack_joints']]}")
@@ -366,37 +343,7 @@ def main():
             ),
             init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, PEDESTAL_SIZE[2] / 2)),
         )
-        robot = UR5E_ROBOTIQ_2F_85_CFG.replace(
-            prim_path="{ENV_REGEX_NS}/Robot",
-            init_state=UR5E_ROBOTIQ_2F_85_CFG.init_state.replace(pos=(0.0, 0.0, ROBOT_BASE_HEIGHT)),
-        )
         dishwasher = dishwasher_cfg
-
-        # env-style frames (same configuration the RL task uses) so the report validates them.
-        # TCP: 0.13 m along the gripper-base tool axis (measured Robotiq pad midpoint); fingertip
-        # pads at z=0.12, lateral offset ∓0.059 in the finger-link frames (links are authored
-        # coincident with the mount frame; the mesh geometry hangs off these offsets).
-        ee_frame = FrameTransformerCfg(
-            prim_path="{ENV_REGEX_NS}/Robot/base_link",
-            debug_vis=False,
-            target_frames=[
-                FrameTransformerCfg.FrameCfg(
-                    prim_path="{ENV_REGEX_NS}/Robot/Gripper/Robotiq_2F_85/base_link",
-                    name="ee_tcp",
-                    offset=OffsetCfg(pos=(0.0, 0.0, 0.13)),
-                ),
-                FrameTransformerCfg.FrameCfg(
-                    prim_path="{ENV_REGEX_NS}/Robot/Gripper/Robotiq_2F_85/left_inner_finger",
-                    name="tool_leftfinger",
-                    offset=OffsetCfg(pos=(0.0, -0.0592, 0.1199)),
-                ),
-                FrameTransformerCfg.FrameCfg(
-                    prim_path="{ENV_REGEX_NS}/Robot/Gripper/Robotiq_2F_85/right_inner_finger",
-                    name="tool_rightfinger",
-                    offset=OffsetCfg(pos=(0.0, 0.0592, 0.1199)),
-                ),
-            ],
-        )
 
     scene_cfg = InspectSceneCfg(num_envs=1, env_spacing=3.0)
 
@@ -442,13 +389,12 @@ def main():
     sim.reset()
     print("[INFO] Scene initialized.")
 
-    robot = scene["robot"]
     dishwasher = scene["dishwasher"]
     sim_dt = sim.get_physics_dt()
 
     # standalone scripts must write the default states themselves (in the RL workflow the event
     # manager's reset_scene_to_default does this); also hold the default pose with the PD drives
-    for articulation in (robot, dishwasher):
+    for articulation in (dishwasher,):
         root_pose = articulation.data.default_root_pose.torch.clone()
         root_pose[:, :3] += scene.env_origins
         articulation.write_root_pose_to_sim_index(root_pose=root_pose)
@@ -464,7 +410,6 @@ def main():
     # -- stability run ---------------------------------------------------------------------
     steps = args_cli.steps
     scene.update(sim_dt)
-    robot_root_start = robot.data.root_pos_w.torch[0].clone()
     door_angles, max_vels = [], []
     nan_found = False
     for _ in range(steps):
@@ -472,42 +417,26 @@ def main():
         sim.step()
         scene.update(sim_dt)
         door_angles.append(float(dishwasher.data.joint_pos.torch[0, door_id]))
-        vel_r = robot.data.joint_vel.torch[0]
         vel_d = dishwasher.data.joint_vel.torch[0]
-        max_vels.append(float(torch.max(torch.cat([vel_r.abs(), vel_d.abs()]))))
-        if not (torch.isfinite(vel_r).all() and torch.isfinite(vel_d).all()):
+        max_vels.append(float(vel_d.abs().max()))
+        if not torch.isfinite(vel_d).all():
             nan_found = True
             break
 
-    robot_root_drift = float(torch.linalg.norm(robot.data.root_pos_w.torch[0] - robot_root_start))
     door_final_deg = math.degrees(door_angles[-1]) if door_angles else float("nan")
     tail_vel = max(max_vels[-50:]) if len(max_vels) >= 50 else max(max_vels, default=float("nan"))
 
     stability = {
         "steps": len(door_angles),
         "nan": nan_found,
-        "robot_root_drift_m": robot_root_drift,
         "door_final_deg": door_final_deg,
         "door_max_deg": math.degrees(max(door_angles, default=float("nan"))),
         "tail_max_abs_joint_vel": tail_vel,
     }
-    stability_ok = (not nan_found) and robot_root_drift < 1e-3 and tail_vel < 0.5 and abs(door_final_deg) < 5.0
+    stability_ok = (not nan_found) and tail_vel < 0.5 and abs(door_final_deg) < 5.0
     print(f"[INFO] Stability: {stability} -> {'PASS' if stability_ok else 'FAIL'}")
 
     # -- geometry measurements (env 0, after settling so all buffers are live) --------------
-    base_pos = robot.data.root_pos_w.torch[0]
-    wrist_pos, wrist_quat, _ = body_pose(robot, "wrist_3_link")
-    gripper_base_pos, _, gripper_base_name = body_pose(robot, "base_link_0")
-
-    # env-style frames: TCP + fingertips from the ee FrameTransformer
-    ee_frames = scene["ee_frame"].data.target_pos_w.torch[0]
-    tcp_world = ee_frames[0]
-    lf_pos, rf_pos = ee_frames[1], ee_frames[2]
-    tcp_in_wrist = None
-    if wrist_pos is not None:
-        wrist_rot = matrix_from_quat(wrist_quat.unsqueeze(0))[0]
-        tcp_in_wrist = wrist_rot.T @ (tcp_world - wrist_pos)
-
     # handle: FrameTransformer output vs. ground truth from asset geometry + spawn transform
     handle_world = None
     handle_true = None
@@ -515,19 +444,17 @@ def main():
         handle_world = scene["handle_frame"].data.target_pos_w.torch[0, 0]
     if "handle_asset_pos" in dw_info:
         hx, hy = rot2(handle_rel[:2])
+        ref = dishwasher.data.joint_pos.torch
         handle_true = torch.tensor(
             [dw_pos[0] + hx, dw_pos[1] + hy, dw_pos[2] + handle_rel[2]],
-            dtype=base_pos.dtype,
-            device=base_pos.device,
+            dtype=ref.dtype,
+            device=ref.device,
         )
     handle_frame_err = (
         float(torch.linalg.norm(handle_world - handle_true))
         if handle_world is not None and handle_true is not None
         else None
     )
-    handle_ref = handle_world if handle_world is not None else handle_true
-    handle_dist = float(torch.linalg.norm(handle_ref - base_pos)) if handle_ref is not None else None
-    tcp_handle_dist = float(torch.linalg.norm(handle_ref - tcp_world)) if handle_ref is not None else None
 
     # -- door test (passive config only) ---------------------------------------------------
     door_test = None
@@ -565,8 +492,7 @@ def main():
     mode = "USD drives preserved" if args_cli.preserve_drives else "passive-door RL config"
     lines = ["# Joint report", ""]
     lines.append(f"Generated by `scripts/setup/inspect_scene.py` (variant `{args_cli.dishwasher}`, mode: {mode}).")
-    lines += ["", f"- Dishwasher USD: `{os.path.relpath(dishwasher_usd, PROJECT_ROOT)}`",
-              f"- Robot USD: `{os.path.relpath(UR5E_USD_PATH, PROJECT_ROOT)}` (variant `Gripper=Robotiq_2f_85`)"]
+    lines += ["", f"- Dishwasher USD: `{os.path.relpath(dishwasher_usd, PROJECT_ROOT)}`"]
 
     lines += ["", "## Dishwasher — USD-authored joints (as shipped)", ""]
     lines += usd_joint_md(dw_info["joints"])
@@ -574,7 +500,7 @@ def main():
         "",
         "- Note: USD angular drive gains are authored per-degree; the live table below shows the",
         "  per-radian values PhysX actually uses (×57.3). The as-shipped door drive is a stiff",
-        "  spring toward 90 deg — the RL config zeroes it (see `robots/dishwasher.py`).",
+        "  spring toward 90 deg — the passive config zeroes it (see `src/dishsim/machine.py`).",
         f"- Articulation root(s): `{', '.join(dw_info['articulation_roots'])}`",
         f"- **Door joint: `{dw_info['door_joint']['name']}`** (body `{dw_info.get('door_body_path')}`), "
         f"limits [{dw_info['door_joint']['lower']:.0f}, {dw_info['door_joint']['upper']:.0f}] deg",
@@ -592,34 +518,16 @@ def main():
         f"- Collision approximations: {dw_info['collision']}",
     ]
 
-    lines += ["", "## Robot — USD-authored joints (as shipped)", ""]
-    lines += usd_joint_md(robot_info["joints"])
-    lines += ["", f"- Collision approximations: {robot_info['collision']} (empty = convex-hull defaults)"]
-
     lines += ["", f"## Dishwasher — live articulation (post-init, {mode})", ""]
     lines += live_joint_table(dishwasher)
-    lines += ["", f"- Body names: {dishwasher.body_names}"]
-
-    lines += ["", "## Robot — live articulation (post-init, actuator config applied)", ""]
-    lines += live_joint_table(robot)
     lines += [
         "",
-        f"- Body names: {robot.body_names}",
-        f"- Arm joints: `shoulder_pan_joint, shoulder_lift_joint, elbow_joint, wrist_1_joint, "
-        f"wrist_2_joint, wrist_3_joint`; gripper drive joint: `finger_joint`",
-        f"- Gripper base body: `{gripper_base_name}` at {fmt(gripper_base_pos)} m (the asset has two "
-        f"bodies named `base_link`; the gripper one is auto-renamed)",
-        f"- Robot base (world): {fmt(base_pos)} m",
-        f"- Wrist (`wrist_3_link`, world): {fmt(wrist_pos)} m",
+        f"- Body names: {dishwasher.body_names}",
         "",
-        "### End-effector / handle frames (env-style FrameTransformers)",
+        "### Handle frame (env-style FrameTransformer)",
         "",
-        f"- TCP (`ee_frame[0]`, world): {fmt(tcp_world)} m; in `wrist_3_link` frame: {fmt(tcp_in_wrist)} m",
-        f"- Fingertip pads (world): L {fmt(lf_pos)} / R {fmt(rf_pos)} m",
         f"- Handle frame (world, door closed): {fmt(handle_world)} m; ground truth from asset geometry: "
         f"{fmt(handle_true)} m; error: {fmt(handle_frame_err, 4)} m",
-        f"- Handle distance from robot base: {fmt(handle_dist)} m (UR5e reach ≈ 0.85 m); from TCP: "
-        f"{fmt(tcp_handle_dist)} m",
     ]
 
     lines += ["", "## Stability check", ""]

@@ -175,27 +175,26 @@ constraint equations (not the split values) are what the parametric model enforc
 - RackMatic: ONE position modeled in Stage A (mid); height as a parameter.
 - Counter: real 900 mm-deep-run worktop beside the machine per base placement (A1).
 
-## 9 Real-dish shortlist (14 classes, Robotiq 2F-85: 85 mm jaw, body-grasp gate ≤ 78 mm)
+## 9 Real-dish shortlist (14 classes)
 
-All 14 classes sourced, purchasable, dishwasher-safe, and graspable → include. Flagged
-rows are drinkware over the 78 mm body gate carried by handle/stem grasp instead.
+All 14 classes sourced, purchasable, and dishwasher-safe → include.
 
-| class | product | key dims [mm] | mass [g] | grasp | notes |
-|---|---|---|---|---|---|
-| mug | IKEA 365+ 36 cl (802.783.67) | body dia 90, h 80 | 380 published | handle_pinch | **FLAG body 90 > 78** — same regime as the 93 mm YCB mug precedent |
-| plate | Corelle Winter Frost 10.25 in | dia 260, h ~25 est | 340 published | edge_pinch | Vitrelle ≈ half ceramic mass — easy rim pinch |
-| saucer | IKEA VÄRDERA (402.774.59) | dia 180 | ~230 estimated | edge_pinch | one SKU with the cup |
-| bowl | IKEA 365+ 13 cm (502.589.50) | dia 130, h 60 | ~290 estimated | rim_edge | thin porcelain wall at rim |
-| cup | IKEA VÄRDERA teacup | h 80, body ~95 est | ~280 estimated | handle_pinch | **FLAG body ~95 > 78** |
-| fork | IKEA DRAGON (005.155.27) | L 190 | ~50 estimated | handle_pinch | |
-| spoon | IKEA DRAGON (705.155.24) | L 190 | ~55 estimated | handle_pinch | |
-| knife | IKEA DRAGON (405.155.30) | L 210 | ~80 estimated | handle_pinch | table knife |
-| spatula | IKEA GUBBRÖRA (705.781.30) | 250 × 50 × 10 | 40 published | handle_pinch | |
-| tumbler | Duralex Picardie **160 ml** | body dia 75, h 78 | ~150 estimated | rim_edge | **body 75 ≤ 78 passes with 10 mm margin** — chosen over the 250 ml (body 85, would fail) |
-| wine_glass | IKEA SVALKA 30 cl (300.151.23) | h 180, bowl ~80 est, stem ~8 | 172 derived | handle_pinch | **FLAG bowl ~80 > 78** — stem pinch (correct loading grip anyway) |
-| serving_spoon | IKEA FINMAT 13 in (705.783.85) | L 330 | ~110 estimated | handle_pinch | |
-| container | IKEA 365+ 750 ml square (905.779.31) | 150 × 150 × 70 | ~120 estimated | rim_edge | PP wall pinched at open rim |
-| lid | IKEA 365+ square lid (705.779.51) | 152 × 152 × ~13 | 113 published | edge_pinch | pairs with container |
+| class | product | key dims [mm] | mass [g] | notes |
+|---|---|---|---|---|
+| mug | IKEA 365+ 36 cl (802.783.67) | body dia 90, h 80 | 380 published | |
+| plate | Corelle Winter Frost 10.25 in | dia 260, h ~25 est | 340 published | Vitrelle ≈ half ceramic mass |
+| saucer | IKEA VÄRDERA (402.774.59) | dia 180 | ~230 estimated | one SKU with the cup |
+| bowl | IKEA 365+ 13 cm (502.589.50) | dia 130, h 60 | ~290 estimated | thin porcelain wall at rim |
+| cup | IKEA VÄRDERA teacup | h 80, body ~95 est | ~280 estimated | |
+| fork | IKEA DRAGON (005.155.27) | L 190 | ~50 estimated | |
+| spoon | IKEA DRAGON (705.155.24) | L 190 | ~55 estimated | |
+| knife | IKEA DRAGON (405.155.30) | L 210 | ~80 estimated | table knife |
+| spatula | IKEA GUBBRÖRA (705.781.30) | 250 × 50 × 10 | 40 published | |
+| tumbler | Duralex Picardie **160 ml** | body dia 75, h 78 | ~150 estimated | chosen over the 250 ml (body dia 85) |
+| wine_glass | IKEA SVALKA 30 cl (300.151.23) | h 180, bowl ~80 est, stem ~8 | 172 derived | |
+| serving_spoon | IKEA FINMAT 13 in (705.783.85) | L 330 | ~110 estimated | |
+| container | IKEA 365+ 750 ml square (905.779.31) | 150 × 150 × 70 | ~120 estimated | PP wall |
+| lid | IKEA 365+ square lid (705.779.51) | 152 × 152 × ~13 | 113 published | pairs with container |
 
 Source URLs (dish rows): IKEA/Corelle/Duralex product pages — recorded in the research
 archive (`results/a0_research/`, this session) and inline in the rows' listings above.

@@ -2,14 +2,15 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""dishsim: classical motion planning for dishwasher loading (UR5e + Robotiq 2F-85, Isaac Sim).
+"""dishsim: arrangement planning for dishwasher loading, physics-validated in Isaac Sim.
 
-v0 scope: the object starts rigidly attached to the gripper TCP; OMPL (RRT-Connect) plans a
-collision-free joint-space path that places it at a valid pose in the dishwasher's lower rack.
-The collision world is a standalone, Kit-free module so a future MCTS rearrangement planner can
-reuse it for thousands of fast queries.
+Scope: decide where each object goes in the machine — feasible = collision-free (Kit-free FCL
+world) + physically stable (Isaac settle validation). Object motion is teleportation: a runner
+writes root poses and lets physics settle; there is no robot arm and no motion planning. The
+collision world is a standalone, Kit-free module so a rearrangement planner can run thousands
+of fast placement queries in a plain Python process.
 
-Frame convention (asserted throughout): robot-base frame, meters, Z-up, quaternions XYZW.
+Frame convention (asserted throughout): base frame, meters, Z-up, quaternions XYZW.
 """
 
 import os

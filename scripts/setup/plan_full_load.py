@@ -3,13 +3,13 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Plan the reachable full load — the machine's capacity counted by what the arm can place.
+"""Plan the placeable full load — the machine's capacity counted by collision-free placement.
 
-Kit-free (venv python): reads the baked ``slots/goal_sets.json`` caches, certifies the load
-jointly (every item keeps a collision-free goal config with all earlier items resting at
-their goals), applies the transition z-budget gate, and writes the plan artifact the
-full-load episode consumes plus the reach-map figure. See :mod:`dishsim.capacity` for what
-"counted honestly" means.
+Kit-free (venv python): derives slots live from the collision caches, certifies the load
+jointly (every item's release pose stays collision-free with all earlier items resting at
+their goals), applies the transition z-budget gate, and writes the plan artifact the settle
+run consumes plus the placeability figure. See :mod:`dishsim.capacity` for what "counted
+honestly" means.
 
     scripts/setup/plan_full_load.py --machine bosch800 --placement side_winner
     scripts/setup/plan_full_load.py --machine bosch800 --placement side_winner \
@@ -26,13 +26,13 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from dishsim import capacity, config  # noqa: E402
 
-parser = argparse.ArgumentParser(description="Plan the UR5e-reachable full load.")
+parser = argparse.ArgumentParser(description="Plan the placeable full load.")
 parser.add_argument("--machine", type=str, default=None,
                     help="Machine name (see config.MACHINES); default: the v1 baseline.")
 parser.add_argument("--placement", type=str, default=None,
                     help="Named base placement (see config.BASE_PLACEMENTS).")
 parser.add_argument("--classes", type=str, default=None,
-                    help="Comma list restricting the class pool (default: robot-capable set).")
+                    help="Comma list restricting the class pool (default: every registry class).")
 parser.add_argument("--cap", type=str, default=None,
                     help="Per-class caps, e.g. 'fork=8,plate=4'.")
 parser.add_argument("--policy", type=str, default="plates_first",
@@ -65,7 +65,7 @@ def main() -> int:
 
     out = args.out or os.path.join(PROJECT_ROOT, "results", "capacity", config.MACHINE,
                                    config.BASE_PLACEMENT, "full_load_plan.json")
-    fig = args.fig or os.path.join(os.path.dirname(out), "reachability.png")
+    fig = args.fig or os.path.join(os.path.dirname(out), "placeability.png")
 
     # tables for the figure, reloaded per state under its own scenario (same hash checks)
     tables = {}
@@ -79,7 +79,7 @@ def main() -> int:
                 phase.state, sorted(phase.funnel))
     finally:
         config.apply_scenario(entry)
-    capacity.render_reachability_figure(
+    capacity.render_placeability_figure(
         plan, tables, fig) if tables else print("[WARN] no phases with tables; figure skipped")
 
     capacity.write_plan(plan, out, extra={
@@ -94,7 +94,7 @@ def main() -> int:
         comp = ", ".join(f"{k}={v}" for k, v in sorted(phase.counts().items())) or "-"
         print(f"{phase.state:<12} {len(phase.items):<7} {comp}")
         for cls, f in sorted(phase.funnel.items()):
-            print(f"  {cls:<10} slots {f['slots_total']:>3}  reachable {f['reachable']:>3}  "
+            print(f"  {cls:<10} slots {f['slots_total']:>3}  placeable {f['placeable']:>3}  "
                   f"assigned {f['assigned']:>3}  stopped_by {f['stopped_by']}")
     print(f"\n[INFO] FULL LOAD = {plan.total_items} items "
           f"({config.MACHINE} @ {config.BASE_PLACEMENT}, policy {plan.policy})")
@@ -102,7 +102,7 @@ def main() -> int:
     if args.fig_docs:
         import shutil
         dst = os.path.join(PROJECT_ROOT, "docs", "figures",
-                           f"{config.MACHINE}_reachable_capacity.png")
+                           f"{config.MACHINE}_placeable_capacity.png")
         shutil.copyfile(fig, dst)
         print(f"[INFO] figure copied to {os.path.relpath(dst, PROJECT_ROOT)} "
               f"(add provenance to docs/figures/README.md)")

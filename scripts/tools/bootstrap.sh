@@ -35,6 +35,5 @@ echo "[INFO] restoring the public archive (caches, props, machine USDs, results)
 "$VENV/bin/python" "$ROOT/scripts/tools/restore_assets.py" "${REPO_ARGS[@]}"
 
 echo "[INFO] bootstrap complete — try:"
-echo "  scripts/run_kit.sh scripts/experiment/run_task.py --headless --enable_cameras \\"
-echo "      --machine bosch800 --placement side_winner --scenario placement \\"
-echo "      --spawn \"cup=1\" --seed 1 --run_id bringup"
+echo "  $VENV/bin/python scripts/setup/plan_full_load.py --machine bosch800 --placement side_winner"
+echo "  scripts/run_kit.sh scripts/setup/capacity_fill.py --headless --enable_cameras"

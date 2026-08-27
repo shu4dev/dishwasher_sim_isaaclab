@@ -2,7 +2,6 @@
 # Versions are the measured working set recorded in docs/environment.md ("Planning stack").
 # Install into a --system-site-packages venv created from Kit's python (see docs/environment.md):
 #   /workspace/isaaclab/env_isaaclab/bin/pip install -r requirements-planning.txt
-ompl==2.0.1
 python-fcl==0.7.0.11
 coacd==1.0.11
 trimesh==4.12.2

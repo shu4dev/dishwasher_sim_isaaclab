@@ -12,8 +12,7 @@ delta < 5 mm / 3 deg over the last 30 settle steps; unstable items are parked ag
 recorded (honest capacity).
 
 Then the CLOSABILITY check: both rack drive targets ramp to the stowed position (motorized
-slide-in — the mug campaign demonstrated the robot performing rack slides; here the drives
-stand in so the check isolates the load geometry), settle, and every item must ride its rack
+slide-in), settle, and every item must ride its rack
 without being displaced (> 10 mm / 10 deg) or knocked over. The racks re-extend for the
 beauty pass: fixed stills + a 360-degree orbit clip.
 
@@ -89,7 +88,7 @@ def main() -> None:
     if report["closability_violations"]:
         print(f"[WARN] z-budget flags: {report['closability_violations']}")
 
-    scene_cfg = dscene.make_scene_cfg(with_object=False, with_robot_contacts=False)
+    scene_cfg = dscene.make_scene_cfg()
     # one rigid object per planned item, parked in a grid 2 m to the side
     for k, it in enumerate(items):
         park = ((-2.0 - 0.35 * (k % 6), -1.5 + 0.35 * (k // 6), 0.10), (0.0, 0.0, 0.0, 1.0))
@@ -116,11 +115,11 @@ def main() -> None:
     sim.reset()
     if rig is not None:
         rig.apply_poses(sim.device)
-    dscene.write_default_states(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
+    dscene.write_default_states(scene)
     dscene.assert_frames(scene)
     dt = sim.get_physics_dt()
-    device = scene["robot"].data.joint_pos.torch.device
     dw = scene["dishwasher"]
+    device = dw.data.joint_pos.torch.device
     rack_ids = [dw.find_joints(j)[0][0] for j in RACK_JOINTS]
 
     video = None
@@ -196,10 +195,10 @@ def main() -> None:
         frac = (s + 1) / args_cli.slide_steps
         tgt = {j: (-0.20 + 0.20 * frac) for j in RACK_JOINTS}
         dscene.set_rack_target_override(tgt)
-        dscene.hold_targets(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
+        dscene.hold_targets(scene)
         step(1, cam="front")
     for _ in range(240):
-        dscene.hold_targets(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
+        dscene.hold_targets(scene)
         step(1, cam="front")
     rack_err = max(abs(float(dw.data.joint_pos.torch[0, i])) for i in rack_ids)
     rack_ride = {rack: dw.data.body_pos_w.torch[0, bi].cpu().numpy() - rack_pos_pre[rack]
@@ -242,10 +241,10 @@ def main() -> None:
         frac = (s + 1) / args_cli.slide_steps
         tgt = {j: (0.0 - 0.20 * frac) for j in RACK_JOINTS}
         dscene.set_rack_target_override(tgt)
-        dscene.hold_targets(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
+        dscene.hold_targets(scene)
         step(1, cam="iso")
     for _ in range(180):
-        dscene.hold_targets(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
+        dscene.hold_targets(scene)
         step(1, cam="iso")
     if video is not None:
         video.close()

@@ -13,7 +13,7 @@ helpers are Kit-free).
 Cache layout::
 
     assets/cache/
-      meshes/<name>.obj          # body-frame meshes (statics + robot links + object)
+      meshes/<name>.obj          # body-frame meshes (statics + object)
       scene_state.json           # manifest: frames, poses, transforms, config hash
       coacd/<name>_<hash>/piece_*.obj   # written by scripts/setup/decompose_meshes.py
 """
@@ -37,10 +37,6 @@ DISHWASHER_BODIES = ["E_body_5", "E_door_4", "E_shelf_03", "E_shelf_1_04"]
 def dishwasher_bodies() -> list[str]:
     """The active machine's extractable rigid bodies (adds the third rack when present)."""
     return DISHWASHER_BODIES + (["E_shelf_third"] if config.HAS_THIRD_RACK else [])
-#: arm links whose meshes move with fk_all_links
-ARM_LINKS = ["base_link", "shoulder_link", "upper_arm_link", "forearm_link", "wrist_1_link", "wrist_2_link", "wrist_3_link"]
-
-
 def config_hash() -> str:
     """Hash of every config value the collision world depends on (cache invalidation key)."""
     payload = {
@@ -133,16 +129,14 @@ def dump_cache(scene, sim, cache_dir: str = config.CACHE_DIR) -> str:
     """Dump body-frame meshes + the scene_state.json manifest from the LIVE settled scene.
 
     Must run with ``use_fabric=False`` (stale-transform trap) after the scene has settled at
-    the v0 static state. Asserts live link poses against the analytic FK before writing.
+    the static state.
 
     Returns:
         Path to the manifest.
     """
     import trimesh  # noqa: PLC0415
 
-    from . import scene as dscene  # noqa: PLC0415
     from .transforms import T_inv, make_T  # noqa: PLC0415
-    from .ur5e_kin import fk_all_links  # noqa: PLC0415
 
     stage = scene.stage
     mesh_dir = os.path.join(cache_dir, MESH_DIR)
@@ -154,10 +148,7 @@ def dump_cache(scene, sim, cache_dir: str = config.CACHE_DIR) -> str:
         "frame_convention": config.FRAME_CONVENTION,
         "config_hash": config_hash(),
         "object_name": config.OBJECT_NAME,
-        "home_q": list(config.HOME_Q),
         "statics": {},
-        "arm_links": {},
-        "gripper_links": {},
     }
 
     def body_pose_w(articulation, body_name):
@@ -214,62 +205,16 @@ def dump_cache(scene, sim, cache_dir: str = config.CACHE_DIR) -> str:
         "coacd": False,
     }
 
-    # -- robot links ---------------------------------------------------------------------------
-    robot = scene["robot"]
-    fk = fk_all_links(np.array(config.HOME_Q))
-    link_prim_paths = {
-        name: f"{env_path}/Robot/{name}" for name in ARM_LINKS
-    }
-    fk_errs = {}
-    for name in ARM_LINKS:
-        prim = stage.GetPrimAtPath(link_prim_paths[name])
-        assert prim.IsValid(), f"arm link prim missing: {link_prim_paths[name]}"
-        mesh = extract_prim_mesh(prim, stage)
-        if mesh is None:
-            continue  # some links may carry no geometry
-        T_base_link_live = T_base_w @ body_pose_w(robot, name)
-        T_base_link_fk = fk[name]
-        err = float(np.linalg.norm(T_base_link_live[:3, 3] - T_base_link_fk[:3, 3]))
-        fk_errs[name] = err
-        manifest["arm_links"][name] = {"mesh": save_mesh(f"link_{name}", mesh)}
-    assert max(fk_errs.values()) < 2e-3, f"live-vs-FK link pose mismatch: {fk_errs}"
-    manifest["fk_link_errs_m"] = fk_errs
-
-    # -- gripper links: rigid relative to wrist_3 at the frozen aperture ----------------------
-    T_w_wrist3 = body_pose_w(robot, "wrist_3_link")
-    gripper_names = [n for n in robot.body_names if n not in ARM_LINKS]
-    gripper_prim_base = f"{env_path}/Robot/Gripper/Robotiq_2F_85"
-    for name in gripper_names:
-        prim_name = "base_link" if name == "base_link_0" else name
-        prim = stage.GetPrimAtPath(f"{gripper_prim_base}/{prim_name}")
-        if not prim.IsValid():
-            continue
-        mesh = extract_prim_mesh(prim, stage)
-        if mesh is None:
-            continue
-        T_wrist3_link = T_inv(T_w_wrist3) @ body_pose_w(robot, name)
-        manifest["gripper_links"][name] = {
-            "mesh": save_mesh(f"gripper_{name}", mesh),
-            "T_wrist3_link": T_wrist3_link.tolist(),
-        }
-
-    # -- carried object ------------------------------------------------------------------------
-    obj = scene["carried_object"]
-    obj_prim = stage.GetPrimAtPath(f"{env_path}/CarriedObject")
-    mesh = extract_prim_mesh(obj_prim, stage)
-    assert mesh is not None, "no meshes under CarriedObject"
-    T_wrist3_obj_live = T_inv(T_w_wrist3) @ make_T(
-        obj.data.root_pos_w.torch[0].cpu().numpy(), obj.data.root_quat_w.torch[0].cpu().numpy()
-    )
-    T_wrist3_obj_analytic = dscene.t_wrist3_obj()
-    weld_dev = float(np.linalg.norm(T_wrist3_obj_live[:3, 3] - T_wrist3_obj_analytic[:3, 3]))
-    assert weld_dev < 2e-3, f"live weld transform deviates {weld_dev*1e3:.2f} mm from analytic"
+    # -- object mesh (body frame, Kit-free source) ---------------------------------------------
+    # every class ships a body-frame OBJ beside its physics USD (the same file
+    # fill_plan.validate_plan collides) — no live extraction needed for a free object
+    obj_mesh = trimesh.load(
+        os.path.join(config.ASSETS_DIR, "props", "meshes", f"{config.ACTIVE_OBJECT}.obj"),
+        force="mesh")
     manifest["object"] = {
-        "mesh": save_mesh("object", mesh),
-        "T_wrist3_obj": T_wrist3_obj_analytic.tolist(),
+        "mesh": save_mesh("object", obj_mesh),
         "coacd": True,
     }
-    manifest["t_wrist3_tcp"] = dscene.t_wrist3_tcp().tolist()
 
     # -- static machine state + scenario (recorded for review; not part of config_hash) -------
     from . import scene as _s  # noqa: PLC0415

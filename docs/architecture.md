@@ -6,113 +6,95 @@ dishwasher_sim_isaaclab/
 ├── scripts/
 │   ├── run_kit.sh                    [Kit launcher: exports the Isaac env, then isaaclab.sh -p]
 │   │
-│   ├── setup/                        [PHASE 1 — assets and the simulation world]
+│   ├── setup/                        [PHASE 1 — assets, the simulation world, collision caches]
 │   │   ├── kit_smoke.py              [dependency + headless-capture gate]
-│   │   ├── inspect_scene.py          [articulation survey -> docs/joint_report.md; also authors
+│   │   ├── inspect_scene.py          [dishwasher survey -> docs/joint_report.md; also authors
 │   │   │                              the passive-door derived USD it inspects]
-│   │   ├── check_scene.py            [scene verification; --measure derives the pad map]
-│   │   ├── calibrate_grasp.py        [per-object pinch calibration (force staircase)]
-│   │   ├── freeze_calibration.py     [freeze measured constants into config.OBJECTS]
-│   │   ├── extract_geometry.py       [dump the settled scene into the collision cache]
+│   │   ├── extract_geometry.py       [dump the settled statics + object mesh into the cache]
 │   │   ├── decompose_meshes.py       [convex FCL pieces (CoACD / analytic parts)]
-│   │   ├── parity_check.py           [FCL vs PhysX agreement gate]
-│   │   ├── goal_configs.py           [slot frames + IK goal sets]
-│   │   ├── build_state.py            [bake one machine state's caches for N classes]
-│   │   ├── reach_map.py              [measure where on the counter a class can be picked]
+│   │   ├── build_state.py            [bake one machine state's caches for N classes
+│   │   │                              (extract -> decompose)]
+│   │   ├── derive_slots.py           [Kit-free: slot table + placeability + slot_detection.png]
 │   │   ├── preview_rack.py           [rack geometry preview PNGs]
-│   │   ├── capacity_fill.py          [fully-loaded scene generator + closability check]
-│   │   └── base_pose_sweep.py        [completed study: robot base-pose sweep (see below)]
+│   │   ├── probe_plate_settle.py     [teleport-release settle distributions per slot]
+│   │   ├── capacity_fill.py          [teleport-settle the hand-authored full load + closability]
+│   │   └── plan_full_load.py         [Kit-free: greedy placeable-capacity plan + figure]
 │   │
-│   ├── experiment/                   [PHASE 2 — run algorithms, write artifacts]
-│   │   ├── run_trials.py             [ONE object: rack reconfigure -> pick -> plan -> place;
-│   │   │                              FROZEN — anchors the v0 baseline result]
-│   │   └── run_task.py               [N objects: spawn -> settle -> sequence -> clear]
-│   │
-│   ├── evaluation/                   [PHASE 3 — reads artifacts only]
-│   │   ├── compute_metrics.py        [trial JSONs -> metrics.json + figures + comparison]
-│   │   ├── render_videos.py          [trajectory .npz -> MP4s + stills (kinematic replay)]
-│   │   ├── verify_replay.py          [replay faithfulness gate, camera-free]
-│   │   └── plan_visual.py            [planner search tree from the recorded query]
+│   ├── evaluation/
+│   │   └── reveal_render.py          [render a capacity plan: teleport, settle, stills + orbit]
 │   │
 │   └── tools/
-│       ├── archive_assets.py         [tar the generated artifacts, push to a private dataset]
-│       └── restore_assets.py         [download, safe-extract, validate caches, run tests]
+│       ├── archive_assets.py         [tar the generated artifacts, push to the public dataset]
+│       ├── restore_assets.py         [download, safe-extract, validate cache hashes, run tests]
+│       └── bootstrap.sh              [fresh-box bring-up: venv + deps + editable + restore]
 │
 ├── src/dishsim/                      [the environment package (installed editable)]
-│   ├── config.py                     [EVERY tunable: object registry, grasps, rack params,
-│   │                                  planner defaults, cameras, tolerances. Tune here.
-│   │                                  Machine selector: apply_machine("bosch800") swaps the
-│   │                                  world to the Bosch 800 twin (MACHINE_GEN, per-machine
-│   │                                  RACK_GEN/scenarios/BASE_PLACEMENTS); v1 stays the
-│   │                                  byte-stable default. Numbers: docs/bosch800_source_data.md]
-│   ├── robots.py                     [UR5e + Robotiq and dishwasher ArticulationCfgs;
-│   │                                  machine-aware v0 USD derivation incl. the third rack]
-│   ├── scene.py                      [scene construction, the wrist weld, gripper control]
+│   ├── config.py                     [EVERY tunable: object registry, rack params, placement
+│   │                                  modes, cameras, tolerances. Tune here. Machine selector:
+│   │                                  apply_machine("bosch800") swaps the world to the Bosch 800
+│   │                                  twin; apply_base_placement selects the frozen base-frame
+│   │                                  anchor. FROZEN CACHE ANCHOR sections are robot-era
+│   │                                  constants that feed config_hash — never tune them.
+│   │                                  Numbers: docs/bosch800_source_data.md]
+│   ├── machine.py                    [dishwasher ArticulationCfgs; machine-aware USD derivation
+│   │                                  incl. the Bosch third rack]
+│   ├── scene.py                      [Kit scene construction: statics + objects, rack drives]
 │   ├── usd_prep.py                   [derived dishwasher USDs; authors the procedural racks;
 │   │                                  make_bosch800_usd authors the Bosch machine from scratch]
 │   ├── rack_gen.py                   [procedural wire racks + cutlery basket + the Bosch
 │   │                                  third-rack tray (Kit-free)]
 │   ├── prop_gen.py                   [procedural props: tumbler, wine glass, container, lid]
-│   ├── geometry.py                   [USD -> mesh extraction + the collision-cache format]
-│   ├── collision_world.py            [Kit-free FCL world; the planners' validity oracle]
-│   ├── ur5e_kin.py                   [analytic UR5e FK/IK, 8 branches (Pinocchio-validated)]
-│   ├── placement.py                  [slot derivation, goal poses and success per mode]
-│   ├── rack_ops.py                   [rack-handle engage + drive-synchronized slide]
-│   ├── fill_plan.py                  [deterministic full-load plan + FCL validation]
-│   ├── base_sweep.py                 [completed study: base-pose sweep engine (see below)]
-│   ├── trajectory.py                 [per-step recording format (Phase 2 -> Phase 3)]
-│   ├── replay.py                     [kinematic playback of a recording (Phase 3)]
-│   ├── plan_debug_io.py              [persist a planning query + search tree]
-│   ├── metrics.py                    [Kit-free aggregation over trial records]
+│   ├── geometry.py                   [USD -> mesh extraction + the collision-cache format +
+│   │                                  config_hash (the cache invalidation key)]
+│   ├── collision_world.py            [Kit-free FCL world; object_in_collision(pieces, T) is
+│   │                                  the teleport-feasibility oracle]
+│   ├── placement.py                  [slot derivation (live, no bake), release poses and
+│   │                                  settle success per mode]
+│   ├── fill_plan.py                  [hand-authored full-load plan + pairwise FCL validation]
+│   ├── capacity.py                   [greedy placeable-capacity planner: slots -> placeable
+│   │                                  pre-scan -> joint certification -> z-budget/settle gates]
 │   ├── media.py                      [camera rig, video writer, contact sheets]
 │   ├── transforms.py                 [pose helpers (XYZW throughout)]
-│   ├── task/                         [the task layer — decides WHAT, never HOW to move]
-│   │   ├── sequencer.py              [which object next, in what order; support + grasp gates]
-│   │   ├── primitives.py             [one object's pick-and-place choreography]
-│   │   ├── motion.py                 [object-agnostic "move A to B" over the planner]
-│   │   ├── layout.py                 [seeded random countertop layouts, with stacking]
-│   │   ├── support.py                [which object rests on which (contact + geometric)]
-│   │   ├── grasp.py                  [state-dependent grasp availability + yaw sweep]
-│   │   ├── recovery.py               [bounded recovery ladder (a registry)]
-│   │   ├── rack.py                   [open the machine: engage a handle, slide a rack]
-│   │   ├── cost.py                   [swappable pick-order heuristics (a registry)]
-│   │   └── episode.py                [episode record + aggregation]
-│   └── planners/                     [the pluggable planner layer]
-│       ├── base.py                   [PlanResult, PlanDebug, the Planner ABC]
-│       ├── ompl_base.py              [shared OMPL query: space, validity, goals, solve]
-│       ├── rrt_connect.py            [bidirectional RRT (default)]
-│       ├── rrt_star.py               [asymptotically optimal RRT]
-│       ├── bit_star.py               [Batch Informed Trees]
-│       ├── prm.py                    [probabilistic roadmap (single-goal here)]
-│       └── registry.py               [name -> class; make_planner(); available()]
+│   ├── checks.py                     [pass/fail gate helpers for scripts]
+│   └── task/                         [Kit-free arrangement helpers]
+│       └── slotting.py               [candidate slots, occupancy conflicts]
 │
-├── tests/                            [435 cases across 25 files; venv pytest, no Kit]
+├── tests/                            [~105 cases across 11 files; venv pytest, no Kit]
 ├── docs/                             [environment, success criteria, measured reports]
 ├── assets/  media/  results/         [generated, gitignored]
 ├── requirements-planning.txt         [pinned planning-venv deps (measured working set)]
 └── pyproject.toml
 ```
 
-## The layer boundary
+## Layering
 
-The task layer (`src/dishsim/task/`) decides WHICH object moves next and WHAT the goal is;
-`motion.py` is object-agnostic "move A to B"; only then comes the pluggable planner. **No task
-concept may reach `planners/`** — enforced mechanically by `tests/test_layer_boundary.py`
-(AST-based). `motion.ExecContext` is a Protocol the episode runner implements after Kit boots;
-a conformance test compares it to the runner's implementation signature-for-signature.
+Kit-free planning on one side, Kit-side validation on the other:
+
+```
+config / geometry (cache format, config_hash)
+        │
+        ▼
+collision_world ── placement ── capacity / fill_plan ── task/slotting
+        (plain venv python: plan an arrangement, certify it collision-free)
+        │
+        ▼  plan artifact (results/capacity/.../full_load_plan.json, fill plan)
+        │
+scene / machine / usd_prep / media   (Kit-side: teleport, settle, judge stability, render)
+```
+
+The boundary is enforced mechanically by `tests/test_kit_boundary.py` (AST-based): only
+`scene.py` and `machine.py` may import `isaaclab`/`pxr`/`omni` at module scope; everything
+else must import in a plain Python process (function-local Kit imports in `geometry.py`'s
+extraction half and `media.py` stay legal).
 
 ## Completed one-off studies
 
-These produced results cited in [success_criteria.md](success_criteria.md) and are kept for
-reproducibility; they are not part of the routine pipeline:
+These produced results cited in [success_criteria.md](success_criteria.md); the code was
+retired to git history when the study froze, and the measured outcomes live in the docs:
 
-- **Base-pose sweep** — `scripts/setup/base_pose_sweep.py` (CLI) + `src/dishsim/base_sweep.py`
-  (engine; also the canonical home of `largest_rectangle`, which `reach_map.py` imports) +
-  `tests/test_base_sweep.py`. A 420-candidate sweep over robot base (x, y, yaw) proving the v4
-  rack, not the base pose, was the binding reachability constraint: the winner matches the
-  front placement on every slot criterion and only deepens the countertop pick band
-  (see "Reachability success bar" in success_criteria.md). Scorecards land in
-  `results/base_sweep/`.
+- **Base-pose sweep (robot era)** — a 420-candidate sweep over robot base (x, y, yaw) that
+  selected the Bosch `side_winner` anchor. The winner survives as a FROZEN base-frame anchor
+  in `config.BASE_PLACEMENTS` (the Bosch caches are baked and expressed in its frame).
 - The rack-*design* harness that produced the v4 rack layout (`rack_design.py`) was retired
-  after the design froze; it lives in git history, and its measured design rules are recorded
-  in [known_limitations.md](known_limitations.md).
+  after the design froze; its measured design rules are recorded in
+  [known_limitations.md](known_limitations.md).

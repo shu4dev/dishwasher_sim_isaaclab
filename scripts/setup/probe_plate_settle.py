@@ -4,11 +4,9 @@
 
 """Measure how a released plate SETTLES in its tine gap — the distribution behind the tolerance.
 
-The place primitive holds the object at a release pose (hover above the slot), drops the weld,
-and settles; the settled pose is judged by ``placement.evaluate_placement``. This probe
-reproduces exactly that initial condition without the arm: teleport the plate to a sampled
-release pose at rest, let it fall, settle, evaluate — one Kit boot covers every feasible gap
-x N repeats, where full episodes would cost a boot per data point.
+The purest form of the teleport pipeline: teleport the plate to a sampled release pose at
+rest, let it fall, settle, judge the settled pose with ``placement.evaluate_placement`` — one
+Kit boot covers every derived gap x N repeats.
 
 Why it exists (2026-08-14): the one measured Bosch plate trial failed ONLY lateral settle,
 14.5 mm against ``tol_lateral_m`` = 0.012 — a v1 tolerance tuned for the 40 mm ArtVIP pitch.
@@ -69,29 +67,24 @@ from dishsim.transforms import T_inv, T_to_pos_quat, make_T  # noqa: E402
 
 def main() -> int:
     cdir = config.scenario_cache_dir(object_name=args_cli.object)
-    gs_path = os.path.join(cdir, "slots", "goal_sets.json")
-    slots_path = os.path.join(cdir, "slots", "slots.json")
-    if not (os.path.exists(gs_path) and os.path.exists(slots_path)):
-        print(f"[FAIL] no baked slots/goal sets under {cdir} — bake the state first")
+    if not os.path.exists(os.path.join(cdir, "scene_state.json")):
+        print(f"[FAIL] no cache under {cdir} — bake the state first")
         return 1
-    slots = {s["slot_id"]: placement.SlotFrame.from_json(s)
-             for s in json.load(open(slots_path))["slots"]}
-    feasible = [g["slot_id"] for g in json.load(open(gs_path))["goal_sets"] if g["configs"]]
-    print(f"[INFO] {args_cli.object}/{config.SCENARIO_NAME}: feasible slots {feasible}")
+    slots = {s.slot_id: s for s in placement.derive_slots(cdir)}
+    feasible = sorted(slots)
+    print(f"[INFO] {args_cli.object}/{config.SCENARIO_NAME}: probing slots {feasible}")
     if not feasible:
-        print("[FAIL] no feasible slots to probe")
+        print("[FAIL] no derived slots to probe")
         return 1
 
     sim = SimulationContext(
         sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg()))
     spec = config.OBJECTS[args_cli.object]
     scene = InteractiveScene(dscene.make_scene_cfg(
-        with_object=False, with_robot_contacts=False,
         objects=[{"name": "probe", "usd_path": spec.usd_path,
-                  "pos": (-2.0, -1.5, 0.10), "quat": (0.0, 0.0, 0.0, 1.0),
-                  "contact_filters": []}]))
+                  "pos": (-2.0, -1.5, 0.10), "quat": (0.0, 0.0, 0.0, 1.0)}]))
     sim.reset()
-    dscene.write_default_states(scene, aperture=config.GRIPPER_APERTURE_OPEN_RAD)
+    dscene.write_default_states(scene)
     dt = sim.get_physics_dt()
     obj = scene["probe"]
     device = obj.data.root_pos_w.torch.device

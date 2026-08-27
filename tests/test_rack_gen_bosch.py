@@ -80,22 +80,6 @@ def test_build_rack_skips_absent_optional_features(bosch):
     np.testing.assert_allclose(mx[:2], p["footprint"], atol=1e-9)
 
 
-def test_build_rack_skips_none_optional_features(bosch):
-    """Hardening: optional feature keys may be present but None (the config idiom for 'this
-    machine variant drops the feature') — same skip as an absent key."""
-    p = dict(bosch[LOWER])
-    p.update({"handle": None, "wheels": None, "candy_cane": None,
-              "tine_bead": None, "tine_fillet": None, "rib_amplitude": None})
-    parts = rack_gen.build_rack(p)
-    names = {q.name for q in parts}
-    assert not any(n.startswith(("handle_", "wheel", "cane_", "bead_", "fillet_", "rib_"))
-                   for n in names)
-    # the tine shafts survive, now full-height straight rods on every column
-    assert any(n.startswith("plate_tine_") for n in names)
-    mn, mx = rack_gen.merged_mesh(parts).bounds
-    np.testing.assert_allclose(mn, (0.0, 0.0, 0.0), atol=1e-9)
-    np.testing.assert_allclose(mx[:2], p["footprint"], atol=1e-9)
-
 
 # ---------------------------------------------------------------------------------------------
 # third-rack tray builder

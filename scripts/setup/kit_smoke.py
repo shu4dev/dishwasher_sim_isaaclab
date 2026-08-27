@@ -6,10 +6,9 @@
 
 Verifies, in one Isaac Sim session:
 
-1. ``ompl``, ``fcl``, ``coacd``, ``trimesh``, ``imageio`` import *inside* the Kit process
-   (run_trials plans in-process, so a Kit/wheel symbol clash would sink the design — fail fast here).
-2. A small RRT-Connect plan solves in-process.
-3. A camera sensor renders headlessly and the frames are non-black: writes
+1. ``fcl``, ``coacd``, ``trimesh``, ``imageio`` import *inside* the Kit process (a Kit/wheel
+   symbol clash would sink the design — fail fast here).
+2. A camera sensor renders headlessly and the frames are non-black: writes
    ``media/smoke/smoke.png`` and a 2 s, 720p, 30 fps ``media/smoke/smoke.mp4`` of a cube dropping.
 
 Run with:
@@ -25,7 +24,7 @@ from isaaclab.app import AppLauncher
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 
-parser = argparse.ArgumentParser(description="Kit-process planning-stack + media smoke test.")
+parser = argparse.ArgumentParser(description="Kit-process collision-stack + media smoke test.")
 parser.add_argument("--out_dir", type=str, default=os.path.join(PROJECT_ROOT, "media", "smoke"))
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -35,7 +34,6 @@ simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
-import math
 import sys
 
 import numpy as np
@@ -56,38 +54,14 @@ def test_imports() -> None:
     import fcl  # noqa: F401
     import imageio  # noqa: F401
     import trimesh  # noqa: F401
-    from ompl import base, geometric, util  # noqa: F401
 
-    import dishsim.ur5e_kin  # noqa: F401  (also runs its import-time self-check)
+    import dishsim.collision_world  # noqa: F401  (the Kit-free planning module imports in-Kit)
 
-    check("in-Kit imports (ompl, fcl, coacd, trimesh, imageio, dishsim)", True)
-
-
-def test_inprocess_plan() -> None:
-    from ompl import base as ob
-    from ompl import geometric as og
-    from ompl import util as ou
-
-    ou.setLogLevel(ou.LOG_WARN)
-    space = ob.RealVectorStateSpace(2)
-    bounds = ob.RealVectorBounds(2)
-    bounds.setLow(0.0)
-    bounds.setHigh(1.0)
-    space.setBounds(bounds)
-    ss = og.SimpleSetup(space)
-    ss.setStateValidityChecker(lambda s: math.hypot(s[0] - 0.5, s[1] - 0.5) > 0.25)
-    start, goal = space.allocState(), space.allocState()
-    start[0], start[1] = 0.05, 0.05
-    goal[0], goal[1] = 0.95, 0.95
-    ss.setStartAndGoalStates(start, goal)
-    ss.setPlanner(og.RRTConnect(ss.getSpaceInformation()))
-    solved = ss.solve(5.0)
-    check("in-process RRT-Connect toy plan", bool(solved) and ss.haveExactSolutionPath())
+    check("in-Kit imports (fcl, coacd, trimesh, imageio, dishsim)", True)
 
 
 def main() -> None:
     test_imports()
-    test_inprocess_plan()
 
     # --- minimal scene: ground, light, one falling cube -----------------------------------
     sim = SimulationContext(sim_utils.SimulationCfg(dt=1.0 / 60.0, device=args_cli.device, physics=PhysxCfg()))

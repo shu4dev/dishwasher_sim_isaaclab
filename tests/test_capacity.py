@@ -2,9 +2,9 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Reachable-capacity planner (dishsim/capacity.py).
+"""Placeable-capacity planner (dishsim/capacity.py).
 
-The joint-certification loop needs real collision caches, so those paths run only when the
+The placeability scans need real collision caches, so those paths run only when the
 restored assets are present (they are gitignored); everything else — the z-budget gate that
 decides the middle-rack class policy, the policy streams, serialization, the figure — is
 Kit-free and cache-free.
@@ -20,7 +20,7 @@ from dishsim import capacity, config, placement
 
 BOSCH_PLACEMENT_CACHE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "assets", "cache", "machines", "bosch800", "objects", "cup", "placement", "slots")
+    "assets", "cache", "machines", "bosch800", "objects", "cup", "placement")
 
 
 class TestZBudget:
@@ -55,16 +55,10 @@ class TestPolicyStreams:
         # a class outside the pool drops out; an emptied group disappears
         assert capacity._class_streams(("plate", ("cup",)), ["cup"]) == [["cup"]]
 
-    def test_capacity_classes_excludes_mug_on_bosch(self):
-        config.apply_machine("bosch800")
-        try:
-            assert "mug" not in capacity.capacity_classes()
-            assert set(capacity.capacity_classes()) == {"plate", "bowl", "cup", "tumbler",
-                                                        "fork"}
-        finally:
-            config.apply_machine(config.MACHINE_BASELINE_NAME)
-            config.apply_scenario("both_out")
-        assert "mug" in capacity.capacity_classes()
+    def test_capacity_classes_is_the_whole_registry(self):
+        # teleport placement has no per-class robot gate — POLICIES decides what a plan
+        # actually requests, so the pool is simply every registry class
+        assert set(capacity.capacity_classes()) == set(config.OBJECTS)
 
 
 def _fake_tables():
@@ -76,7 +70,7 @@ def _fake_tables():
     slots = {0: slot(0, (0.3, 0.0, 0.0)), 1: slot(1, (0.4, 0.0, 0.0))}
     return capacity._StateTables(
         "deadbeef", {"cup": slots},
-        {"cup": {0: np.zeros((3, 6)), 1: np.zeros((0, 6))}},
+        {"cup": {0: True, 1: False}},
         {"cup": {"near": 0, "far": 1}})
 
 
@@ -84,9 +78,9 @@ class TestSerialization:
     def _plan(self):
         item = capacity.PlannedPlacement(
             "cup_00", "cup", 0, "placement", 0, "near", "floor_stand", "lower",
-            np.eye(4), np.eye(4), "pick", 12)
+            np.eye(4), np.eye(4))
         phase = capacity.PhaseCapacity("placement", [item], {
-            "cup": {"slots_total": 2, "reachable": 1, "assigned": 1, "stopped_by": None}})
+            "cup": {"slots_total": 2, "placeable": 1, "assigned": 1, "stopped_by": None}})
         return capacity.CapacityPlan("bosch800", "side_winner", "plates_first",
                                      {"placement": "deadbeef"}, ["cup"], [phase])
 
@@ -98,19 +92,13 @@ class TestSerialization:
         assert loaded["total_items"] == 1
         assert loaded["figure"] == "x"
         it = loaded["phases"][0]["items"][0]
-        assert it["item_id"] == "cup_00" and it["acquire"] == "pick"
+        assert it["item_id"] == "cup_00"
         assert np.array(it["T_base_obj"]).shape == (4, 4)
 
     def test_counts_and_total(self):
         plan = self._plan()
         assert plan.total_items == 1
         assert plan.phases[0].counts() == {"cup": 1}
-
-    def test_figure_smoke(self, tmp_path):
-        plan = self._plan()
-        out = capacity.render_reachability_figure(
-            plan, {"placement": _fake_tables()}, str(tmp_path / "fig.png"))
-        assert os.path.getsize(out) > 10_000
 
 
 @pytest.mark.skipif(not os.path.isdir(BOSCH_PLACEMENT_CACHE),
@@ -122,7 +110,7 @@ class TestAgainstRealCaches:
         try:
             tables = capacity.load_state_tables("placement", ["cup"])
             assert len(tables.slots["cup"]) == 56
-            assert sum(1 for v in tables.goal_sets["cup"].values() if len(v)) > 30
+            assert sum(tables.placeable["cup"].values()) > 30
         finally:
             config.apply_scenario(entry)
 
@@ -130,7 +118,7 @@ class TestAgainstRealCaches:
         config.apply_machine("bosch800")  # default placement: front, caches are side_winner
         try:
             config.apply_scenario("placement")
-            with pytest.raises(RuntimeError, match="config_hash"):
+            with pytest.raises(RuntimeError, match="stale"):
                 capacity.load_state_tables("placement", ["cup"])
         finally:
             config.apply_machine(config.MACHINE_BASELINE_NAME)
@@ -147,6 +135,3 @@ class TestSettleReliabilityGate:
         for pair in (("placement", "cup"), ("placement", "tumbler"), ("middle_out", "cup")):
             assert capacity.MEASURED_SETTLE_RELIABILITY[pair] < capacity.SETTLE_RELIABILITY_BAR
 
-    def test_unmeasured_pairs_pass(self):
-        assert ("third_out", "fork") not in capacity.MEASURED_SETTLE_RELIABILITY
-        assert ("placement", "plate") not in capacity.MEASURED_SETTLE_RELIABILITY

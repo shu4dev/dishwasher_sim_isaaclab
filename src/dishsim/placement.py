@@ -2,20 +2,20 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Placement slots in the lower rack + IK goal-configuration generation (Kit-free).
+"""Placement slots + object goal-pose generation (Kit-free).
 
 Reality check baked in: the ArtVIP ``dishwasher_2`` lower rack (``E_shelf_1_04``) is a shallow
 **wire basket** (~5 cm deep grid of wires), not a plate rack with tall tines — measured in
-the decomposition overlays. The carried mug therefore *stands on the wire floor*; a
+the decomposition overlays. An object therefore *stands on the wire floor*; a
 "slot" is a standing position on a grid derived from the basket geometry (footprint-sized
 cells inset from the rim). The derivation is geometric and recorded per slot (``source``
 field); tolerances come from :mod:`dishsim.config`.
 
-Everything here runs in the plain venv (numpy + trimesh + the FCL world); the only Isaac use
-is the Kit pass in ``scripts/setup/goal_configs.py`` that renders contact sheets.
+Slots derive live from the cached rack geometry (:func:`derive_slots`) — deterministic given
+the cache, which :func:`~dishsim.geometry.load_manifest` hash-guards, so there is no slot bake.
+Everything here runs in the plain venv (numpy + trimesh).
 """
 
-import json
 import os
 from dataclasses import dataclass, field
 
@@ -23,9 +23,7 @@ import numpy as np
 import trimesh
 
 from . import config
-from .geometry import config_hash, load_manifest
-from .transforms import T_inv, make_T
-from .ur5e_kin import JOINT_LIMITS, expand_2pi_wraps, ik_wrist3_all
+from .geometry import load_manifest
 
 # Object-frame values (measured, see config) are read from `config` at CALL time, never bound
 # at import — set_active_object() rewrites the active-object view in place, and an import-time
@@ -79,31 +77,6 @@ class SlotFrame:
             params=d.get("params", {}),
             name=d.get("name"),
         )
-
-
-@dataclass
-class GoalSet:
-    """IK goal configurations for one slot, with the rejection funnel (scarcity is signal)."""
-
-    slot_id: int
-    configs: np.ndarray  # [K, 6] (possibly K == 0)
-    n_pose_samples: int = 0
-    n_ik_solutions: int = 0
-    n_limit_reject: int = 0
-    n_collision_reject: int = 0
-
-    def to_json(self) -> dict:
-        return {
-            "slot_id": self.slot_id,
-            "configs": np.asarray(self.configs).tolist(),
-            "funnel": {
-                "pose_samples": self.n_pose_samples,
-                "ik_solutions": self.n_ik_solutions,
-                "limit_reject": self.n_limit_reject,
-                "collision_reject": self.n_collision_reject,
-                "accepted": int(len(self.configs)),
-            },
-        }
 
 
 def _floor_stand_rack_body() -> str:
@@ -401,8 +374,7 @@ def object_pose_for_mode(slot: SlotFrame, spin: float, lateral: np.ndarray, tilt
             [lateral[0] * 0.25, np.sin(lean) * r + lateral[1] * 0.25, hover + np.cos(lean) * r]
         )
     elif slot.mode == "basket_drop":
-        # cutlery hangs head-DOWN below the gripper (grasped at the handle = top), released
-        # high above the bay so gravity inserts it
+        # cutlery is released head-DOWN, high above the bay, so gravity inserts it
         R_local = (
             Rotation.from_euler("z", tilt[0] * 0.5).as_matrix()
             @ Rotation.from_euler("y", np.pi / 2).as_matrix()  # +x_obj (head) -> -z
@@ -431,125 +403,16 @@ def object_pose_for_mode(slot: SlotFrame, spin: float, lateral: np.ndarray, tilt
     return T
 
 
-def _top_grasp_spin(slot: SlotFrame) -> float | None:
-    """Spin putting the grasped feature at the TOP of the placed object (or None if free).
-
-    For plate_slot the grasp point is a fixed rim location in the object frame and
-    the spin rotates it around the rim: only spins with the gripper ABOVE the object are
-    reachable (any other spin buries the wrist in the rack — measured 0/11 feasible slots
-    with uniform spin). Solved numerically: argmax of the grasp point's world z over spin.
-    """
-    if slot.mode != "plate_slot":
-        return None
-    pos, _ = config.grasp_transform(config.active_object_spec())
-    # the grasped feature in the OBJECT frame: invert the tcp<-obj transform's grasp point.
-    # For edge_pinch it is the rim point on +x_obj; for rim_edge the rim point on +y_obj.
-    spec = config.active_object_spec()
-    u, v = spec.body_center_uv
-    if spec.grasp.family == "edge_pinch":
-        p_g = np.array([u + spec.rim_radius_m, v, 0.0])
-    else:
-        p_g = np.array([u, v + spec.rim_radius_m, spec.bbox_half[2]])
-    spins = np.linspace(0.0, 2.0 * np.pi, 72, endpoint=False)
-    zs = []
-    for s in spins:
-        T = object_pose_for_mode(slot, s, np.zeros(2), np.zeros(2), config.RELEASE_HOVER_M)
-        zs.append((T @ np.append(p_g, 1.0))[2])
-    return float(spins[int(np.argmax(zs))])
-
-
 def sample_goal_poses(slot: SlotFrame, n: int, rng: np.random.Generator) -> list[np.ndarray]:
-    """Sample object poses in the slot's tolerance region (spin, small lateral/tilt).
-
-    The spin is uniform for standing/basket modes; for plate_slot it concentrates
-    in a +-0.5 rad window around the top-grasp spin (see :func:`_top_grasp_spin`).
-    """
+    """Sample object poses in the slot's tolerance region (uniform spin, small lateral/tilt)."""
     poses = []
     hover = float(config.placement_mode_params(slot.mode)["release_hover_m"])
-    spin0 = _top_grasp_spin(slot)
     for _ in range(n):
-        if spin0 is None:
-            spin = rng.uniform(0.0, 2.0 * np.pi)
-        else:
-            spin = spin0 + rng.uniform(-0.5, 0.5)
+        spin = rng.uniform(0.0, 2.0 * np.pi)
         lateral = rng.uniform(-config.SLOT_TOL_LATERAL_M, config.SLOT_TOL_LATERAL_M, 2) * 0.66
         tilt = rng.uniform(-1.0, 1.0, 2) * np.radians(config.SLOT_TOL_TILT_DEG) * 0.3
         poses.append(object_pose_for_mode(slot, spin, lateral, tilt, hover))
     return poses
-
-
-def goal_configs(
-    slot: SlotFrame,
-    world,
-    rng: np.random.Generator,
-    n_samples: int = config.GOAL_POSE_SAMPLES_PER_SLOT,
-    limit_margin: float = config.PLAN_JOINT_BOUNDS_MARGIN_RAD,
-    early_exit_accepted: int | None = None,
-) -> GoalSet:
-    """All valid IK goal configurations for a slot (pose samples x IK branches x wraps).
-
-    Pipeline per pose sample: T_base_wrist3 = T_base_obj . inv(T_wrist3_obj) -> all analytic
-    IK branches -> +-2pi wrap expansion -> joint-limit filter -> collision filter (attached
-    object included, self-check on). Zero surviving configs is signal, not error — the funnel
-    counts say which stage killed a slot.
-
-    Args:
-        early_exit_accepted: Stop sampling once this many configurations are accepted (the
-            base-pose sweep asks "is this slot feasible", not "enumerate its goals"). None —
-            the default, used by the goal bake — keeps the full sample budget, so baked
-            funnels are unchanged.
-    """
-    manifest = world.manifest
-    T_w3_obj = np.array(manifest["object"]["T_wrist3_obj"])
-    T_obj_w3 = T_inv(T_w3_obj)
-    limits = JOINT_LIMITS.copy()
-    limits[:, 0] += limit_margin
-    limits[:, 1] -= limit_margin
-
-    gs = GoalSet(slot_id=slot.slot_id, configs=np.zeros((0, 6)))
-    accepted: list[np.ndarray] = []
-    for T_base_obj in sample_goal_poses(slot, n_samples, rng):
-        gs.n_pose_samples += 1
-        sols = ik_wrist3_all(T_base_obj @ T_obj_w3)
-        gs.n_ik_solutions += len(sols)
-        if len(sols) == 0:
-            continue
-        expanded = expand_2pi_wraps(sols, limits=JOINT_LIMITS, margin=limit_margin)
-        for q in expanded:
-            if np.any(q < limits[:, 0]) or np.any(q > limits[:, 1]):
-                gs.n_limit_reject += 1
-                continue
-            if world.in_collision(q):
-                gs.n_collision_reject += 1
-                continue
-            accepted.append(q)
-        if early_exit_accepted is not None and len(accepted) >= early_exit_accepted:
-            break
-    if accepted:
-        # deduplicate near-identical configs
-        keep: list[np.ndarray] = []
-        for q in accepted:
-            if not any(np.max(np.abs(q - k)) < 1e-3 for k in keep):
-                keep.append(q)
-        gs.configs = np.array(keep)
-    return gs
-
-
-def save_slots(slots: list[SlotFrame], goal_sets: list[GoalSet], out_dir: str) -> tuple[str, str]:
-    """Write slots.json + goal_sets.json under ``out_dir`` (usually the scenario's cache slots dir).
-
-    Both files are stamped with the active scenario and the collision-world ``config_hash`` so
-    consumers can detect a manifest/slots mismatch (legacy files without stamps still load).
-    """
-    os.makedirs(out_dir, exist_ok=True)
-    stamp = {"scenario": config.SCENARIO_NAME, "config_hash": config_hash()}
-    slots_path = os.path.join(out_dir, "slots.json")
-    with open(slots_path, "w") as f:
-        json.dump({"frame": "robot_base", **stamp, "slots": [s.to_json() for s in slots]}, f, indent=2)
-    goals_path = os.path.join(out_dir, "goal_sets.json")
-    with open(goals_path, "w") as f:
-        json.dump({**stamp, "goal_sets": [g.to_json() for g in goal_sets]}, f, indent=2)
-    return slots_path, goals_path
 
 
 def evaluate_placement(slot: SlotFrame, T_base_obj: np.ndarray) -> dict:

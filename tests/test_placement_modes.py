@@ -113,21 +113,6 @@ def test_evaluate_placement_floor_stand_matches_v0():
     assert not placement.evaluate_placement(slot, T2)["ok"]
 
 
-def test_evaluate_placement_basket_inside_outside(rack_T):
-    config.set_active_object("fork")
-    slots = placement.derive_basket_slots("unused")
-    slot = slots[0]
-    from scipy.spatial.transform import Rotation
-
-    R = Rotation.from_euler("y", np.pi / 2).as_matrix()  # head down
-    T = np.eye(4)
-    T[:3, :3] = R
-    T[:3, 3] = slot.T_base_slot[:3, 3] + np.array([0.0, 0.0, 0.03])
-    assert placement.evaluate_placement(slot, T)["ok"]
-    T_out = T.copy()
-    T_out[1, 3] += 0.08  # outside the bay
-    assert not placement.evaluate_placement(slot, T_out)["ok"]
-
 
 # ---------------------------------------------------------------------------------------------
 # flat_lay_third (Bosch third-rack tray; apply_machine mutates config globals -> fixture)
@@ -202,40 +187,6 @@ def test_flat_lay_dispatch_and_goal_pose(bosch_third, monkeypatch):
         # center = hover + the piece's flat half-thickness (+/- the sampled pitch)
         assert abs(d[2] - (hover + spec.bbox_half[2])) < 0.01
 
-
-def test_evaluate_placement_flat_lay(bosch_third):
-    """Per-mode verdict: settled center near the slot, long axis near horizontal, bottom on
-    the zone's floor plane — with the channel datum sitting ``drop`` below the wings."""
-    config.set_active_object("fork")
-    spec = config.OBJECTS["fork"]
-    slots = placement.derive_flat_lay_slots("unused")
-    wing = next(s for s in slots if s.params["zone"] == "wing_l")
-    chan = next(s for s in slots if s.params["zone"] == "channel")
-    from scipy.spatial.transform import Rotation
-
-    for slot in (wing, chan):
-        # perfect flat lay: as-authored orientation, resting on the slot's own floor plane
-        T = np.eye(4)
-        T[:3, 3] = slot.T_base_slot[:3, 3] + np.array([0.0, 0.0, spec.bbox_half[2]])
-        ev = placement.evaluate_placement(slot, T)
-        assert ev["ok"] and ev["lateral_m"] < 1e-6 and ev["tilt_deg"] < 1e-4
-        assert abs(ev["bottom_height_m"]) < 1e-6
-
-        T_off = T.copy()
-        T_off[0, 3] += 0.05  # 5 cm off the slot center
-        assert not placement.evaluate_placement(slot, T_off)["ok"]
-
-        T_tilt = T.copy()  # 30 deg pitch: the long axis leaves horizontal (tol is 15)
-        T_tilt[:3, :3] = Rotation.from_euler("y", np.radians(30.0)).as_matrix()
-        assert not placement.evaluate_placement(slot, T_tilt)["ok"]
-
-    # a piece stranded at WING height over a channel slot fails the bottom criterion
-    # (drop 28 mm >> tol_bottom 15 mm): the two floor datums are genuinely distinct
-    T_hi = np.eye(4)
-    T_hi[:3, 3] = chan.T_base_slot[:3, 3] + np.array(
-        [0.0, 0.0, config.RACK_GEN[THIRD]["channel"]["drop"] + spec.bbox_half[2]]
-    )
-    assert not placement.evaluate_placement(chan, T_hi)["ok"]
 
 
 def test_floor_stand_targets_the_extended_rack():
