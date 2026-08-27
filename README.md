@@ -1,8 +1,8 @@
 <div align="center">
   <h1 align="center"> dishwasher_sim_isaaclab </h1>
-  <h3 align="center"> Arrangement planning for dishwasher loading, physics-validated in Isaac Sim </h3>
+  <h3 align="center"> A physics-validated rearrangement planning benchmark (Isaac Sim) </h3>
   <p align="center">
-    Collision-free placement · Physical settle validation · Rearrangement planning substrate
+    Saved problem instances · Closed-loop algorithms · Physics settles every move
   </p>
   <p align="center">
     <img src="https://img.shields.io/badge/Isaac%20Sim-6.0.1--rc.7-76B900?style=flat&logo=nvidia&logoColor=white" alt="Isaac Sim 6.0.1-rc.7"/>
@@ -30,10 +30,12 @@
 
 ## 1 Overview
 
-This project solves the dishwasher **arrangement planning problem**: given a 14-class
-kitchen-object library and an articulated dishwasher (the ArtVIP baseline with procedural
-wire racks, or a self-authored **Bosch 800 digital twin** with a third rack), decide **where
-each object goes**. A placement is feasible when it is
+This repo is a **benchmark for dishwasher rearrangement planning**: given a physically
+settled initial arrangement and an exact target arrangement in an articulated dishwasher
+(experiments run on a self-authored **Bosch 800 digital twin** with a third rack; the ArtVIP
+baseline machine ships too), an algorithm moves one object at a time by **teleport** and
+**physics judges every move**. The 14-class kitchen-object library is scaled to the machines.
+A placement is feasible when it is
 
 - **collision-free** — a Kit-free FCL world (`dishsim.collision_world`) answers "would this
   object, teleported to this pose, interpenetrate the machine or an already-placed object?"
@@ -41,13 +43,9 @@ each object goes**. A placement is feasible when it is
 - **physically stable** — Isaac Sim settles the planned arrangement and judges it against
   per-mode measured tolerances (drift, tilt, seating height, rack closability).
 
-Object motion is **teleportation**: a runner writes root poses and lets physics settle. There
-is no robot arm and no motion planning on this branch — Isaac Sim's only jobs are physics
-validation and evidence rendering. (The earlier UR5e + OMPL manipulation stack lives in git
-history; the RL door-opening pipeline on `archive/rl-door-opening`.) The substrate is built
-for **rearrangement planning**, and ships as a benchmark: saved problem instances (initial
-arrangement → exact target arrangement), a closed-loop runner that settles physics after
-every move and aborts on the first fault, and a greedy baseline to beat.
+There is no robot arm and no motion planning on this branch — Isaac Sim's only jobs are
+physics validation and evidence rendering. (The earlier UR5e + OMPL manipulation stack lives
+in git history; the RL door-opening pipeline on `archive/rl-door-opening`.)
 
 The pipeline, mirrored by the layout of `scripts/`:
 
@@ -92,7 +90,24 @@ The pipeline, mirrored by the layout of `scripts/`:
   </tr>
 </table>
 
-### 1.1 What "full load = N" means
+### 1.1 The benchmark
+
+- **Instance** (saved JSON, seeded — every algorithm sees byte-identical inputs): a machine
+  rack state, a roster of objects at **measured settled** initial poses, and an exact target
+  pose per object (the capacity plan's jointly-certified release pose, carrying its slot so
+  the at-goal verdict reuses the per-mode settle tolerances).
+- **Move**: `move(object, pose)` — teleport anywhere, a rack slot or the counter buffer band
+  (just physical space; its finite capacity emerges from geometry).
+- **Episode** (closed-loop): the harness FCL-pre-checks each commanded pose, executes it,
+  settles physics, and hands the algorithm the measured state via `next_move(obs)`. The
+  episode **aborts on the first fault** — colliding command, unstable settle, or a disturbed
+  neighbor — or at the move budget (3× roster by default).
+- **Scoring** per episode record: solved, fraction-at-goal, moves used, planning time.
+- **Your algorithm**: one class implementing `reset(instance, world)` / `next_move(obs)`
+  (`src/dishsim/rearrange.py`) plus one line in `ALGORITHMS` in
+  `scripts/experiment/run_rearrange.py`. A greedy baseline ships as the thing to beat.
+
+### 1.2 What "full load = N" means
 
 The machine's geometric capacity (every slot the racks provide) and its **placeable**
 capacity are different numbers. `dishsim/capacity.py` counts honestly:
@@ -111,7 +126,7 @@ capacity are different numbers. `dishsim/capacity.py` counts honestly:
 
 Definitions and the measured numbers: [docs/success_criteria.md](docs/success_criteria.md).
 
-### 1.2 Object library
+### 1.3 Object library
 
 Sourced from YCB scans or generated procedurally, then **scaled to fit** — the baseline
 machine is compact (lower rack 366 × 287 mm, 154 mm inter-rack clearance, 30 mm tine pitch),
@@ -143,7 +158,7 @@ On the Bosch twin, `basket_drop` classes reroute to the third-rack flat lay
 `both_out`, `both_in`, `placement`, `placement_open` on the baseline; the Bosch adds
 `third_out` and `middle_out` (one loadable rack extended per loading phase).
 
-### 1.3 Reference documentation
+### 1.4 Reference documentation
 
 | Doc | Contents |
 |---|---|
@@ -292,7 +307,10 @@ scripts/run_kit.sh scripts/experiment/run_rearrange.py --headless \
     --instances "results/instances/bosch800/placement/*.json" --algorithms greedy
 ```
 
-Judge every Kit run from its log (`[RESULT] PASS`, no tracebacks) — exit codes lie.
+Judge every Kit run from its log (`[RESULT] PASS`, no tracebacks) — exit codes lie. Steps
+3–4 double as the first-run validation of the benchmark pipeline on a fresh box: watch the
+abort reasons in the episode records, and note the fault/reset thresholds live as module
+constants in `src/dishsim/rearrange.py` (deliberately outside `config.py`).
 
 ## 4 Running
 
@@ -312,7 +330,7 @@ $PY scripts/setup/decompose_meshes.py --scenario placement --object cup
 
 - `--scenario`: machine state — `both_out`, `both_in`, `placement`, `placement_open`
   (+ `third_out`, `middle_out` on the Bosch)
-- `--object`: object class (any key from the table in §1.2)
+- `--object`: object class (any key from the table in §1.3)
 - `--force` (decompose): re-decompose even when cached pieces exist
 
 ### 4.2 Plan an arrangement (Kit-free)

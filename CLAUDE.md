@@ -4,14 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Isaac Sim **environments** for the dishwasher **arrangement planning problem**: decide where
-each object of a 14-class kitchen-object library goes in an articulated dishwasher (ArtVIP
-baseline with procedural RACK_GEN v4 racks, or the self-authored Bosch 800 twin). Feasible =
-**collision-free** (Kit-free FCL pose query, `CollisionWorld.object_in_collision`) +
-**physically stable** (Isaac settle validation). Object motion is **teleportation** — there is
-no robot arm, no grasping, and no motion planning on this branch (that stack lives in git
-history / `main`; the old RL door-opening pipeline on `archive/rl-door-opening`). Isaac Sim is
-the physics validator and evidence renderer only; planning runs in the plain venv.
+A **physics-validated rearrangement planning benchmark**: given a settled initial arrangement
+and an exact target arrangement of kitchen objects (14-class library) in an articulated
+dishwasher (experiments: the self-authored Bosch 800 twin; the ArtVIP baseline ships too),
+an algorithm moves one object at a time by **teleportation** and Isaac settles every move.
+Feasible = **collision-free** (Kit-free FCL pose query, `CollisionWorld.object_in_collision`)
++ **physically stable** (Isaac settle validation). There is no robot arm, no grasping, and no
+motion planning on this branch (that stack lives in git history / `main`; the old RL
+door-opening pipeline on `archive/rl-door-opening`). Isaac Sim is the physics validator and
+evidence renderer only; planning runs in the plain venv.
 
 The pipeline is a **rearrangement benchmark**: bake a machine state's collision caches
 (`build_state.py`) → generate settled problem instances (`gen_instances.py`: exact target
@@ -47,7 +48,10 @@ Isaac-side work goes through `scripts/run_kit.sh` (exports the Isaac env, then
 Pure planning work uses the venv python directly. Run from this project root:
 
 ```bash
-# planning-stack tests (venv, no Kit; plugin autoload off — hydra's plugin breaks outside Kit)
+# planning-stack tests (venv, no Kit; plugin autoload off — hydra's plugin breaks outside Kit).
+# The suite is 3 Kit-free files: two frozen-invariant pins + the benchmark's toy-oracle check.
+# test_rack_gen_frozen.py is float-byte sensitive — it may fail under a non-pinned Python
+# stack (e.g. a dev Mac), but it MUST pass in this box's venv; failing HERE is real drift.
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m pytest tests/
 
 # plan the placeable full load (Kit-free; needs restored/baked caches)
@@ -89,6 +93,31 @@ scripts/run_kit.sh scripts/setup/inspect_scene.py --headless --test_door
 **`./isaaclab.sh -p` exits 0 even when the wrapped script crashes.** Always verify success from
 log content (`[RESULT] PASS`, absence of tracebacks / `free(): invalid pointer`), never from the
 exit code.
+
+## First run on the Isaac box (PENDING VALIDATION — delete this section once green)
+
+`gen_instances.py` and `run_rearrange.py` (2026-08-27) passed everything checkable Kit-free
+(toy-oracle tests, compilation, a 406-combo config-hash oracle byte-identical) but have
+**never run under Kit**. Probe in this order, judging each from `[RESULT] PASS`:
+
+```bash
+scripts/run_kit.sh scripts/setup/kit_smoke.py --headless --enable_cameras
+# boot + FCL-under-Kit + caches + plan, all in one shot:
+scripts/run_kit.sh scripts/setup/gen_instances.py --headless \
+    --mode perturbed --state placement --n 3 --seed 0
+scripts/run_kit.sh scripts/experiment/run_rearrange.py --headless \
+    --instances "results/instances/bosch800/placement/*.json" --algorithms greedy
+# then once per state with --video --enable_cameras for visual confirmation
+```
+
+What to watch, and where the knobs live (module constants in `src/dishsim/rearrange.py` —
+deliberately NOT in config.py, so they can never touch `config_hash`):
+- many `"init-mismatch"` aborts → recorded initials don't re-settle reproducibly; widen
+  `INIT_MATCH_POS_M`/`INIT_MATCH_ROT_DEG` or make the generator double-settle before recording.
+- `"disturbed"` aborts on `third_out` traced to fork drop-bounce (60 mm release hover) →
+  raise `DISTURB_POS_M` or add a `flat_lay_third` carve-out in `IsaacOracle`.
+- `"unstable-settle"` on legitimate placements → check `MOVE_DEV_MAX_M` (0.06 absorbs the
+  hover drop + roll-to-tine; measured, git history).
 
 ## Launcher landmines (why the scripts look the way they do)
 
@@ -141,6 +170,14 @@ it editable). Full module tree + layering: `docs/architecture.md`. Load-bearing 
   measured settle-reliability gates (`MEASURED_SETTLE_RELIABILITY`) and the z-budget
   closability gate are what keep the count honest. Evaluation aggregates plan/settle
   artifacts, never re-derives verdicts.
+- `rearrange.py` — the benchmark core, Kit-free by an oracle/world seam: `run_episode` is
+  driven by an oracle (`IsaacOracle` in `run_rearrange.py`; a toy oracle in the test) and the
+  `ArrangementWorld` FCL mirror, so algorithms and the driver never import Kit. Episodes
+  abort on the FIRST fault; commanded poses are release-hover poses (never zero hover — see
+  the placement.py trap); at-goal is judged on the SETTLED pose via `evaluate_placement`.
+  All fault/settle knobs are module constants here, deliberately outside `config.py` so they
+  can never feed `config_hash`. New algorithms: implement `reset(instance, world)` /
+  `next_move(obs)`, add one line to `ALGORITHMS` in `run_rearrange.py`.
 - `usd_prep.py` — derived dishwasher USDs; downloaded originals are never modified.
 - `machine.py` — dishwasher ArticulationCfgs; requires `apply_machine`/`apply_scenario`
   BEFORE import (the derived USD binds at import time).
