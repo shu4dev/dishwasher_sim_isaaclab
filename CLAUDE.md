@@ -13,14 +13,18 @@ no robot arm, no grasping, and no motion planning on this branch (that stack liv
 history / `main`; the old RL door-opening pipeline on `archive/rl-door-opening`). Isaac Sim is
 the physics validator and evidence renderer only; planning runs in the plain venv.
 
-The pipeline: bake a machine state's collision caches (`build_state.py`) → plan an
-arrangement Kit-free (`plan_full_load.py` → `dishsim/capacity.py`, greedy, jointly certified,
-z-budget + measured settle-reliability gates) → teleport + settle + closability in Kit
-(`capacity_fill.py`) → render evidence (`reveal_render.py`). Slots derive live from the cached
-rack geometry (`placement.derive_slots`) — there is no slot/goal bake. Future direction:
-rearrangement sequencing (initial → goal state under occupancy/blocking); `task/slotting.py`
-is the in-tree seed, and the robot-era layout/support/phases modules (countertop layouts,
-support graph + clearing order, loading waves) live in git history for when that work starts.
+The pipeline is a **rearrangement benchmark**: bake a machine state's collision caches
+(`build_state.py`) → generate settled problem instances (`gen_instances.py`: exact target
+poses from the capacity plan, seeded initial arrangements, saved JSON artifacts) → run
+algorithms closed-loop (`run_rearrange.py`: one persistent Kit session; every move teleports
+one object, settles, and ABORTS the episode on the first fault — colliding command, unstable
+settle, disturbed neighbor — under a move budget) → render evidence on demand
+(`reveal_render.py`, `--video`). The benchmark core is `dishsim/rearrange.py` (Kit-free
+episode driver + FCL arrangement mirror + greedy baseline; algorithms implement
+`reset(instance, world)` / `next_move(obs)`). `dishsim/capacity.py` stays as the target
+generator and packing baseline. Slots derive live from the cached rack geometry
+(`placement.derive_slots`) — there is no slot/goal bake. Experiments run on the Bosch only;
+the robot-era layout/support/phases modules live in git history.
 
 Runs on Isaac Sim **6.0.1-rc.7** + Isaac Lab **3.0.0** at `/workspace/isaaclab` (this repo is
 nested inside that tree, but is an independent git repo). Never upgrade or downgrade Isaac Sim /
@@ -50,8 +54,13 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m 
 /workspace/isaaclab/env_isaaclab/bin/python scripts/setup/plan_full_load.py \
     --machine bosch800 --placement side_winner
 
-# physically settle the hand-authored 29-item load + closability check + media
-scripts/run_kit.sh scripts/setup/capacity_fill.py --headless --enable_cameras
+# generate settled benchmark instances (saved artifacts; per rack state)
+scripts/run_kit.sh scripts/setup/gen_instances.py --headless \
+    --mode perturbed --state placement --n 10 --seed 0
+
+# run algorithms closed-loop against them (one Kit session per state batch)
+scripts/run_kit.sh scripts/experiment/run_rearrange.py --headless \
+    --instances "results/instances/bosch800/placement/*.json" --algorithms greedy
 
 # render a planned load, settled (stills + orbit)
 scripts/run_kit.sh scripts/evaluation/reveal_render.py --headless --enable_cameras \
@@ -69,7 +78,8 @@ scripts/run_kit.sh scripts/setup/inspect_scene.py --headless --test_door
 
 # entry points: scripts/ is split by phase (see README Usage)
 #   setup/      kit_smoke, inspect_scene, extract_geometry, decompose_meshes, build_state,
-#               derive_slots, preview_rack, probe_plate_settle, capacity_fill, plan_full_load
+#               derive_slots, preview_rack, gen_instances, plan_full_load
+#   experiment/ run_rearrange
 #   evaluation/ reveal_render
 #   tools/      archive_assets, restore_assets, bootstrap.sh
 # Caches ship in the public archive — restore first (tools/restore_assets.py), never rebake
@@ -89,8 +99,8 @@ crashes or silent import shadowing, not clean errors:
    `isaaclab.*` scene modules, or `pxr`.
 2. **The package is `dishsim`, deliberately not matching the repo directory name** — Kit's
    extension scan turns a same-named directory into a namespace package that shadows the real
-   one. Keep module-scope `pxr`/`omni` imports out of the package (enforced by
-   `tests/test_kit_boundary.py`: only `scene.py`/`machine.py` import Kit at module scope).
+   one. Keep module-scope `pxr`/`omni` imports out of the package (convention: only
+   `scene.py`/`machine.py` import Kit at module scope — a violation crashes venv imports).
 3. **Isaac Lab 3.0 API**: quaternions are **XYZW** everywhere; data buffers are `ProxyArray` —
    append `.torch` (and `.torch.clone()`); kinematic writes use the keyword-only `*_index`
    methods.
@@ -148,9 +158,9 @@ that's `E_body_5`, not the asset origin), and this Isaac Lab is XYZW-quaternion 
 - `assets/`, `media/`, `results/`, `logs/` are gitignored; never commit them (asset sources +
   licenses in README.md). Curated report figures go to `docs/figures/` (tracked, with
   provenance in `docs/figures/README.md`).
-- **Every phase that produces a result inside Isaac Sim must also produce PNG/MP4 evidence**
-  under `media/<phase>/` (the user cannot watch the viewport). Headless capture =
-  `--headless --enable_cameras`; fixed front/top/iso cameras from `config.py`; short 720p clips.
+- Media capture is **on-demand** (`--video`, needs `--enable_cameras`): instance/episode JSON
+  records are the primary artifacts of a benchmark run; render PNG/MP4 under `media/<phase>/`
+  when a result needs visual evidence (the user cannot watch the viewport).
 - One frame convention everywhere, asserted in code: base frame, meters, Z-up, XYZW.
 - The dishwasher base stays fixed (`fix_root_link=True`); the door stays locked open.
 - Ask the user before: downloads over 2 GB, runs expected to exceed 30 minutes, opening ports,

@@ -335,7 +335,7 @@ CAMERA_LENS_DEFAULT = {"focal_length": 24.0, "horizontal_aperture": 20.955}
 
 # The episode camera: a single wide view that holds the countertop AND the machine at once.
 # Merged into the rig only on request — adding it to CAMERAS would put a fourth render tile in
-# every other script's rig (capacity_fill at 1080p) for no benefit there.
+# every other script's rig for no benefit there.
 #
 # Aimed at the centre of the measured must-see box, from the robot's front-left and above so the
 # counter surface and the rack interior are both oblique rather than edge-on. Eye distance and
@@ -666,7 +666,6 @@ OBJECT_COUNTERTOP_POSES_W: tuple = (
     ((0.665, -0.185, 0.5307), 0.0),  # root (= bbox center); mug base at z 0.49
     ((0.665, -0.105, 0.5307), 0.0),  # second staging spot, one footprint toward +y
 )
-RACK_SLIDE_TOL_M = 0.005  # a rack must settle within this of its drive target (closability bar)
 
 # ---------------------------------------------------------------------------------------------
 # arrangement task knobs (the dishsim.task layer + the capacity planner)
@@ -894,7 +893,7 @@ OBJECTS: dict[str, ObjectSpec] = {
         # goal-funnel decomposition proved a leaned release unplaceable: at any hover the
         # rim_edge-carried gripper points down into the rack (0 of 3 slots at every hover
         # tested up to 60 mm), while the standing bowl accepts on 3 cells. Drainage realism
-        # is traded for placeability; capacity_fill stands its bowls too.
+        # is traded for placeability; the retired capacity fill stood its bowls too.
         placement=PlacementSpec(mode="floor_stand", rack="lower"),
         coacd={"threshold": 0.03, "max_convex_hull": 32},
         countertop_poses_w=(((0.665, -0.185, 0.5087), 0.0), ((0.665, -0.10, 0.5087), 0.0)),
@@ -1474,7 +1473,7 @@ _EPISODE_CAMERA_BOSCH = {
 #: the ArtVIP 40 mm pitch, whose free lateral half-play is ~11.7 mm). A disc released over a
 #: Bosch gap rolls until it rests against a tine — how real plates sit — at
 #: (pitch 50 − tine wire 3.2 − plate 14.4)/2 = 16.2 mm of lateral play and a matching extra
-#: lean. Probe of record (scripts/setup/probe_plate_settle.py, 2026-08-14, 3 gaps x 8
+#: lean. Probe of record (retired probe_plate_settle.py, git history; 2026-08-14, 3 gaps x 8
 #: releases): lateral mean 14.1 / p95 15.0 / max 15.2 mm, tilt p95 14.0 / max 14.1 deg,
 #: bottom clean — 0/24 passed the v1 tolerances, 24/24 pass these (geometry bound + margin).
 _PLACEMENT_MODES_BOSCH = {**PLACEMENT_MODES,

@@ -152,7 +152,7 @@ def write_orbit(rig: CameraRig, scene, sim, dt: float, path: str, *, center,
                 camera: str = "iso", fps: int | None = None) -> str:
     """A 360° orbit clip around ``center`` [m, world], stepping physics per frame.
 
-    The shared final-evidence shot (capacity_fill's loaded-machine orbit, the full-load
+    The shared final-evidence shot (the loaded-machine orbit, the full-load
     episode's closing orbit). Steals the named camera for the sweep and restores its
     configured pose after.
 

@@ -37,6 +37,8 @@ DISHWASHER_BODIES = ["E_body_5", "E_door_4", "E_shelf_03", "E_shelf_1_04"]
 def dishwasher_bodies() -> list[str]:
     """The active machine's extractable rigid bodies (adds the third rack when present)."""
     return DISHWASHER_BODIES + (["E_shelf_third"] if config.HAS_THIRD_RACK else [])
+
+
 def config_hash() -> str:
     """Hash of every config value the collision world depends on (cache invalidation key)."""
     payload = {
@@ -207,7 +209,7 @@ def dump_cache(scene, sim, cache_dir: str = config.CACHE_DIR) -> str:
 
     # -- object mesh (body frame, Kit-free source) ---------------------------------------------
     # every class ships a body-frame OBJ beside its physics USD (the same file
-    # fill_plan.validate_plan collides) — no live extraction needed for a free object
+    # planning stack collides) — no live extraction needed for a free object
     obj_mesh = trimesh.load(
         os.path.join(config.ASSETS_DIR, "props", "meshes", f"{config.ACTIVE_OBJECT}.obj"),
         force="mesh")

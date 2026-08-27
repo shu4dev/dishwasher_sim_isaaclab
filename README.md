@@ -17,7 +17,7 @@
     <td align="center">
       <img src="docs/figures/loaded_iso.png" width="720" alt="fully loaded dishwasher"/>
       <br/>
-      <code>scripts/setup/capacity_fill.py</code> — 29 items placed, 27 settle stably, racks still close
+      the retired capacity fill (git history) — 29 items placed, 27 settle stably, racks still close
     </td>
   </tr>
 </table>
@@ -45,8 +45,9 @@ Object motion is **teleportation**: a runner writes root poses and lets physics 
 is no robot arm and no motion planning on this branch — Isaac Sim's only jobs are physics
 validation and evidence rendering. (The earlier UR5e + OMPL manipulation stack lives in git
 history; the RL door-opening pipeline on `archive/rl-door-opening`.) The substrate is built
-for **rearrangement planning**: the collision world supports incremental add/remove/re-pose of
-placed objects (the robot-era support-graph/clearing-order machinery lives in git history).
+for **rearrangement planning**, and ships as a benchmark: saved problem instances (initial
+arrangement → exact target arrangement), a closed-loop runner that settles physics after
+every move and aborts on the first fault, and a greedy baseline to beat.
 
 The pipeline, mirrored by the layout of `scripts/`:
 
@@ -54,7 +55,8 @@ The pipeline, mirrored by the layout of `scripts/`:
 |---|---|---|---|
 | **Bake** | `setup/build_state.py` | Extract a machine state's settled geometry + decompose it into convex FCL pieces (per object class) | `assets/cache/` |
 | **Plan** | `setup/plan_full_load.py` | Kit-free greedy capacity plan: derive slots live, pre-scan placeability, certify the load jointly, gate on z-budget + measured settle reliability | `results/capacity/.../full_load_plan.json` + figure |
-| **Validate** | `setup/capacity_fill.py`, `setup/probe_plate_settle.py` | Teleport + settle in Isaac: per-item stability gates, rack-closability ramp, settle distributions | `results/fill/`, `results/plate_settle/`, `media/` |
+| **Generate** | `setup/gen_instances.py` | Seeded rearrangement instances (perturbed plans / random drops), physically settled and saved as artifacts | `results/instances/<machine>/<state>/` |
+| **Benchmark** | `experiment/run_rearrange.py` | Closed-loop algorithm episodes: every move teleports + settles; abort on first fault; move budget | `results/rearrange/<machine>/<state>/`, `media/` (`--video`) |
 | **Render** | `evaluation/reveal_render.py` | Teleport a planned load, settle it, produce stills + a 360° orbit | `media/capacity/<machine>/` |
 
 <table align="center">
@@ -262,8 +264,9 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m 
 ```
 
 `kit_smoke.py` proves the collision stack imports *inside* the Kit process and that headless
-camera capture produces non-black frames. The suite is **~105 test cases across 11 files**,
-all Kit-free.
+camera capture produces non-black frames. The suite is deliberately minimal — **3 Kit-free
+files**: the two frozen-invariant pins (config hash + v1 rack geometry, the tripwires that
+protect the shipped caches) and the benchmark driver's toy-oracle check.
 
 > **Note:** `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is required — the system site-packages carry
 > hydra, whose pytest plugin imports `yaml`, a module that only exists inside Kit.
@@ -280,12 +283,13 @@ The end-to-end path from a fresh setup to the Results table in §5. Venv scripts
 # 2. plan the placeable full load on the Bosch twin (Kit-free, seconds)
 $PY scripts/setup/plan_full_load.py --machine bosch800 --placement side_winner
 
-# 3. physically settle the hand-authored 29-item baseline load + closability (the hero figure)
-scripts/run_kit.sh scripts/setup/capacity_fill.py --headless --enable_cameras
+# 3. generate settled benchmark instances for the lower-rack state
+scripts/run_kit.sh scripts/setup/gen_instances.py --headless \
+    --mode perturbed --state placement --n 10 --seed 0
 
-# 4. render the planned Bosch load, settled
-scripts/run_kit.sh scripts/evaluation/reveal_render.py --headless --enable_cameras \
-    --plan results/capacity/bosch800/side_winner/full_load_plan.json
+# 4. run the greedy baseline closed-loop against them
+scripts/run_kit.sh scripts/experiment/run_rearrange.py --headless \
+    --instances "results/instances/bosch800/placement/*.json" --algorithms greedy
 ```
 
 Judge every Kit run from its log (`[RESULT] PASS`, no tracebacks) — exit codes lie.
@@ -326,23 +330,30 @@ slot bake to go stale. The plan artifact records, per item, the slot, the mode, 
 release pose the settle run teleports to; the per-class funnel (`slots_total` → `placeable` →
 `assigned` → `stopped_by`) explains every count.
 
-### 4.3 Validate physically + render evidence
+### 4.3 Run the benchmark (physics-validated per move)
 
 ```bash
-# teleport-settle the deterministic 29-item baseline load, then the closability ramp
-scripts/run_kit.sh scripts/setup/capacity_fill.py --headless --enable_cameras
+# generate instances (per rack state; saved artifacts — every algorithm sees identical inputs)
+scripts/run_kit.sh scripts/setup/gen_instances.py --headless \
+    --mode perturbed --state placement --n 10 --seed 0
 
-# settle distributions behind a placement tolerance (e.g. Bosch plate gaps)
-scripts/run_kit.sh scripts/setup/probe_plate_settle.py --headless \
-    --machine bosch800 --placement side_winner --repeats 8
+# run algorithms closed-loop; one persistent Kit session per state batch
+scripts/run_kit.sh scripts/experiment/run_rearrange.py --headless \
+    --instances "results/instances/bosch800/placement/*.json" --algorithms greedy
 
-# render a capacity plan: teleport, settle, stills + 360° orbit
+# on-demand video (one MP4 per episode) and the settled-load render
+scripts/run_kit.sh scripts/experiment/run_rearrange.py --headless --enable_cameras --video \
+    --instances "results/instances/bosch800/placement/*.json" --algorithms greedy
 scripts/run_kit.sh scripts/evaluation/reveal_render.py --headless --enable_cameras \
     --plan results/capacity/bosch800/side_winner/full_load_plan.json
 ```
 
-Every Isaac run writes PNG/MP4 evidence under `media/<phase>/` — the settle passes are the
-ground truth that keeps the Kit-free planner honest.
+An algorithm implements `reset(instance, world)` / `next_move(obs) -> Move | None`
+(`src/dishsim/rearrange.py`; register it in `ALGORITHMS` in `run_rearrange.py`). Every move
+teleports one object, settles `SETTLE_STEPS_MOVE` physics steps, and the episode ABORTS on
+the first fault — colliding command, unstable settle, disturbed neighbor — or at the move
+budget. Episode records under `results/rearrange/` score: solved, fraction-at-goal, moves,
+planning time.
 
 ### 4.4 Archive / restore the generated artifacts
 
@@ -358,7 +369,7 @@ Every claim maps to a recorded artifact; artifacts live under the gitignored `re
 
 | Claim | Run / artifact | Evidence |
 |---|---|---|
-| **Capacity fill is closable**: 29 items planned, 27 settle stably, 0 displaced during the stow (the 2 parked are the wine-glass stemware stretch goal) | `results/fill/capacity.json` | `media/fill/` (timelapse, orbit, stills); mechanisms documented in `fill_plan.py` |
+| **Capacity fill is closable** *(retired script, git history)*: 29 items planned, 27 settle stably, 0 displaced during the stow (the 2 parked are the wine-glass stemware stretch goal) | `results/fill/capacity.json` | `media/fill/` (timelapse, orbit, stills) |
 | **Bosch 800 full load settles**: a planned multi-rack load teleported to its release poses settles with max drift 1.1 mm — the plan's poses are physically self-consistent | `media/task/bosch_sanity_load2/` (episode-era artifact of record) | `docs/figures/bosch800_loaded_reveal.png`; regenerate via `reveal_render.py --plan` |
 | **Measured settle-reliability gates**: bowls 59/60 upright on the Bosch lower rack; scaled cups 49/82 and tumblers 64/88 wedge into the OEM wire lattice — which is why drinkware sits out of the certified Bosch count | `results/plate_settle/`, gates frozen in `capacity.MEASURED_SETTLE_RELIABILITY` | [docs/known_limitations.md](docs/known_limitations.md) |
 | *(robot era, git history)* the arm-reachable Bosch full load measured 22 items at the `side_winner` mount (14 forks + 8 lower-rack items); teleport placeability re-counts capacity without the reach constraint | `main` branch history | [docs/success_criteria.md](docs/success_criteria.md) |

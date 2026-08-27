@@ -47,7 +47,7 @@ Recorded 2026-08-09 during the v4 redesign diagnostics; they constrain any futur
 The Bosch racks' OEM-derived lattice (runners at ~41 mm, crossbars at ~46 mm) is coarser
 than the scaled drinkware bases (~50-60 mm), so a cup or tumbler released upright wedges
 base-first into a wire cell roughly half the time. Release-at-goal probes
-(`scripts/setup/probe_plate_settle.py --object <cls>`, 2026-08-14, tolerances of record):
+(the retired probe_plate_settle.py, git history; 2026-08-14, tolerances of record):
 
 | class / rack | stable | note |
 |---|---|---|

@@ -16,9 +16,12 @@ dishwasher_sim_isaaclab/
 │   │   │                              (extract -> decompose)]
 │   │   ├── derive_slots.py           [Kit-free: slot table + placeability + slot_detection.png]
 │   │   ├── preview_rack.py           [rack geometry preview PNGs]
-│   │   ├── probe_plate_settle.py     [teleport-release settle distributions per slot]
-│   │   ├── capacity_fill.py          [teleport-settle the hand-authored full load + closability]
+│   │   ├── gen_instances.py          [settled rearrangement instances (perturbed / random)]
 │   │   └── plan_full_load.py         [Kit-free: greedy placeable-capacity plan + figure]
+│   │
+│   ├── experiment/
+│   │   └── run_rearrange.py          [benchmark runner: persistent Kit session, closed-loop
+│   │                                  episodes, per-move settle + fault gates, --video]
 │   │
 │   ├── evaluation/
 │   │   └── reveal_render.py          [render a capacity plan: teleport, settle, stills + orbit]
@@ -50,7 +53,8 @@ dishwasher_sim_isaaclab/
 │   │                                  the teleport-feasibility oracle]
 │   ├── placement.py                  [slot derivation (live, no bake), release poses and
 │   │                                  settle success per mode]
-│   ├── fill_plan.py                  [hand-authored full-load plan + pairwise FCL validation]
+│   ├── rearrange.py                  [benchmark core: instances, closed-loop episode driver,
+│   │                                  FCL arrangement mirror, greedy baseline]
 │   ├── capacity.py                   [greedy placeable-capacity planner: slots -> placeable
 │   │                                  pre-scan -> joint certification -> z-budget/settle gates]
 │   ├── media.py                      [camera rig, video writer, contact sheets]
@@ -59,7 +63,8 @@ dishwasher_sim_isaaclab/
 │   └── task/                         [Kit-free arrangement helpers]
 │       └── slotting.py               [candidate slots, occupancy conflicts]
 │
-├── tests/                            [~105 cases across 11 files; venv pytest, no Kit]
+├── tests/                            [3 files: the two frozen-invariant pins + the
+│                                      harness's toy-oracle check; venv pytest, no Kit]
 ├── docs/                             [environment, success criteria, measured reports]
 ├── assets/  media/  results/         [generated, gitignored]
 ├── requirements-planning.txt         [pinned planning-venv deps (measured working set)]
@@ -74,18 +79,18 @@ Kit-free planning on one side, Kit-side validation on the other:
 config / geometry (cache format, config_hash)
         │
         ▼
-collision_world ── placement ── capacity / fill_plan ── task/slotting
+collision_world ── placement ── capacity / rearrange ── task/slotting
         (plain venv python: plan an arrangement, certify it collision-free)
         │
-        ▼  plan artifact (results/capacity/.../full_load_plan.json, fill plan)
+        ▼  artifacts (capacity plans, results/instances/*.json, episode records)
         │
 scene / machine / usd_prep / media   (Kit-side: teleport, settle, judge stability, render)
 ```
 
-The boundary is enforced mechanically by `tests/test_kit_boundary.py` (AST-based): only
-`scene.py` and `machine.py` may import `isaaclab`/`pxr`/`omni` at module scope; everything
-else must import in a plain Python process (function-local Kit imports in `geometry.py`'s
-extraction half and `media.py` stay legal).
+Boundary convention: only `scene.py` and `machine.py` import `isaaclab`/`pxr`/`omni` at
+module scope; everything else must import in a plain Python process (function-local Kit
+imports in `geometry.py`'s extraction half and `media.py` stay legal). A violation fails
+loudly — venv scripts crash at import.
 
 ## Completed one-off studies
 

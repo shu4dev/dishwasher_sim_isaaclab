@@ -20,7 +20,7 @@ Every mode is judged on the settled pose: the criteria must hold continuously fo
 `SETTLE_STEPS` = **300 physics steps** (5 s at dt = 1/60) after release.
 
 Fill-only modes (`upside_down`, `stem_scallop`, `flat_lay`) are exercised by the capacity
-fill (`scripts/setup/capacity_fill.py`), which gates per-item settle stability
+fill (the retired capacity_fill.py, git history), which gated per-item settle stability
 (< 5 mm / 3° drift) and load-wide closability instead of slot-frame tolerances.
 
 ### Slot names
@@ -71,7 +71,7 @@ of:
 Historical context: the robot-era arm-reachable full load measured 22 items (2026-08-14,
 Bosch @ side_winner, policy `plates_first`: `third_out` 14 forks + `placement` 8 — plate 2,
 bowl 6); teleport placeability re-counts this without the reach constraint. For contrast the
-teleport-based `capacity_fill.py` seats 29 on the v1 machine. Phases execute TOP-DOWN
+retired teleport fill (git history) seated 29 on the v1 machine. Phases execute TOP-DOWN
 (`capacity.LOADING_STATES`) so no transition ever stows the loaded lower rack
 (known_limitations: the sill climb stalls under load); a planned load renders settled via
 `scripts/evaluation/reveal_render.py --plan <plan JSON>`.
@@ -111,7 +111,7 @@ settle tolerances: `tol_lateral_m` 0.012 → **0.018**, `tol_tilt_deg` 12 → **
 values fit the ArtVIP bank's 40 mm pitch (free lateral half-play ≈ 11.7 mm); on the Bosch's
 50 mm pitch a released disc rolls until it rests against a tine — how real plates sit — at
 (50 − 3.2 − 14.4)/2 = 16.2 mm of play plus the matching extra lean. Probe of record
-(`scripts/setup/probe_plate_settle.py`, 3 gaps × 8 releases — the same release-and-settle
+(the retired probe_plate_settle.py, git history; 3 gaps × 8 releases — the same release-and-settle
 physics a placement runs): lateral mean 14.1 / p95 15.0 / max 15.2 mm, tilt p95 14.0 / max
 14.1°, bottoms clean — 0/24 passed the v1 tolerances, 24/24 pass the derived ones. The
 criterion is unchanged in spirit: seated in its own gap, braced on its tines, not fallen
