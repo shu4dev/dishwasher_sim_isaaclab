@@ -1011,7 +1011,8 @@ def mug_probes(params: dict) -> list[tuple[tuple[float, float, float], tuple[flo
     The mug asset lies on its side in the object frame: bbox half index 1 is the ALONG-AXIS
     half, so the standing footprint comes from halves 0 (handle direction) and 2 (body
     diameter), matching placement.py's footprint formula. Each horizontal face carries the
-    5 mm carried-hull inflation the planner applies (statics are uninflated), and the box
+    :data:`~dishsim.config.COLLISION_MARGIN_M` carried-hull inflation the planner applies
+    (statics are uninflated), and the box
     bottom sits below ``floor_top + RELEASE_HOVER_M`` by that same margin — exactly bounding
     what goal_configs releases — replacing the old bbox-center/flat-floor probe that tines break.
     """

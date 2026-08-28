@@ -192,9 +192,10 @@ def _rack_T(cache_dir: str) -> np.ndarray:
 
 
 def derive_plate_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
-    """One slot per tine-bank gap (11 gaps; goal-config collision filtering prunes the ones
-    over the cutlery basket). Slot origin = the disc's bottom-edge target on the bank floor;
-    slot z up, slot x along the rack pitch direction."""
+    """One slot per tine-bank gap — the count follows the machine's ``plate_tine_xspan`` /
+    ``plate_tine_pitch`` (Bosch: 9 tines, 8 gaps; the v1 ArtVIP rear bank had 11 gaps).
+    Slot origin = the disc's bottom-edge target on the bank floor; slot z up, slot x along
+    the rack pitch direction."""
     from . import rack_gen  # noqa: PLC0415
 
     p = config.RACK_GEN["E_shelf_1_04"]

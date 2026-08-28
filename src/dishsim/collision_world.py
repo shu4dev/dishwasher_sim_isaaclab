@@ -106,6 +106,68 @@ class CollisionWorld:
 
         # ---- placed objects (arrangement mutation API) ---------------------------------------
         self._extra: dict[str, list[fcl.CollisionObject]] = {}
+        self._extra_keys: dict[str, tuple] = {}
+        # Placed obstacles get their own broadphase: a linear scan over every placed item's every
+        # piece is what dominates once the hulls are cached (12.9 ms vs 1.8 ms for a 32-piece bowl
+        # against 8 placed neighbours). Registration is kept incremental, mirroring the static
+        # manager — the tree only answers "does anything hit?", so the name-resolving path below
+        # still walks the items themselves.
+        self._extra_mgr = fcl.DynamicAABBTreeCollisionManager()
+        self._extra_mgr.setup()
+
+        # ---- candidate-geometry caches (the hot path) ----------------------------------------
+        # Inflating one piece's hull costs ~10 ms (two ``convex_hull`` passes plus the
+        # ``fcl.Convex`` build) and is a function of (piece, margin) ONLY — never of the queried
+        # pose. Rebuilding it inside the per-query loop made a free `object_in_collision` cost
+        # ~219 ms for a 32-piece bowl; caching the geometry and re-posing one persistent
+        # `fcl.CollisionObject` per piece via ``setTransform`` takes the same query to ~1.8 ms
+        # (~120x) and `add_object` from ~216 ms to ~0.01 ms — measured 2026-08 on
+        # bosch800 / placement / side_winner, bowl + plate, verdicts and blocker sets identical
+        # over every derived slot and buffer cell at 0/4/8 placed neighbours.
+        #
+        # Keying: ``id(piece)`` is only safe because the value keeps a STRONG reference to the
+        # mesh, so CPython can never recycle the id of a collected mesh into a live entry. The
+        # margin is part of the key as well, so a cache can never hand back geometry inflated by
+        # a different margin even if one is introduced per call later.
+        self._hull_cache: dict[tuple[int, float], tuple[trimesh.Trimesh, fcl.Convex]] = {}
+        self._probe_objs: dict[tuple[int, float], fcl.CollisionObject] = {}
+
+    # ------------------------------------------------------------------------------------------
+
+    def _inflated_convex(self, piece: trimesh.Trimesh, margin: float) -> fcl.Convex:
+        """Margin-inflated convex hull of ``piece`` as FCL geometry, built at most once.
+
+        Args:
+            piece: Convex piece in its object's body frame.
+            margin: Hull inflation [m].
+
+        Returns:
+            The cached :class:`fcl.Convex`. FCL geometry is read-only during collision, so one
+            instance is safe to share across every collision object that needs it.
+        """
+        key = (id(piece), float(margin))
+        entry = self._hull_cache.get(key)
+        if entry is None:
+            entry = (piece, _fcl_convex(_inflated_hull(piece, margin)))
+            self._hull_cache[key] = entry
+        return entry[1]
+
+    def _probe_object(self, piece: trimesh.Trimesh, T: np.ndarray) -> fcl.CollisionObject:
+        """The reusable query proxy for ``piece``, re-posed to ``T``.
+
+        One collision object per piece is enough because a query only ever holds one pose per
+        piece at a time (single-threaded, no re-entrancy): posing it is a ``setTransform``,
+        which python-fcl follows with ``computeAABB()`` — required, since the static broadphase
+        queries the candidate's AABB.
+        """
+        key = (id(piece), float(self.margin))
+        obj = self._probe_objs.get(key)
+        if obj is None:
+            obj = fcl.CollisionObject(self._inflated_convex(piece, self.margin), _tf(T))
+            self._probe_objs[key] = obj
+        else:
+            obj.setTransform(_tf(T))
+        return obj
 
     # ------------------------------------------------------------------------------------------
 
@@ -156,23 +218,32 @@ class CollisionWorld:
         T = np.asarray(T_base_obj, dtype=float)
         pairs: list[tuple[str, str]] = []
         for i, piece in enumerate(pieces):
-            obj = fcl.CollisionObject(_fcl_convex(_inflated_hull(piece, self.margin)), _tf(T))
+            obj = self._probe_object(piece, T)
             cdata = fcl.CollisionData()
             self._static_mgr.collide(obj, cdata, fcl.defaultCollisionCallback)
             if cdata.result.is_collision:
                 if not return_pairs:
                     return True
                 pairs.append((f"piece_{i}", self._resolve_static_partner(obj)))
-            for extra_name, objs in self._extra.items():
-                for eo in objs:
-                    res = fcl.CollisionResult()
-                    if fcl.collide(obj, eo, fcl.CollisionRequest(), res):
-                        if not return_pairs:
-                            return True
-                        pairs.append((f"piece_{i}", extra_name))
-                        break
+            if self._extra and self._hits_extra(obj):
+                if not return_pairs:
+                    return True
+                # the broadphase only says THAT something hit; naming every offending item still
+                # needs the per-item scan, and it only runs on the (rare) reported collision
+                for extra_name, objs in self._extra.items():
+                    for eo in objs:
+                        res = fcl.CollisionResult()
+                        if fcl.collide(obj, eo, fcl.CollisionRequest(), res):
+                            pairs.append((f"piece_{i}", extra_name))
+                            break
         hit = len(pairs) > 0
         return (hit, pairs) if return_pairs else hit
+
+    def _hits_extra(self, obj: fcl.CollisionObject) -> bool:
+        """Does ``obj`` hit any placed obstacle? (broadphase; same narrowphase test as the scan)."""
+        cdata = fcl.CollisionData()
+        self._extra_mgr.collide(obj, cdata, fcl.defaultCollisionCallback)
+        return bool(cdata.result.is_collision)
 
     def _resolve_static_partner(self, obj: fcl.CollisionObject) -> str:
         """Identify which static body a candidate hits (slow path, only on reported collisions)."""
@@ -188,23 +259,43 @@ class CollisionWorld:
     # ------------------------------------------------------------------------------------------
 
     def add_object(self, name: str, meshes: list[trimesh.Trimesh], T_base_obj: np.ndarray) -> None:
-        """Add a free-standing obstacle (e.g. an already-placed item) at ``T_base_obj``."""
-        objs = []
-        for mesh in meshes:
-            obj = fcl.CollisionObject(_fcl_convex(_inflated_hull(mesh, self.margin)), _tf(np.asarray(T_base_obj)))
-            objs.append(obj)
+        """Add a free-standing obstacle (e.g. an already-placed item) at ``T_base_obj``.
+
+        Shares the inflated hulls with :meth:`object_in_collision` (same cache, same margin), so
+        adding an obstacle whose class has already been queried costs no geometry work. Re-adding
+        the same name with the same meshes only re-poses the existing collision objects — a
+        placed item that moves must not pay for a rebuild.
+        """
+        tf = _tf(np.asarray(T_base_obj))
+        keys = tuple((id(mesh), float(self.margin)) for mesh in meshes)
+        if self._extra_keys.get(name) == keys:
+            for obj in self._extra[name]:
+                obj.setTransform(tf)
+            self._extra_mgr.update()
+            return
+        for obj in self._extra.pop(name, []):
+            self._extra_mgr.unregisterObject(obj)
+        objs = [fcl.CollisionObject(self._inflated_convex(mesh, self.margin), tf) for mesh in meshes]
         self._extra[name] = objs
+        self._extra_keys[name] = keys
+        self._extra_mgr.registerObjects(objs)
+        self._extra_mgr.update()
 
     def has_object(self, name: str) -> bool:
         """Is a free-standing obstacle registered under ``name``?"""
         return name in self._extra
 
     def set_object_pose(self, name: str, T_base_obj: np.ndarray) -> None:
+        tf = _tf(np.asarray(T_base_obj))
         for obj in self._extra[name]:
-            obj.setTransform(_tf(np.asarray(T_base_obj)))
+            obj.setTransform(tf)
+        self._extra_mgr.update()
 
     def remove_object(self, name: str) -> None:
-        self._extra.pop(name, None)
+        for obj in self._extra.pop(name, []):
+            self._extra_mgr.unregisterObject(obj)
+        self._extra_keys.pop(name, None)
+        self._extra_mgr.update()
 
     def set_static_enabled(self, name: str, enabled: bool) -> None:
         """Temporarily drop a static body from (or restore it to) the broadphase."""

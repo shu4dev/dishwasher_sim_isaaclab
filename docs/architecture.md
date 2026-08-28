@@ -17,14 +17,19 @@ dishwasher_sim_isaaclab/
 │   │   ├── derive_slots.py           [Kit-free: slot table + placeability + slot_detection.png]
 │   │   ├── preview_rack.py           [rack geometry preview PNGs]
 │   │   ├── gen_instances.py          [settled rearrangement instances (perturbed / random)]
-│   │   └── plan_full_load.py         [Kit-free: greedy placeable-capacity plan + figure]
+│   │   ├── plan_full_load.py         [Kit-free: greedy placeable-capacity plan + figure]
+│   │   └── capacity_fill.py          [settle-certify a plan: items arrive one at a time,
+│   │                                  unstable ones re-parked (honest capacity, never aborts),
+│   │                                  neighbour-disturbance check, verdict from the FINISHED
+│   │                                  tableau on seated AND at-goal; --video fill timelapse]
 │   │
 │   ├── experiment/
 │   │   └── run_rearrange.py          [benchmark runner: persistent Kit session, closed-loop
 │   │                                  episodes, per-move settle + fault gates, --video]
 │   │
 │   ├── evaluation/
-│   │   └── reveal_render.py          [render a capacity plan: teleport, settle, stills + orbit]
+│   │   ├── reveal_render.py          [render a capacity plan: teleport, settle, stills + orbit]
+│   │   └── instance_views.py         [one instance's initial-vs-goal stills, one Kit boot]
 │   │
 │   └── tools/
 │       ├── archive_assets.py         [tar the generated artifacts, push to the public dataset]
@@ -38,17 +43,31 @@ dishwasher_sim_isaaclab/
 │   │                                  twin; apply_base_placement selects the frozen base-frame
 │   │                                  anchor. FROZEN CACHE ANCHOR sections are robot-era
 │   │                                  constants that feed config_hash — never tune them.
+│   │                                  item_color/display_color + ITEM_COLOR_PALETTE tint
+│   │                                  renders per item (media only, never physics).
 │   │                                  Numbers: docs/bosch800_source_data.md]
 │   ├── machine.py                    [dishwasher ArticulationCfgs; machine-aware USD derivation
 │   │                                  incl. the Bosch third rack]
-│   ├── scene.py                      [Kit scene construction: statics + objects, rack drives]
+│   ├── scene.py                      [Kit scene construction: statics + objects, rack drives.
+│   │                                  Object spec dict: name, usd_path, pos, quat, and optional
+│   │                                  contact_filters / color (per-item render tint)]
 │   ├── usd_prep.py                   [derived dishwasher USDs; authors the procedural racks;
 │   │                                  make_bosch800_usd authors the Bosch machine from scratch]
 │   ├── rack_gen.py                   [procedural wire racks + cutlery basket + the Bosch
 │   │                                  third-rack tray (Kit-free)]
 │   ├── prop_gen.py                   [procedural props: tumbler, wine glass, container, lid]
+│   ├── compat.py                     [Kit-free ground truth: pairwise compatibility table +
+│   │                                  A* optimal solver (optimal_moves) for the benchmark's
+│   │                                  optimality-gap metric. static_ok (legal destination) and
+│   │                                  compatible (pair overlap) are deliberately separate]
+│   ├── instance_gen.py               [sample_initials — Kit-free, shared by the Kit generator
+│   │                                  and any offline instance builder]
 │   ├── geometry.py                   [USD -> mesh extraction + the collision-cache format +
-│   │                                  config_hash (the cache invalidation key)]
+│   │                                  TWO independent cache keys: config_hash keys the
+│   │                                  manifests, coacd_dir_for digests mesh bytes + the body's
+│   │                                  COACD params. config.COACD is NOT in config_hash, so a
+│   │                                  static re-decomposition is invisible to the staleness
+│   │                                  check — see docs/known_limitations.md]
 │   ├── collision_world.py            [Kit-free FCL world; object_in_collision(pieces, T) is
 │   │                                  the teleport-feasibility oracle]
 │   ├── placement.py                  [slot derivation (live, no bake), release poses and

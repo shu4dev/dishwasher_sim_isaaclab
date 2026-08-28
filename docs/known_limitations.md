@@ -4,6 +4,96 @@ Honest negative results and open engineering items, with the measured evidence f
 Numbers below trace to recorded runs (see the Results section in the README) or to
 `docs/success_criteria.md`.
 
+## `config_hash` is not the only cache key (2026-08-28, reproduced)
+
+`geometry.config_hash()` keys the *manifests*; `geometry.coacd_dir_for` independently digests
+mesh bytes **plus the body's `config.COACD` params**, and `COACD` is absent from the
+`config_hash` payload. Changing a static's decomposition therefore leaves every manifest
+validating green while pointing at a piece directory that does not exist yet. The failure is
+loud at load (`missing CoACD pieces for '<body>' — run scripts/setup/decompose_meshes.py
+first`) but the staleness check cannot see it coming, and a restore-only box hits it because
+the shipped archive predates the change.
+
+Practical consequences, until the archive is re-cut with `scripts/tools/archive_assets.py`:
+after restoring assets, run `scripts/setup/decompose_meshes.py` once per context (Kit-free,
+seconds). The upside of the same asymmetry is that re-decomposing a static invalidates
+**nothing** — it is the cheapest honest fix available in this codebase.
+
+## CoACD's manifold preprocess inflates authored bodies (2026-08-28, measured)
+
+The preprocess re-meshes onto a voxel grid and adds an **isotropic skin proportional to body
+size**: `E_door_4` +4.09 mm, `E_body_5` +8.24 mm. This is phantom collision volume, not
+geometry, and it has cost real capacity twice: it FCL-blocked every counter-buffer cell (worked
+around by `rearrange.BUFFER_EXTRA_HOVER_M`) and then 5 of the 8 lower-rack plate gaps, whose
+true clearance is 7.3-7.8 mm. Watertight authored bodies do not need the preprocess:
+`COACD["E_door_4"]["preprocess_mode"] = "off"` decomposes the door exactly (overhang
+4.087 → **0.000 mm**, volume 1.179x → **1.000x**, 0.3 s) and took plate placeability 1/8 → 7/8.
+
+Raising `preprocess_resolution` instead is **strictly worse and already tried**: 200 still left
+1.02 mm of skin, exploded 2 pieces into 45, and took 474 s. Do not retry it.
+
+**`E_body_5` still carries its +8.24 mm skin.** Unpreprocessed it did not converge in 17 minutes
+(its solid is 28 % of its convex hull), and its skin overhangs only the countertop, which no
+rack slot touches and which already carries the `BUFFER_EXTRA_HOVER_M` allowance. Open item;
+not a capacity blocker. Diagnosis rule of thumb: when a slot or pose is FCL-blocked by a
+*decomposed authored body*, measure hull overhang against the source mesh before believing the
+geometry — an axis-aligned bounds comparison is enough, the skin is isotropic.
+
+## Only the `placement` rack state is Kit-validated (2026-08-28)
+
+`third_out` (24 planned forks) has **never run under Kit**; fork drop-bounce from the 60 mm
+release hover is the predicted failure (`"disturbed"` aborts), with `DISTURB_POS_M` or a
+`flat_lay_third` carve-out in `IsaacOracle` as the sanctioned knobs. `middle_out` plans **zero**
+items — cup fails the measured settle-reliability gate, tumbler fails the z-budget — and that
+zero has not had the same honesty audit the lower rack just received, so it should be treated
+as an unexamined verdict rather than a machine property.
+
+## The move model has no insertion-path gate (2026-08-28, audited)
+
+A `Move` is a teleport and `run_episode`'s only feasibility test is a **final-pose FCL overlap
+check**. Nothing anywhere in the repo sweeps a volume along an approach path. So an object may
+teleport into a slot past any number of neighbours, and a neighbour can only block a target by
+overlapping its rest hull. Blocking-through-an-opening, non-monotonicity and depth-ordering
+heuristics are therefore **unrepresentable** in the benchmark as it stands — relevant to anyone
+porting a confined-space rearrangement planner here.
+
+Related, and measured: a genuinely confined state already exists geometrically. In `both_in`
+the lower rack is 99.1 % inside the tub, 100 % roofed by the middle-rack deck (~274 mm physical
+headroom), the only aperture is the 545 × 330 mm door mouth, and **0 of 74 rest-feasible slots
+admit a straight-down insertion** (vs 27 of 35 clear in `placement`). Its caches are fresh for
+bowl/plate/cup/tumbler. Two things block using it: `capacity.LOADING_STATES`/`POLICIES` exclude
+it (~2 dict entries), and the rack interpenetration below.
+
+## The stowed lower rack interpenetrates the tub (2026-08-28, measured)
+
+`MACHINE_GEN["bosch800"]["racks"]["lower"]["rail_z"]` is 0.185 — exactly `tub.floor_z` — so the
+rack's wire deck sits at z 0.1962, **24 mm inside the LowerSprayArm** (authored z 0.185-0.220).
+In `both_in` the stowed rack collides with the tub body in **493 piece-pairs**, giving bowl
+0/56 and plate 0/8 placeable; lifting the deck clear recovers bowl 21/56, plate 8/8. The unused
+authored `"wire_z": 0.043` shows the intent (rail_z ≈ 0.230). `placement` never sees it because
+the rack is outside the tub. Fixing it is a `MACHINE_GEN` change — hashed, so a full Bosch
+rebake plus regeneration of the capacity plan and its settle verification.
+
+## The feasibility oracle is ~450 ms per query (2026-08-28, measured)
+
+`ArrangementWorld.move_collides` routes through `blockers()`, and `CollisionWorld` rebuilds
+every candidate piece's inflated convex hull on **every call** (three `convex_hull` passes per
+piece). Caching the hulls and taking the early-exit path measures ~44 ms free / 0.02 ms on a
+reject; adding a broadphase for placed objects would reach ~1 ms. Fine for the greedy baseline
+(tens of queries per episode), disqualifying for any search-based planner.
+
+## Capacity is limited by the dish and rack model, not the machine (2026-08-28)
+
+Three modelling gaps cap the certified lower-rack load at 15 items:
+- the dish library is ~half scale (plate = 139 mm disc, `scale` 0.54, an ArtVIP-era constraint)
+  while this machine is published as taking 270-320 mm plates;
+- the plate tine bank is modelled as **one** rank spanning 400 mm, where
+  `docs/bosch800_source_data.md` derives ~500 mm across **two** rows (~20 plate positions) —
+  that derivation *is* the 16-place-setting rating;
+- the bowl candidate lattice is a 60 mm grid, capping the open floor at 8 bowls where the free
+  area admits ~12 off-grid.
+The first two are `RACK_GEN`/object-spec changes (full rebake); the lattice is not hashed.
+
 ## The bowl lean fixture was retired (RACK_GEN v4)
 
 The robot-era gripper stabbed the rack at every hover of the 48° lean, so v4 removed the

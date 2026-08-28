@@ -68,6 +68,34 @@ of:
 4. **Packable** — it clears every already-assigned slot under the shared occupancy rule
    (`src/dishsim/task/slotting.py`).
 
+**Measured result (2026-08-28, Bosch @ side_winner, policy `plates_first`): FULL LOAD = 39
+items** — `third_out` 24 forks, `middle_out` 0, `placement` 15 (plate 7 + bowl 8). The lower
+rack's 15 are settle-verified, not merely placeable: `scripts/setup/capacity_fill.py` seats
+them one at a time under physics and reports **15/15 seated, 15/15 at goal, zero neighbours
+disturbed** (`results/capacity/bosch800/side_winner/settled_verification_placement.json`,
+`media/capacity/bosch800/placement/`).
+
+That phase read 6 items (plate 1 + bowl 5) until three artifacts were corrected on 2026-08-28,
+none of them geometry:
+
+* `E_door_4`'s CoACD hulls overhung the true door by **4.09 mm** — CoACD's manifold preprocess
+  re-meshes onto a voxel grid, adding an isotropic skin. That phantom volume alone blocked 5 of
+  the 8 plate gaps, whose real clearance is 7.3–7.8 mm. The door mesh is watertight, so
+  `COACD["E_door_4"]["preprocess_mode"] = "off"` decomposes it exactly (0.000 mm overhang at
+  1.000x source volume). Plate placeability 1/8 -> 7/8; the one remaining block is a genuine
+  candy-cane tine collision.
+* `COLLISION_MARGIN_M` 5 mm -> 2 mm. Hull inflation is a pre-filter, not the certificate (the
+  settle gates are); at 5 mm it vetoed real clearances of 1.6–3.3 mm.
+* `TASK["slot_separation_margin_m"]` 10 mm -> 8 mm. Two bowls two grid cells apart sit at
+  exactly 120.0 mm and the rule demanded 120.2 — a 0.2 mm veto that forced three-cell spacing.
+  Bowls 5 -> 8. (Greedy assignment is NOT the limit: it equals the exact maximum independent
+  set on this grid.)
+
+Still open, and why the count is not larger: the dish library is ~half scale (plate = 139 mm
+disc, an ArtVIP-era constraint) while this machine is rated for 270–320 mm plates; the modeled
+tine bank spans 400 mm in one rank where the source doc derives ~500 mm across two; and the
+bowl candidate lattice is a 60 mm grid that caps the open floor at 8 where ~12 physically fit.
+
 Historical context: the robot-era arm-reachable full load measured 22 items (2026-08-14,
 Bosch @ side_winner, policy `plates_first`: `third_out` 14 forks + `placement` 8 — plate 2,
 bowl 6); teleport placeability re-counts this without the reach constraint. For contrast the

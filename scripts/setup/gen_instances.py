@@ -61,7 +61,7 @@ config.apply_machine("bosch800")
 config.apply_scenario(args_cli.state)
 config.apply_base_placement("side_winner")
 
-from dishsim import capacity, rearrange  # noqa: E402
+from dishsim import capacity, instance_gen, rearrange  # noqa: E402
 from dishsim import scene as dscene  # noqa: E402
 from dishsim.transforms import T_inv, T_to_pos_quat, make_T  # noqa: E402
 
@@ -69,33 +69,9 @@ MAX_INSTANCE_ATTEMPTS = 4  # whole-instance re-rolls on dead-end sampling / unst
 # ponytail: whole-instance re-roll on a single unstable item; per-item resampling if yield matters
 
 
-def sample_initials(roster, tables, world, rng, n_displace):
-    """Commanded initial pose per item: displaced ones first-FCL-free into other placeable
-    slots or the buffer band; the rest at their own targets. None on a dead end."""
-    world.clear()
-    displaced = {str(s) for s in
-                 rng.choice([it.item_id for it in roster], size=n_displace, replace=False)}
-    initials = {}
-    for it in roster:
-        if it.item_id not in displaced:
-            T = np.asarray(it.T_base_obj)
-        else:
-            cls = it.object_class
-            with config.active_object(cls):
-                slot_poses = [capacity._nominal_release_pose(tables.slots[cls][sid])
-                              for sid, ok in tables.placeable[cls].items()
-                              if ok and sid != it.slot_id]
-            candidates = slot_poses + world.buffer_poses(cls)
-            # Generator.shuffle silently shuffles a stacked COPY of a list of arrays —
-            # permute indices instead
-            candidates = [candidates[j] for j in rng.permutation(len(candidates))]
-            T = next((c for c in candidates
-                      if not world.move_collides(it.item_id, c, object_class=cls)), None)
-            if T is None:
-                return None, displaced
-        world.sync({it.item_id: T}, {it.item_id: it.object_class})
-        initials[it.item_id] = T
-    return initials, displaced
+# sample_initials lives in dishsim.instance_gen so a Kit-free generator can share it — this
+# script boots Kit at import, so nothing outside it could import a local copy.
+sample_initials = instance_gen.sample_initials
 
 
 def main() -> int:
@@ -188,8 +164,27 @@ def main() -> int:
                 if drift_p > rearrange.STABLE_POS_M or drift_deg > rearrange.STABLE_ROT_DEG or dev_p > 0.10:
                     bad.append((it.item_id, round(drift_p * 1e3, 1), round(dev_p * 1e3, 1)))
             if not bad:
-                settled = {it.item_id: hist[it.item_id][-1] for it in roster}
-                break
+                # Reproduction gate: rehearse the runner's episode reset — teleport INTO the
+                # settled contact poses and re-settle. A drop-from-hover occasionally wedges
+                # a bowl 10-25 deg on a wire; that equilibrium does not survive a cold
+                # teleport-into-contact and would abort the episode as init-mismatch. Record
+                # the RE-settled poses so the artifact stores the fixed point itself.
+                candidate = {it.item_id: hist[it.item_id][-1] for it in roster}
+                for it in roster:
+                    teleport(it.item_id, T_base=candidate[it.item_id])
+                step(rearrange.SETTLE_STEPS_INIT)
+                mism = []
+                for it in roster:
+                    T = measured(it.item_id)
+                    dp = float(np.linalg.norm(T[:3, 3] - candidate[it.item_id][:3, 3]))
+                    dr = rearrange.rot_angle_deg(candidate[it.item_id], T)
+                    if dp > rearrange.INIT_MATCH_POS_M or dr > rearrange.INIT_MATCH_ROT_DEG:
+                        mism.append((it.item_id, round(dp * 1e3, 1), round(dr, 1)))
+                if not mism:
+                    settled = {it.item_id: measured(it.item_id) for it in roster}
+                    break
+                print(f"[WARN] {name}: non-reproducible settle {mism} (attempt {attempt}) — re-rolling")
+                continue
             print(f"[WARN] {name}: unstable initials {bad} (attempt {attempt}) — re-rolling")
         for it in roster:  # re-park for the next instance
             teleport(it.item_id, pos_w=park_w[it.item_id])

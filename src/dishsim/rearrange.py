@@ -40,10 +40,19 @@ STABLE_POS_M = 0.005        # moved item must stop drifting (measured per-item g
 STABLE_ROT_DEG = 3.0
 MOVE_DEV_MAX_M = 0.06       # settled vs commanded pose (absorbs the hover drop + roll-to-tine)
 DISTURB_POS_M = 0.010       # any NON-moved item beyond this from its pre-move pose = fault
-DISTURB_ROT_DEG = 10.0
+# A bowl on the rack wires rocks when a neighbor lands: measured 15.9 deg pure axis tilt at
+# 3.6 mm translation, re-seating WITHOUT leaving its goal (first Kit batch, perturbed_s2).
+# 20 deg passes that benign re-seat; a genuine knock-off also trips the 10 mm position gate.
+DISTURB_ROT_DEG = 20.0
 INIT_MATCH_POS_M = 0.010    # episode reset must reproduce the instance's settled initials
-INIT_MATCH_ROT_DEG = 10.0
+# Cross-session re-settle of a near-flat bowl measured 10.5 deg / 6.9 mm (first Kit batch,
+# perturbed_s1) — the same tine re-seat physics; 15 deg clears it, position gate unchanged.
+INIT_MATCH_ROT_DEG = 15.0
 COUNTER_GRID_PITCH_M = 0.11  # buffer candidate spacing; FCL gates actual use
+# Extra buffer hover above the release hover: the counter's CoACD hull tops ~8 mm above the
+# raw slab (decomposition slop on the large E_body_5 body), which eats the 12 mm release
+# hover to under the candidate-inflation margin and FCL-blocks every buffer cell without it.
+BUFFER_EXTRA_HOVER_M = 0.010
 
 
 def rot_angle_deg(T_a: np.ndarray, T_b: np.ndarray) -> float:
@@ -134,6 +143,27 @@ class ArrangementWorld:
                     config.scenario_cache_dir(state, object_name=cls))
         self._poses: dict = {}
         self._cls: dict = {}
+        #: Feasibility queries served, so a benchmark can separate an algorithmic win from a
+        #: planner that simply asked fewer questions.
+        self.n_queries = 0
+
+    def snapshot(self) -> dict:
+        """Copy of the mirrored arrangement, for cheap search rollback.
+
+        ``sync`` stores pose arrays BY REFERENCE, so the copy has to be deep in the arrays or
+        a later in-place write would corrupt the snapshot.
+        """
+        return {"poses": {k: np.array(v) for k, v in self._poses.items()},
+                "classes": dict(self._cls)}
+
+    def restore(self, snap: dict) -> None:
+        """Return the mirror to a :meth:`snapshot` state, dropping anything added since."""
+        for item_id in list(self._poses):
+            if item_id not in snap["poses"]:
+                self.world.remove_object(item_id)
+                self._poses.pop(item_id, None)
+                self._cls.pop(item_id, None)
+        self.sync(snap["poses"], snap["classes"])
 
     def clear(self) -> None:
         """Drop every mirrored item (a generator starts each instance from the empty machine)."""
@@ -154,8 +184,23 @@ class ArrangementWorld:
             self._poses[item_id] = T
 
     def move_collides(self, item_id: str, T: np.ndarray, object_class: str = None) -> bool:
-        """Would ``item_id`` at commanded ``T`` interpenetrate statics or any OTHER item?"""
-        return bool(self.blockers(item_id, T, object_class))
+        """Would ``item_id`` at commanded ``T`` interpenetrate statics or any OTHER item?
+
+        Takes the bool-only path deliberately: routing through :meth:`blockers` would ask for
+        pairs and so forfeit ``object_in_collision``'s early exit on the first colliding piece
+        — measured 427 ms vs 4 ms on a rejecting query, which is the difference between a
+        search budget that buys hundreds of checks and one that buys hundreds of thousands.
+        """
+        cls = self._cls.get(item_id, object_class)
+        had = self.world.has_object(item_id)
+        if had:
+            self.world.remove_object(item_id)
+        try:
+            self.n_queries += 1
+            return bool(self.world.object_in_collision(self.pieces[cls], np.asarray(T)))
+        finally:
+            if had:
+                self.world.add_object(item_id, self.pieces[cls], self._poses[item_id])
 
     def blockers(self, item_id: str, T: np.ndarray, object_class: str = None) -> list:
         """Names blocking ``item_id`` at ``T``: item ids and/or static body names.
@@ -168,6 +213,7 @@ class ArrangementWorld:
         if had:
             self.world.remove_object(item_id)
         try:
+            self.n_queries += 1
             _, pairs = self.world.object_in_collision(
                 self.pieces[cls], np.asarray(T), return_pairs=True)
         finally:
@@ -184,7 +230,7 @@ class ArrangementWorld:
         rect = config.TASK["spawn_rect_w"]
         spec = config.OBJECTS[object_class]
         top_z = config.COUNTERTOP_CENTER_W[2] + config.COUNTERTOP_SIZE[2] / 2.0
-        z = top_z + spec.bbox_half[2] + config.RELEASE_HOVER_M
+        z = top_z + spec.bbox_half[2] + config.RELEASE_HOVER_M + BUFFER_EXTRA_HOVER_M
         T_base_w = T_inv(make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W))
         out = []
         for x in np.arange(rect["x_min"] + 0.05, rect["x_max"] - 0.05 + 1e-9, COUNTER_GRID_PITCH_M):
@@ -195,24 +241,54 @@ class ArrangementWorld:
         return out
 
 
+def _move_kind(instance: Instance, move: "Move") -> str:
+    """``"goal"`` if the move commands the item's own target pose, else ``"buffer"``.
+
+    Buffer trips are what separate a monotone plan from a non-monotone one, so the record has
+    to label them rather than leave an aggregator to re-derive them by matching poses.
+    """
+    for it in instance.items:
+        if it["item_id"] == move.item_id:
+            T_goal = np.asarray(it["target"]["T_base_obj"], dtype=float)
+            return "goal" if np.allclose(T_goal, np.asarray(move.T_base_obj, dtype=float),
+                                         atol=1e-6) else "buffer"
+    return "buffer"
+
+
 def run_episode(instance: Instance, algo, world, oracle, budget: int,
-                algorithm_name: str = "") -> dict:
+                algorithm_name: str = "", time_budget_s: float | None = None) -> dict:
     """Drive one closed-loop episode; abort on the first fault; return the episode record.
 
     ``oracle.execute(move) -> (poses, fault, move_info)`` — settled base-frame poses for the
     whole roster, ``fault in (None, "unstable-settle", "disturbed")``, and a per-move info
     dict (e.g. settle_dev_mm, disturbed ids). ``oracle.at_goal(item, T) -> bool``.
+
+    An INFEASIBLE commanded move (one the FCL mirror rejects) is refused and logged, and the
+    episode continues: every algorithm can pre-check with the same oracle, so emitting one is
+    a search error worth MEASURING (``infeasible_commands``), not a reason to destroy the
+    episode. Ending it there would systematically flatter planners that pre-check — the
+    baseline does — over sampling planners that do not.
+
+    Args:
+        budget: Maximum executed moves.
+        time_budget_s: Planning-time budget [s] for the whole episode, or ``None`` for
+            unlimited. Counts ONLY time inside ``algo.next_move`` — physics and the harness's
+            own feasibility checks are the simulator's cost, not the planner's.
     """
     classes = {it["item_id"]: it["object_class"] for it in instance.items}
     poses = {it["item_id"]: np.asarray(it["T_base_init"]) for it in instance.items}
     world.sync(poses, classes)
+    planned_s = 0.0
 
     def observe(moves_used):
         return {"items": {it["item_id"]: {"object_class": it["object_class"],
                                           "T_base_obj": poses[it["item_id"]],
                                           "at_goal": oracle.at_goal(it, poses[it["item_id"]])}
                           for it in instance.items},
-                "moves_used": moves_used, "budget": budget}
+                "moves_used": moves_used, "budget": budget,
+                "time_budget_s": time_budget_s,
+                "time_left_s": (None if time_budget_s is None
+                                else max(0.0, time_budget_s - planned_s))}
 
     obs = observe(0)
     at_goal_initial = sum(v["at_goal"] for v in obs["items"].values())
@@ -220,31 +296,42 @@ def run_episode(instance: Instance, algo, world, oracle, budget: int,
 
     solved, abort = False, None
     planning_time_s, move_log = [], []
-    moves_used = 0
+    moves_used = infeasible_commands = 0
     while True:
         if all(v["at_goal"] for v in obs["items"].values()):
             solved = True
             break
         t0 = time.perf_counter()
         move = algo.next_move(obs)
-        planning_time_s.append(round(time.perf_counter() - t0, 6))
+        dt_plan = time.perf_counter() - t0
+        planned_s += dt_plan
+        planning_time_s.append(round(dt_plan, 6))
         if move is None:
             abort = "give-up"
+            break
+        if time_budget_s is not None and planned_s > time_budget_s:
+            abort = "time-budget"
             break
         if moves_used >= budget:
             abort = "budget"
             break
         if world.move_collides(move.item_id, move.T_base_obj):
-            abort = "collision-command"
+            # refused, not fatal — see the docstring. The algorithm keeps its turn and its
+            # clock; only the world is unchanged.
+            infeasible_commands += 1
             move_log.append({"item_id": move.item_id,
                              "T_base_obj": np.asarray(move.T_base_obj).tolist(),
+                             "kind": "infeasible",
                              "blockers": world.blockers(move.item_id, move.T_base_obj)})
-            break
+            obs = observe(moves_used)
+            continue
+        T_from = np.asarray(poses[move.item_id]).tolist()  # travel distance needs the origin
         poses, fault, info = oracle.execute(move)
         poses = {k: np.asarray(v) for k, v in poses.items()}
         moves_used += 1
         move_log.append({"item_id": move.item_id,
-                         "T_base_obj": np.asarray(move.T_base_obj).tolist(), **info})
+                         "T_base_obj": np.asarray(move.T_base_obj).tolist(),
+                         "T_base_from": T_from, "kind": _move_kind(instance, move), **info})
         world.sync(poses, classes)
         if fault is not None:
             abort = fault
@@ -261,7 +348,19 @@ def run_episode(instance: Instance, algo, world, oracle, budget: int,
         "at_goal_final": int(sum(final.values())),
         "fraction_at_goal": round(sum(final.values()) / n, 4) if n else 1.0,
         "moves_used": moves_used, "budget": budget,
+        "time_budget_s": time_budget_s,
         "planning_time_s": planning_time_s,
+        "planning_time_total_s": round(planned_s, 6),
+        "infeasible_commands": infeasible_commands,
+        "buffer_moves": sum(m.get("kind") == "buffer" for m in move_log),
+        "goal_moves": sum(m.get("kind") == "goal" for m in move_log),
+        "travel_m": round(sum(
+            float(np.linalg.norm(np.asarray(m["T_base_obj"])[:3, 3]
+                                 - np.asarray(m["T_base_from"])[:3, 3]))
+            for m in move_log if "T_base_from" in m), 6),
+        "world_queries": getattr(world, "n_queries", None),
+        "algo_stats": algo.stats() if hasattr(algo, "stats") else {},
+        "instance_meta": dict(instance.meta),
         "moves": move_log,
         "final_poses": {k: np.asarray(v).tolist() for k, v in poses.items()},
     }

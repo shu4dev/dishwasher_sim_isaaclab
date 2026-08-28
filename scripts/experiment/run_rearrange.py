@@ -18,7 +18,9 @@ Run: scripts/run_kit.sh scripts/experiment/run_rearrange.py --headless \
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+import copy
 import glob
+import hashlib
 import math
 import os
 
@@ -32,6 +34,10 @@ parser.add_argument("--instances", type=str, required=True,
 parser.add_argument("--algorithms", type=str, default="greedy", help="Comma list of registry names.")
 parser.add_argument("--budget_mult", type=float, default=3.0, help="Move budget = ceil(mult * n_items).")
 parser.add_argument("--video", action="store_true", help="Record one MP4 per episode (needs --enable_cameras).")
+parser.add_argument("--seed", type=int, default=0,
+                    help="Base seed; each (instance, algorithm) gets a derived seed, recorded.")
+parser.add_argument("--time_budget_s", type=float, default=None,
+                    help="Per-episode PLANNING-time budget [s] (algorithm thinking only).")
 parser.add_argument("--out", type=str, default=os.path.join(PROJECT_ROOT, "results", "rearrange"))
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -83,6 +89,29 @@ from dishsim.media import CameraRig, VideoWriter  # noqa: E402
 from dishsim.transforms import T_inv, T_to_pos_quat, make_T  # noqa: E402
 
 ALGORITHMS = {"greedy": rearrange.Greedy}
+
+
+def _make_algo(name: str, seed: int):
+    """Construct a registry algorithm, passing ``seed`` only if it accepts one.
+
+    Keeps the zero-arg contract the deterministic baselines rely on while letting a
+    stochastic planner be seeded — without forcing every algorithm to grow a constructor.
+    """
+    cls = ALGORITHMS[name]
+    try:
+        return cls(seed=seed)
+    except TypeError:
+        return cls()
+
+
+def _episode_seed(base: int, instance_name: str, algo_name: str) -> int:
+    """Deterministic per-(instance, algorithm) seed.
+
+    ``hash()`` on str is salted per process (PYTHONHASHSEED), so it cannot be used here: a
+    replay would draw a different stream and the recorded seed would be a lie.
+    """
+    key = f"{base}|{instance_name}|{algo_name}".encode()
+    return int(hashlib.sha256(key).hexdigest()[:8], 16)
 
 
 class IsaacOracle:
@@ -159,7 +188,7 @@ def main() -> int:
     classes = sorted(set(pool_items.values()))
     obj_specs = [{"name": item_id, "usd_path": config.OBJECTS[cls].usd_path,
                   "pos": (-2.0 - 0.3 * (i % 6), -1.5 + 0.3 * (i // 6), 0.10),
-                  "quat": (0.0, 0.0, 0.0, 1.0)}
+                  "quat": (0.0, 0.0, 0.0, 1.0), "color": config.item_color(item_id)}
                  for i, (item_id, cls) in enumerate(sorted(pool_items.items()))]
     park_w = {s["name"]: s["pos"] for s in obj_specs}
 
@@ -198,10 +227,15 @@ def main() -> int:
     media_dir = os.path.join(PROJECT_ROOT, "media", "rearrange", MACHINE, STATE)
 
     n_solved = n_episodes = 0
-    for inst in instances:
-        roster = inst.items
-        oracle = IsaacOracle(scene, sim, roster, step)
+    for inst_src in instances:
         for algo_name in algo_names:
+            # Every algorithm must see the artifact's inputs, not its predecessor's. The
+            # episode reset below rewrites T_base_init with the MEASURED reproduction, so
+            # sharing one Instance across algorithms silently re-baselines each run on the
+            # previous one's settle drift — which would invalidate any comparison.
+            inst = copy.deepcopy(inst_src)
+            roster = inst.items
+            oracle = IsaacOracle(scene, sim, roster, step)
             record_path = os.path.join(out_dir, f"{inst.name}__{algo_name}.json")
             video_path = None
             if rig is not None:
@@ -235,8 +269,13 @@ def main() -> int:
                     it["T_base_init"] = oracle.measured(it["item_id"])
                 n_items = len(roster)
                 budget = math.ceil(args_cli.budget_mult * n_items)
-                record = rearrange.run_episode(inst, ALGORITHMS[algo_name](), world, oracle,
-                                               budget=budget, algorithm_name=algo_name)
+                # derived per (instance, algorithm) so a stochastic planner is replayable and
+                # two algorithms on one instance do not share a stream
+                seed = _episode_seed(args_cli.seed, inst.name, algo_name)
+                record = rearrange.run_episode(inst, _make_algo(algo_name, seed), world, oracle,
+                                               budget=budget, algorithm_name=algo_name,
+                                               time_budget_s=args_cli.time_budget_s)
+                record["seed"] = seed
                 n_solved += record["solved"]
             n_episodes += 1
             if video["writer"] is not None:

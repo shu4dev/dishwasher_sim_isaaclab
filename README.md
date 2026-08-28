@@ -55,7 +55,9 @@ The pipeline, mirrored by the layout of `scripts/`:
 | **Plan** | `setup/plan_full_load.py` | Kit-free greedy capacity plan: derive slots live, pre-scan placeability, certify the load jointly, gate on z-budget + measured settle reliability | `results/capacity/.../full_load_plan.json` + figure |
 | **Generate** | `setup/gen_instances.py` | Seeded rearrangement instances (perturbed plans / random drops), physically settled and saved as artifacts | `results/instances/<machine>/<state>/` |
 | **Benchmark** | `experiment/run_rearrange.py` | Closed-loop algorithm episodes: every move teleports + settles; abort on first fault; move budget | `results/rearrange/<machine>/<state>/`, `media/` (`--video`) |
+| **Certify** | `setup/capacity_fill.py` | Settle-certify a plan: items arrive one at a time under physics, unstable ones are parked (honest capacity, never aborts), verdict from the finished tableau on seated AND at-goal | `results/capacity/.../settled_verification_<state>.json`, `media/capacity/<machine>/<state>/` (`--video`) |
 | **Render** | `evaluation/reveal_render.py` | Teleport a planned load, settle it, produce stills + a 360° orbit | `media/capacity/<machine>/` |
+| **Render** | `evaluation/instance_views.py` | One instance's initial-vs-goal stills — the problem, where the episode video is the solving | `media/instances/<machine>/<state>/` |
 
 <table align="center">
   <tr>
@@ -100,12 +102,23 @@ The pipeline, mirrored by the layout of `scripts/`:
   (just physical space; its finite capacity emerges from geometry).
 - **Episode** (closed-loop): the harness FCL-pre-checks each commanded pose, executes it,
   settles physics, and hands the algorithm the measured state via `next_move(obs)`. The
-  episode **aborts on the first fault** — colliding command, unstable settle, or a disturbed
-  neighbor — or at the move budget (3× roster by default).
-- **Scoring** per episode record: solved, fraction-at-goal, moves used, planning time.
+  episode **aborts on the first fault** — unstable settle or a disturbed neighbor — or at the
+  move budget (3× roster by default) or the optional planning-time budget. An **infeasible
+  commanded pose is refused and counted** (`infeasible_commands`), not fatal: every algorithm
+  can pre-check with the same oracle, so emitting one is a search error worth measuring rather
+  than a reason to end the episode — ending it there would flatter pre-checking planners.
+- **Scoring** per episode record: solved, fraction-at-goal, moves used, buffer-vs-goal move
+  split, travel distance, planning time (per call and total), feasibility queries, seed, and
+  whatever an algorithm reports through its optional `stats()` hook.
+- **Ground truth**: `dishsim/compat.py` computes the **provably minimum** move count for an
+  instance, so results can be quoted as an optimality gap rather than a relative ranking.
+  Feasibility is pairwise-decomposable here, so a compatibility table (seconds) makes an exact
+  A* cheap. Measured on the shipped instances: optima **9, 10, 9**; greedy achieves 9 / fails /
+  9. It is a *geometric-relaxation* optimum — see the caveats in the module docstring.
 - **Your algorithm**: one class implementing `reset(instance, world)` / `next_move(obs)`
   (`src/dishsim/rearrange.py`) plus one line in `ALGORITHMS` in
-  `scripts/experiment/run_rearrange.py`. A greedy baseline ships as the thing to beat.
+  `scripts/experiment/run_rearrange.py`; accept a `seed=` kwarg if stochastic. A greedy
+  baseline ships as the thing to beat — one-blocker lookahead, so swap-cycles defeat it.
 
 ### 1.2 What "full load = N" means
 
@@ -113,10 +126,10 @@ The machine's geometric capacity (every slot the racks provide) and its **placea
 capacity are different numbers. `dishsim/capacity.py` counts honestly:
 
 - a slot is **placeable** iff the class's convex pieces are collision-free at the slot's
-  nominal release pose in the empty machine;
-- a load is **jointly placeable** only if each item's release pose stays collision-free with
-  every earlier item resting at its own goal — adjacent rest poses overlap, so "N placeable
-  slots" alone overcounts;
+  nominal release-hover pose in the empty machine;
+- a load is **jointly placeable** only if each item's release-hover pose stays collision-free
+  with every earlier item hovering at its own goal — certification happens at hover on both
+  sides, because a resting object touches the support it stands on;
 - an item may only ride a rack through a rack transition if its worst-case tolerance pose
   clears the geometry passing overhead (the **z-budget** gate — measured on the Bosch: a
   tumbler on the middle rack misses the third rack's underside by 15.8 mm at worst-case tilt);
@@ -124,7 +137,16 @@ capacity are different numbers. `dishsim/capacity.py` counts honestly:
   (release-probe campaigns; scaled drinkware wedges into the Bosch OEM wire lattice roughly
   half the time, so cups/tumblers sit out of the certified Bosch count).
 
-Definitions and the measured numbers: [docs/success_criteria.md](docs/success_criteria.md).
+**Measured (2026-08-28, bosch800 @ `side_winner`, policy `plates_first`): FULL LOAD = 39
+items** — `third_out` 24 forks, `middle_out` 0, `placement` 15 (plate 7 + bowl 8). The lower
+rack's 15 are settle-certified, not merely placeable: `capacity_fill.py` seats them one at a
+time under physics and reports **15/15 seated, 15/15 at goal, 0 neighbours disturbed**.
+
+That phase read 6 items until three artifacts were corrected — phantom CoACD volume on the
+door, a 5 mm hull-inflation margin vetoing real 1.6-3.3 mm clearances, and a 0.2 mm separation
+rule that cost a whole bowl row. None of them were geometry, and none required a cache rebake.
+
+Definitions, provenance and the full funnel: [docs/success_criteria.md](docs/success_criteria.md).
 
 ### 1.3 Object library
 
@@ -364,7 +386,21 @@ scripts/run_kit.sh scripts/experiment/run_rearrange.py --headless --enable_camer
     --instances "results/instances/bosch800/placement/*.json" --algorithms greedy
 scripts/run_kit.sh scripts/evaluation/reveal_render.py --headless --enable_cameras \
     --plan results/capacity/bosch800/side_winner/full_load_plan.json
+
+# what the algorithm is HANDED vs what it is ASKED for: one instance's initial + goal stills
+scripts/run_kit.sh scripts/evaluation/instance_views.py --headless --enable_cameras \
+    --instance results/instances/bosch800/placement/perturbed_s0.json
+
+# settle-certify the plan itself (items arrive one at a time; --video writes the fill timelapse)
+scripts/run_kit.sh scripts/setup/capacity_fill.py --headless --enable_cameras --video \
+    --plan results/capacity/bosch800/side_winner/full_load_plan.json --state placement
 ```
+
+Every multi-object render tints objects **per item** (`config.item_color`): the sourced props
+share one dark-red material, so an untinted 15-item load is unreadable. A colour follows the
+item id, so the same object keeps it across the initial still, the goal still and the episode
+video — that is what makes an arrangement followable. Bowls draw one half of the palette and
+plates the other. Tinting is visual only and never touches physics or collision geometry.
 
 An algorithm implements `reset(instance, world)` / `next_move(obs) -> Move | None`
 (`src/dishsim/rearrange.py`; register it in `ALGORITHMS` in `run_rearrange.py`). Every move
@@ -387,16 +423,52 @@ Every claim maps to a recorded artifact; artifacts live under the gitignored `re
 
 | Claim | Run / artifact | Evidence |
 |---|---|---|
-| **Capacity fill is closable** *(retired script, git history)*: 29 items planned, 27 settle stably, 0 displaced during the stow (the 2 parked are the wine-glass stemware stretch goal) | `results/fill/capacity.json` | `media/fill/` (timelapse, orbit, stills) |
+| **The certified Bosch lower-rack load physically holds**: all 15 planned items (7 plates + 8 bowls) arrive one at a time and settle — **15/15 seated, 15/15 at goal, 0 neighbours disturbed** | `results/capacity/bosch800/side_winner/settled_verification_placement.json` | `media/capacity/bosch800/placement/` (fill timelapse + stills) |
+| **The benchmark runs closed-loop on a 15-item roster**: greedy solves 2 of 3 perturbed instances (15/15 at goal in 9 moves of a 45 budget); the third gives up at 14/15 — an algorithm limit, with **0 harness aborts** across the batch | `results/rearrange/bosch800/placement/` | `media/rearrange/bosch800/placement/` (episode MP4s), `media/instances/bosch800/placement/` (initial vs goal) |
+| **Capacity fill is closable** *(v1 machine, git history)*: 29 items planned, 27 settle stably, 0 displaced during the stow (the 2 parked are the wine-glass stemware stretch goal) | `results/fill/capacity.json` | `media/fill/` (timelapse, orbit, stills) |
 | **Bosch 800 full load settles**: a planned multi-rack load teleported to its release poses settles with max drift 1.1 mm — the plan's poses are physically self-consistent | `media/task/bosch_sanity_load2/` (episode-era artifact of record) | `docs/figures/bosch800_loaded_reveal.png`; regenerate via `reveal_render.py --plan` |
 | **Measured settle-reliability gates**: bowls 59/60 upright on the Bosch lower rack; scaled cups 49/82 and tumblers 64/88 wedge into the OEM wire lattice — which is why drinkware sits out of the certified Bosch count | `results/plate_settle/`, gates frozen in `capacity.MEASURED_SETTLE_RELIABILITY` | [docs/known_limitations.md](docs/known_limitations.md) |
-| *(robot era, git history)* the arm-reachable Bosch full load measured 22 items at the `side_winner` mount (14 forks + 8 lower-rack items); teleport placeability re-counts capacity without the reach constraint | `main` branch history | [docs/success_criteria.md](docs/success_criteria.md) |
+| *(robot era, git history)* the arm-reachable Bosch full load measured 22 items at the `side_winner` mount (14 forks + 8 lower-rack items); teleport placeability re-counted capacity without the reach constraint and reached 39 (see §1.2) | `main` branch history | [docs/success_criteria.md](docs/success_criteria.md) |
+
+## 5.1 Algorithm-comparison study — status
+
+A quantitative comparison (MS-MCTS vs flat MCTS vs greedy vs a monotone floor, against the
+proven optimum) is **partly built**. What exists today:
+
+| piece | state |
+|---|---|
+| Fast feasibility oracle — `move_collides` 429 ms → **2.8 ms** (~21k queries per 60 s) | done, equivalence-checked on 252 verdicts + 1,800 fuzz checks |
+| Ground truth — `dishsim/compat.py`, exact optimal move count | done; s0 = 9, s1 = 10, s2 = 9 |
+| Harness fairness — per-algorithm instance copy, seeds, planning-time budget, stats channel, richer records | done |
+| The algorithms (`dishsim/msmcts.py`: decomposed × guided factorial, naive UCT, monotone floor) | **not started** |
+| Adversarial instance families (cycles, order-adversarial, buffer-scarce, deep chains) | **not started** |
+| Sweep + aggregator (`scripts/evaluation/compare_algorithms.py`) | **not started** |
+
+Four things to weigh before investing further, each measured and detailed in
+[docs/known_limitations.md](docs/known_limitations.md):
+
+1. **Occlusion-based ordering cannot be tested in the `placement` state** — 0 of 15 goal
+   insertions are blocked by another item. Depth heuristics can only be stressed through
+   resource contention here; real occlusion needs the stowed `both_in` state, which is gated
+   behind a hashed `rail_z` fix and a full rebake.
+2. **Plates and bowls are provably decoupled**, so the 15-item problem is really 7 + 8
+   independent subproblems until cross-class blockers are hand-authored.
+3. **Buffer scarcity is a convention, not a rule**: a move may command any pose, so restricting
+   buffers requires a harness-side legality predicate.
+4. The optimum is a **geometric-relaxation** optimum (settled poses deviate 12.8–22.0 mm), and
+   discretizing placements removes continuous buffer sampling.
 
 ## 6 Known limitations
 
 The honest edges, each with measured evidence: scaled drinkware does not stand reliably on
 the Bosch OEM wire lattice; the loaded lower rack cannot be driven back over the door sill;
-the stemware lie-in never settles. Details and next levers:
+the stemware lie-in never settles. Added 2026-08-28: `config_hash` is **not** the only cache
+key (a static-CoACD change is invisible to the staleness check, so a restored box must re-run
+`decompose_meshes.py` once); CoACD's manifold preprocess inflates authored bodies by millimetres
+of phantom volume; only the `placement` rack state is Kit-validated; the move model has **no
+insertion-path gate**, so blocking and non-monotonicity are unrepresentable; the stowed lower
+rack interpenetrates the tub; and capacity is capped by the half-scale dish library and a
+single-rank plate bank rather than by the machine. Details and next levers:
 [docs/known_limitations.md](docs/known_limitations.md).
 
 Adding an **object class**, **placement mode**, or **machine state**:

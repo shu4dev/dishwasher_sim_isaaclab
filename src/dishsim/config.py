@@ -364,7 +364,12 @@ EPISODE_CAMERA = {
 # collision world
 # ---------------------------------------------------------------------------------------------
 CACHE_DIR = os.path.join(ASSETS_DIR, "cache")
-COLLISION_MARGIN_M = 0.005  # hull inflation: the conservative-bias knob for FCL-vs-Isaac parity
+# Hull inflation for candidate objects in FCL queries. Demoted from safety-certificate to
+# pre-filter (2026-08-28): the Isaac settle gates are the certificate for placements, so this
+# only needs to keep obviously-touching poses out of the settle budget. At 5 mm it vetoed
+# real clearances of 1.6-3.3 mm (plate gap_right4, the rear bowl row, and the 120 mm two-step
+# bowl spacing whose true hull-to-hull need is 111.2 mm) — halving certified capacity.
+COLLISION_MARGIN_M = 0.002
 # CoACD parameters per body (fallback key "default"); threshold is the concavity tolerance —
 # lower = finer decomposition. The RACKS no longer go through CoACD: their meshes are generated
 # by rack_gen from RACK_GEN below, and scripts/setup/decompose_meshes.py writes the generator's exact convex parts as
@@ -378,7 +383,25 @@ COACD = {
     # front overhang with phantom volume (measured 2026-08-09 after the slab widening: the
     # bridge piece spanned world z 0.35-0.46 over the machine mouth and blocked the both_out
     # upper-rack push at its final waypoint for every IK branch).
+    #
     "E_body_5": {"threshold": 0.02, "max_convex_hull": 64},
+    # preprocess_mode "off": CoACD's manifold preprocess re-meshes onto a voxel grid, which
+    # adds an ISOTROPIC skin proportional to body size (measured 2026-08-28: E_door_4 hulls
+    # overhang the source mesh by +4.09 mm, E_body_5 by +8.24 mm). The door skin alone
+    # FCL-blocked 5 of the 8 lower-rack plate slots, whose TRUE clearance is 7.3-7.8 mm —
+    # phantom volume, not geometry. The door mesh is already watertight, so the preprocess
+    # buys nothing: with it off the door decomposes to 0.000 mm overhang at exactly 1.000x
+    # source volume in 0.3 s. (Raising preprocess_resolution instead is strictly worse: 200
+    # still leaves 1.02 mm, explodes 2 pieces into 45, and takes 474 s.)
+    #
+    # E_body_5 keeps the preprocess: it is far more concave (its solid is 28% of its convex
+    # hull) and CoACD did not converge on it within 17 min unpreprocessed, versus 4 s with.
+    # Its skin overhangs the COUNTER, which no rack slot touches; the counter buffer band
+    # already carries a measured allowance (rearrange.BUFFER_EXTRA_HOVER_M). Re-decomposing
+    # it honestly is recorded follow-up work, not a lower-rack capacity blocker.
+    #
+    # Only ever set this off for a WATERTIGHT mesh.
+    "E_door_4": {"threshold": 0.02, "max_convex_hull": 32, "preprocess_mode": "off"},
 }
 # ---------------------------------------------------------------------------------------------
 # rack geometry generator (rack_gen) — single source of truth for BOTH replaced rack meshes.
@@ -672,7 +695,10 @@ OBJECT_COUNTERTOP_POSES_W: tuple = (
 # ---------------------------------------------------------------------------------------------
 TASK: dict = {
     # Clear gap required between two occupied slot centres, on top of both objects' body radii.
-    "slot_separation_margin_m": 0.010,
+    # 8 mm, not 10: two bowls (rim radius 55.1 mm) two grid cells apart sit at exactly 120.0 mm,
+    # and a 10 mm margin demands 120.2 — a 0.2 mm veto that forced three-cell spacing and cost
+    # a bowl row (measured 2026-08-28; true inflated-hull need at the 2 mm margin is 115.2 mm).
+    "slot_separation_margin_m": 0.008,
     # Counter staging band [m, world] — drawn by capacity.render_placeability_figure as the
     # dashed reference rectangle on the worktop.
     "spawn_rect_w": {"x_min": 0.680, "x_max": 0.800, "y_min": -0.580, "y_max": 0.420},
@@ -799,6 +825,72 @@ class ObjectSpec:
     @property
     def usd_path(self) -> str:
         return os.path.join(ASSETS_DIR, "props", self.usd_basename or f"{self.name}_physics.usd")
+
+
+#: Per-class render tint [linear RGB 0-1] for media only — never physics, never geometry.
+#: The sourced props all carry the same dark-red material, so a multi-class load renders as one
+#: undifferentiated mass and a viewer cannot tell a bowl from a plate. Classes absent here keep
+#: the asset's own material.
+OBJECT_DISPLAY_COLOR: dict[str, tuple[float, float, float]] = {
+    "bowl": (0.15, 0.40, 0.85),      # blue
+    "plate": (0.95, 0.55, 0.10),     # orange
+    "cup": (0.20, 0.70, 0.35),       # green
+    "tumbler": (0.65, 0.30, 0.80),   # violet
+    "mug": (0.85, 0.20, 0.20),       # red
+    "fork": (0.90, 0.85, 0.25),      # yellow
+}
+
+#: High-contrast qualitative palette [linear RGB 0-1] for PER-ITEM tinting. Class colors alone
+#: cannot answer "which bowl went where" — the question a rearrangement viewer actually asks —
+#: so every item of a roster gets its own entry and keeps it across stills and video.
+ITEM_COLOR_PALETTE: tuple[tuple[float, float, float], ...] = (
+    (0.90, 0.10, 0.10),   # 0  red
+    (0.12, 0.35, 0.90),   # 1  blue
+    (0.10, 0.65, 0.20),   # 2  green
+    (1.00, 0.55, 0.00),   # 3  orange
+    (0.60, 0.20, 0.80),   # 4  violet
+    (0.10, 0.75, 0.80),   # 5  cyan
+    (0.95, 0.25, 0.65),   # 6  magenta
+    (0.95, 0.85, 0.10),   # 7  yellow
+    (0.00, 0.50, 0.50),   # 8  teal
+    (0.55, 0.35, 0.15),   # 9  brown
+    (0.60, 0.85, 0.10),   # 10 lime
+    (0.10, 0.15, 0.55),   # 11 navy
+    (1.00, 0.65, 0.75),   # 12 pink
+    (0.50, 0.55, 0.10),   # 13 olive
+    (0.45, 0.75, 0.95),   # 14 sky
+    (0.55, 0.05, 0.25),   # 15 maroon
+)
+
+#: First palette index each class draws from, so a roster's classes occupy disjoint colour runs
+#: (bowls 0-7, plates 8-15) and the mapping depends only on the item id — not on roster order,
+#: which differs between scripts. Unlisted classes fall back to the class tint.
+ITEM_COLOR_BASE: dict[str, int] = {"bowl": 0, "plate": 8, "cup": 0, "tumbler": 8, "fork": 0, "mug": 8}
+
+
+def display_color(object_name: str) -> tuple[float, float, float] | None:
+    """Render tint for a class, or ``None`` to keep the asset's own material.
+
+    Args:
+        object_name: Object class (a key of :data:`OBJECTS`).
+    """
+    return OBJECT_DISPLAY_COLOR.get(object_name)
+
+
+def item_color(item_id: str) -> tuple[float, float, float] | None:
+    """Render tint for ONE item of a roster, stable across every render of that item.
+
+    Item ids are ``<class>_<nn>`` (``bowl_03``). The colour follows the id alone, so the same
+    object is the same colour in the initial still, the goal still and the episode video —
+    which is what makes an arrangement readable.
+
+    Args:
+        item_id: Roster item id, e.g. ``"bowl_03"``.
+    """
+    cls, _, idx = item_id.rpartition("_")
+    if not idx.isdigit() or cls not in ITEM_COLOR_BASE:
+        return display_color(cls)
+    return ITEM_COLOR_PALETTE[(ITEM_COLOR_BASE[cls] + int(idx)) % len(ITEM_COLOR_PALETTE)]
 
 
 OBJECTS: dict[str, ObjectSpec] = {
@@ -1457,14 +1549,16 @@ _RACK_GEN_BOSCH: dict = {
 _TASK_BOSCH = {**TASK, "spawn_rect_w": {"x_min": 0.830, "x_max": 1.060,
                                         "y_min": -0.880, "y_max": -0.320}}
 
-#: Bosch episode camera: the v1 view targets the v1 scene at the origin and leaves the Bosch
-#: machine (x 1.12) right-of-frame with the counter clipped. Re-aimed 2026-08-14 by
-#: rendering candidates in one Kit boot (scratchpad frame_episode_cam sweep; candB adopted):
-#: counter spawn face, door runway with the extended rack, arm and machine all in frame with
-#: margins. Same 15 mm lens — the scene-fills-frame arithmetic above still applies.
+#: Bosch episode camera: near-nadir plan view from above the machine, re-aimed 2026-08-28 by
+#: rendering five candidates in one Kit boot against a real placement-state instance
+#: (scratchpad camera_probe sweep; plan_near_nadir adopted). Eye over the rack/counter seam,
+#: pitch 84.3 deg — just inside the 85-deg look-at cap so roll stays defined — framing the
+#: counter buffer band (x 0.83-1.06, y -0.88..-0.32) and the extended lower rack footprint
+#: (x 0.31..0.82, y +-0.26) with ~25% margin; slot/buffer occupancy reads at a glance.
+#: Same 15 mm lens — the scene-fills-frame arithmetic above still applies.
 _EPISODE_CAMERA_BOSCH = {
-    "eye": (-0.70, -2.60, 1.60),
-    "target": (0.75, -0.30, 0.45),
+    "eye": (0.55, -0.31, 3.00),
+    "target": (0.80, -0.31, 0.50),
     "lens": dict(EPISODE_CAMERA["lens"]),
 }
 
@@ -1476,9 +1570,12 @@ _EPISODE_CAMERA_BOSCH = {
 #: lean. Probe of record (retired probe_plate_settle.py, git history; 2026-08-14, 3 gaps x 8
 #: releases): lateral mean 14.1 / p95 15.0 / max 15.2 mm, tilt p95 14.0 / max 14.1 deg,
 #: bottom clean — 0/24 passed the v1 tolerances, 24/24 pass these (geometry bound + margin).
+#: seat_y_m 0.140: the Bosch bank's corridor midpoint between its rows at y 0.090/0.190 —
+#: the baseline 0.134 is the ArtVIP corridor (rows 0.108/0.160) and seated discs 6 mm forward.
 _PLACEMENT_MODES_BOSCH = {**PLACEMENT_MODES,
                           "plate_slot": {**PLACEMENT_MODES["plate_slot"],
-                                         "tol_lateral_m": 0.018, "tol_tilt_deg": 16.0}}
+                                         "tol_lateral_m": 0.018, "tol_tilt_deg": 16.0,
+                                         "seat_y_m": 0.140}}
 
 MACHINES: dict[str, dict] = {
     MACHINE_BASELINE_NAME: {},  # baseline: no overrides; module-top values ARE its definition

@@ -8,9 +8,10 @@ Grows the largest jointly-placeable load one item at a time, Kit-free (teleport 
 no reachability, no motion planning):
 
 - a slot is PLACEABLE iff the class's convex pieces are collision-free at the slot's nominal
-  rest pose in the EMPTY machine (:meth:`~dishsim.collision_world.CollisionWorld.object_in_collision`);
-- a load is JOINTLY placeable only if each item's rest pose stays collision-free with every
-  earlier item sitting at its own goal — neighbours are added to the state's
+  RELEASE-HOVER pose in the EMPTY machine (a resting object touches its own support, so
+  certification happens at hover — see :func:`_nominal_release_pose`);
+- a load is JOINTLY placeable only if each item's release-hover pose stays collision-free with
+  every earlier item hovering at its own goal — neighbours are added to the state's
   :class:`~dishsim.collision_world.CollisionWorld` as they place. Without this, "N placeable
   slots" overcounts: adjacent rest poses overlap;
 - an item may only ride a rack through a rack transition if its worst-case tolerance
@@ -19,8 +20,9 @@ no reachability, no motion planning):
   the third rack's underside by 15.8 mm at worst-case tilt, a cup clears by 20.6 mm — which
   is why a full load puts only cups on the middle rack.
 
-Packing (candidate order, occupancy, most-constrained-first) is shared with
-:mod:`dishsim.task.slotting`.
+Packing (candidate order, occupancy) is shared with :mod:`dishsim.task.slotting`; assignment
+is greedy first-fit (measured 2026-08-28: on the lower-rack grid it equals the exact maximum
+independent set, so there is no packing headroom in the algorithm itself).
 
 Context discipline: the CALLER applies machine and base placement (the order contract:
 machine -> object -> scenario -> placement). :func:`plan_full_load` flips
@@ -57,9 +59,10 @@ LOADING_STATES: dict[str, tuple[str, ...]] = {
 #: ``plates_first``: the rear plate bank fills before the floor grid so disc placements are
 #: certified against an empty rack mouth; the floor grid then round-robins bowl/cup/tumbler.
 #: Measured (2026-08-14, placement phase at side_winner): the round-robin packs 13 items
-#: (2 plates, 4 bowls, 4 cups, 3 tumblers) where a bowls-first order manages only 9 — six
-#: 71 mm-radius bowls at 153 mm separation blanket the reachable floor before drinkware gets
-#: a turn. The middle-rack phase requests both drinkware classes and lets the z-budget gate
+#: (2 plates, 4 bowls, 4 cups, 3 tumblers) where a bowls-first order manages only 9 — bowls
+#: (rim radius 55.1 mm; an earlier revision of this note wrongly quoted the plate's radii)
+#: blanket the reachable floor at the enforced separation before drinkware gets a turn.
+#: The middle-rack phase requests both drinkware classes and lets the z-budget gate
 #: retire what cannot ride (measured: the tumbler).
 POLICIES: dict[str, dict[str, tuple]] = {
     "plates_first": {
@@ -88,6 +91,10 @@ MEASURED_SETTLE_RELIABILITY: dict[tuple[str, str], float] = {
     ("placement", "bowl"): 59 / 60,
     ("placement", "cup"): 49 / 82,
     ("placement", "tumbler"): 64 / 88,
+    # Plate under the BOSCH plate_slot tolerances (tol_lateral 0.018 / tilt 16 deg, the
+    # machine override measured for the 50 mm bank): same 3-gap x 8-release probe of record,
+    # results/plate_settle/bosch800/report.json — 0/24 under the v1 tolerances, 24/24 here.
+    ("placement", "plate"): 24 / 24,
     ("middle_out", "cup"): 63 / 120,
 }
 
@@ -271,8 +278,8 @@ def load_state_tables(state: str, classes: list[str]) -> _StateTables:
 
     Slots derive from the cached rack geometry (:func:`placement.derive_slots` — deterministic
     given the cache, which ``load_manifest`` hash-guards, so there is no slot bake). A slot is
-    PLACEABLE iff the class's convex pieces are collision-free at its nominal rest pose with
-    the machine empty. Must be called under ``config.apply_scenario(state)``.
+    PLACEABLE iff the class's convex pieces are collision-free at its nominal RELEASE-HOVER
+    pose with the machine empty. Must be called under ``config.apply_scenario(state)``.
     """
     slots, placeable, names = {}, {}, {}
     live_hash = None

@@ -124,9 +124,11 @@ def _add_object(scene_cfg, spec: dict) -> None:
         scene_cfg: Scene configclass instance to mutate.
         spec: ``{"name", "usd_path", "pos", "quat"}`` plus optional ``"contact_filters"``
             (prim paths to resolve per-partner forces against — an object's peers, so a
-            support graph can be read from contacts).
+            support graph can be read from contacts) and optional ``"color"`` (linear RGB
+            0-1 render tint, see :func:`~dishsim.config.display_color`; visual only).
     """
     name = spec["name"]
+    color = spec.get("color")
     setattr(
         scene_cfg,
         name,
@@ -136,6 +138,10 @@ def _add_object(scene_cfg, spec: dict) -> None:
                 usd_path=spec["usd_path"],
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(max_depenetration_velocity=5.0),
                 activate_contact_sensors=True,
+                # visual only: binds over the asset's own material so classes are tellable
+                # apart on camera. Physics and collision geometry are untouched.
+                visual_material=(sim_utils.PreviewSurfaceCfg(diffuse_color=tuple(color))
+                                 if color is not None else None),
             ),
             init_state=RigidObjectCfg.InitialStateCfg(
                 pos=tuple(spec["pos"]), rot=tuple(spec["quat"])
