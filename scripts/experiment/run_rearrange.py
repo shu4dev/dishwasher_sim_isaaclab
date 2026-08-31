@@ -29,15 +29,21 @@ from isaaclab.app import AppLauncher
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/<phase>/<file>.py
 
 parser = argparse.ArgumentParser(description="Rearrangement benchmark runner.")
-parser.add_argument("--instances", type=str, required=True,
+parser.add_argument("--instances", type=str, default=None,
                     help='Instance JSON glob, e.g. "results/instances/bosch800/placement/*.json".')
+parser.add_argument("--cells", type=str, default=None,
+                    help="Comma list of dishsim.tiers.CELLS names; expands to per-cell "
+                         "instance globs under --instances_root.")
+parser.add_argument("--instances_root", type=str,
+                    default="results/instances/bosch800/placement")
 parser.add_argument("--algorithms", type=str, default="greedy", help="Comma list of registry names.")
 parser.add_argument("--budget_mult", type=float, default=3.0, help="Move budget = ceil(mult * n_items).")
 parser.add_argument("--video", action="store_true", help="Record one MP4 per episode (needs --enable_cameras).")
 parser.add_argument("--seed", type=int, default=0,
                     help="Base seed; each (instance, algorithm) gets a derived seed, recorded.")
-parser.add_argument("--time_budget_s", type=float, default=None,
-                    help="Per-episode PLANNING-time budget [s] (algorithm thinking only).")
+parser.add_argument("--time_budget_s", type=float, default=60.0,
+                    help="Per-episode PLANNING-time budget [s] (algorithm thinking only); "
+                         "<= 0 = unlimited.")
 parser.add_argument("--out", type=str, default=os.path.join(PROJECT_ROOT, "results", "rearrange"))
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -63,11 +69,21 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from dishsim import config  # noqa: E402
 
-_pattern = args_cli.instances if os.path.isabs(args_cli.instances) \
-    else os.path.join(PROJECT_ROOT, args_cli.instances)
-_paths = sorted(glob.glob(_pattern))
-if not _paths:
-    raise SystemExit(f"[FAIL] no instances match {_pattern}")
+if bool(args_cli.instances) == bool(args_cli.cells):
+    raise SystemExit("[FAIL] give exactly one of --instances or --cells")
+if args_cli.cells:
+    _cells = [c.strip() for c in args_cli.cells.split(",") if c.strip()]
+    _paths = sorted(p for c in _cells for p in glob.glob(
+        os.path.join(PROJECT_ROOT, args_cli.instances_root, c, "*.json")))
+    if not _paths:
+        raise SystemExit(f"[FAIL] no instances for cells {_cells} under "
+                         f"{args_cli.instances_root}")
+else:
+    _pattern = args_cli.instances if os.path.isabs(args_cli.instances) \
+        else os.path.join(PROJECT_ROOT, args_cli.instances)
+    _paths = sorted(glob.glob(_pattern))
+    if not _paths:
+        raise SystemExit(f"[FAIL] no instances match {_pattern}")
 _docs = [json.load(open(p)) for p in _paths]
 _ctx = {(d["machine"], d["base_placement"], d["state"]) for d in _docs}
 if len(_ctx) != 1:
@@ -91,6 +107,13 @@ from dishsim.quats import wxyz_to_xyzw, xyzw_to_wxyz  # noqa: E402
 from dishsim.transforms import T_inv, T_to_pos_quat, make_T  # noqa: E402
 
 ALGORITHMS = {"greedy": rearrange.Greedy}
+try:  # sampling planners register when their module imports cleanly (never sink a batch)
+    from dishsim import rrt as _rrt
+
+    ALGORITHMS.update({"rrt": _rrt.RRT, "rrt_connect": _rrt.RRTConnect,
+                       "rrt_star": _rrt.RRTStar})
+except Exception as _exc:  # noqa: BLE001
+    print(f"[WARN] rrt planners unavailable: {_exc!r}")
 
 
 def _episode_seed(base: int, instance_name: str, algo_name: str) -> int:
@@ -134,6 +157,14 @@ class IsaacOracle:
     def at_goal(self, item, T):
         return rearrange.at_goal(item, T)
 
+    def _disturbed(self, pre, poses, moved_id):
+        return [
+            it["item_id"] for it in self.roster if it["item_id"] != moved_id and (
+                float(np.linalg.norm(poses[it["item_id"]][:3, 3] - pre[it["item_id"]][:3, 3]))
+                > rearrange.DISTURB_POS_M
+                or rearrange.rot_angle_deg(pre[it["item_id"]], poses[it["item_id"]])
+                > rearrange.DISTURB_ROT_DEG)]
+
     def execute(self, move):
         pre = self.poses()
         self.teleport(move.item_id, move.T_base_obj)
@@ -147,21 +178,34 @@ class IsaacOracle:
         drift_p = float(np.linalg.norm(hist[-1][:3, 3] - hist[0][:3, 3]))
         drift_deg = rearrange.rot_angle_deg(hist[0], hist[-1])
         dev_p = float(np.linalg.norm(settled[:3, 3] - np.asarray(move.T_base_obj)[:3, 3]))
-        disturbed = [
-            it["item_id"] for it in self.roster if it["item_id"] != move.item_id and (
-                float(np.linalg.norm(poses[it["item_id"]][:3, 3] - pre[it["item_id"]][:3, 3]))
-                > rearrange.DISTURB_POS_M
-                or rearrange.rot_angle_deg(pre[it["item_id"]], poses[it["item_id"]])
-                > rearrange.DISTURB_ROT_DEG)]
-        fault = None
-        if drift_p > rearrange.STABLE_POS_M or drift_deg > rearrange.STABLE_ROT_DEG \
-                or dev_p > rearrange.MOVE_DEV_MAX_M:
-            fault = "unstable-settle"
-        elif disturbed:
-            fault = "disturbed"
+        disturbed = self._disturbed(pre, poses, move.item_id)
         info = {"settle_dev_mm": round(dev_p * 1e3, 1), "drift_mm": round(drift_p * 1e3, 1),
                 "disturbed": disturbed}
-        return poses, fault, info
+        if disturbed:
+            # fatal FIRST: a put-back cannot restore a knocked neighbour
+            return poses, "disturbed", info
+        if drift_p > rearrange.STABLE_POS_M or drift_deg > rearrange.STABLE_ROT_DEG \
+                or dev_p > rearrange.MOVE_DEV_MAX_M:
+            # NON-fatal failed settle: return the item to its pre-move settled pose,
+            # re-settle, and hand the episode back exactly the pre-move state. The put-back
+            # is a teleport-into-contact at a pose that was a settled equilibrium moments
+            # ago, so the INIT_MATCH_* reproduction gates are the right judge of it.
+            self.teleport(move.item_id, pre[move.item_id])
+            for _ in range(rearrange.SETTLE_STEPS_MOVE):
+                self.step(1)
+            poses = self.poses()
+            back_dp = float(np.linalg.norm(
+                poses[move.item_id][:3, 3] - pre[move.item_id][:3, 3]))
+            back_dr = rearrange.rot_angle_deg(pre[move.item_id], poses[move.item_id])
+            info["teleport_back_mm"] = round(back_dp * 1e3, 1)
+            re_disturbed = self._disturbed(pre, poses, move.item_id)
+            if re_disturbed:
+                info["disturbed"] = re_disturbed
+                return poses, "disturbed", info      # the put-back knocked a neighbour
+            if back_dp > rearrange.INIT_MATCH_POS_M or back_dr > rearrange.INIT_MATCH_ROT_DEG:
+                return poses, "unstable-settle", info  # the put-back itself failed
+            return poses, "failed-settle", info
+        return poses, None, info
 
 
 def main() -> int:
@@ -226,10 +270,15 @@ def main() -> int:
             inst = copy.deepcopy(inst_src)
             roster = inst.items
             oracle = IsaacOracle(scene, sim, roster, step)
-            record_path = os.path.join(out_dir, f"{inst.name}__{algo_name}.json")
+            cell = inst.meta.get("cell")
+            rec_dir = os.path.join(out_dir, cell) if cell else out_dir
+            os.makedirs(rec_dir, exist_ok=True)
+            record_path = os.path.join(rec_dir, f"{inst.name}__{algo_name}.json")
             video_path = None
             if rig is not None:
-                video_path = os.path.join(media_dir, f"{inst.name}__{algo_name}.mp4")
+                vid_dir = os.path.join(media_dir, cell) if cell else media_dir
+                os.makedirs(vid_dir, exist_ok=True)
+                video_path = os.path.join(vid_dir, f"{inst.name}__{algo_name}.mp4")
                 video["writer"] = VideoWriter(video_path, fps=config.CAMERA_FPS)
 
             # episode reset: park the whole pool, place the roster, settle, verify
@@ -250,10 +299,12 @@ def main() -> int:
             if mismatch:
                 record = {"instance": inst.name, "algorithm": algo_name, "machine": MACHINE,
                           "state": STATE, "solved": False, "abort": "init-mismatch",
-                          "init_mismatch": mismatch}
+                          "init_mismatch": mismatch,
+                          "instance_meta": dict(inst.meta)}  # keeps cell attribution intact
                 print(f"[WARN] {inst.name}/{algo_name}: init-mismatch {mismatch}")
             else:
                 world.clear()
+                world.n_queries = 0  # per-episode counter (else it accumulates over the batch)
                 # seed the mirror + episode from the MEASURED reproduced initials
                 for it in roster:
                     it["T_base_init"] = oracle.measured(it["item_id"])
@@ -262,9 +313,16 @@ def main() -> int:
                 # derived per (instance, algorithm) so a stochastic planner is replayable and
                 # two algorithms on one instance do not share a stream
                 seed = _episode_seed(args_cli.seed, inst.name, algo_name)
-                record = rearrange.run_episode(inst, ALGORITHMS[algo_name](), world, oracle,
+                try:
+                    algo = ALGORITHMS[algo_name](seed=seed)  # stochastic planners consume it
+                except TypeError:
+                    algo = ALGORITHMS[algo_name]()           # deterministic ones don't
+                time_budget = (None if args_cli.time_budget_s is None
+                               or args_cli.time_budget_s <= 0 else args_cli.time_budget_s)
+                record = rearrange.run_episode(inst, algo, world, oracle,
                                                budget=budget, algorithm_name=algo_name,
-                                               time_budget_s=args_cli.time_budget_s)
+                                               time_budget_s=time_budget,
+                                               counter_cap=inst.meta.get("counter_cap"))
                 record["seed"] = seed
                 n_solved += record["solved"]
             n_episodes += 1

@@ -302,6 +302,7 @@ def _class_streams(policy_states: tuple, classes: list[str]) -> list[list[str]]:
 def plan_full_load(*, states: tuple[str, ...] | None = None, classes: list[str] | None = None,
                    policy: str = "plates_first",
                    per_class_cap: dict[str, int] | None = None,
+                   settle_bar: float | None = None,
                    log=print) -> CapacityPlan:
     """Grow the largest jointly-certified load, one item at a time.
 
@@ -311,6 +312,8 @@ def plan_full_load(*, states: tuple[str, ...] | None = None, classes: list[str] 
         classes: Class pool; defaults to :func:`capacity_classes`.
         policy: Key of :data:`POLICIES` — the class request order.
         per_class_cap: Optional hard cap per class (e.g. ``{"fork": 8}``).
+        settle_bar: Per-call override of :data:`SETTLE_RELIABILITY_BAR` (benchmark tiers use
+            0.70 to admit the tumbler); ``None`` = the default 0.90.
         log: Progress sink (the script passes ``print``; tests pass a no-op).
 
     Returns:
@@ -359,9 +362,10 @@ def plan_full_load(*, states: tuple[str, ...] | None = None, classes: list[str] 
                     streams = [[c for c in g if c != cls] for g in streams]
                     continue
                 rel = MEASURED_SETTLE_RELIABILITY.get((state, cls))
-                if rel is not None and rel < SETTLE_RELIABILITY_BAR:
+                bar = SETTLE_RELIABILITY_BAR if settle_bar is None else settle_bar
+                if rel is not None and rel < bar:
                     log(f"[INFO] {state}: {cls} excluded by measured settle reliability "
-                        f"({rel:.0%} < {SETTLE_RELIABILITY_BAR:.0%})")
+                        f"({rel:.0%} < {bar:.0%})")
                     phase.funnel[cls]["stopped_by"] = "settle-reliability"
                     streams = [[c for c in g if c != cls] for g in streams]
             streams = [g for g in streams if g]

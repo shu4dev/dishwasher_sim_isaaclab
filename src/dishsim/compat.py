@@ -59,11 +59,15 @@ class CompatTable:
         self.n_queries = 0
         self._pieces: dict = {}
         self._worlds: dict = {}
-        self._build_locations(instance)
-        self._build_table()
+        self.counter_locs: set = set()
+        self._build_locations()
+        self._extend_table(list(self.poses))
+        self._refresh_counter_locs()
+        if instance is not None:
+            self.set_instance(instance)
 
     # ---- construction -------------------------------------------------------------------
-    def _build_locations(self, instance) -> None:
+    def _build_locations(self) -> None:
         from .rearrange import ArrangementWorld  # local: avoids an import cycle
 
         aw = ArrangementWorld(self.state, self.classes)
@@ -78,23 +82,58 @@ class CompatTable:
                     self.poses[(cls, slot.slot_id)] = capacity._nominal_release_pose(slot)
             for i, T in enumerate(aw.buffer_poses(cls)):
                 self.poses[(cls, ("buf", i))] = np.asarray(T)
-        if instance is not None:  # start poses are locations too: an item there blocks cells
-            for it in instance.items:
-                key = (it["object_class"], ("init", it["item_id"]))
-                self.poses[key] = np.asarray(it["T_base_init"], dtype=float)
 
-    def _build_table(self) -> None:
-        """Static test per location, then one test per unordered pair.
+    def set_instance(self, instance) -> "CompatTable":
+        """(Re)point the ``("init", item)`` locations at THIS instance's start poses.
+
+        A table is reusable across instances of one (state, classes) batch ONLY through
+        this: init locations are per-instance, and reusing a stale table silently solves
+        against the PREVIOUS instance's blockers (the bug that produced the pre-2026-08-31
+        s1/s2 optimum pins).
+        """
+        stale = [l for l in self.poses if isinstance(l[1], tuple) and l[1][0] == "init"]
+        for loc in stale:
+            self.poses.pop(loc)
+            self.static_ok.pop(loc, None)
+        if stale:
+            gone = set(stale)
+            self._pair_ok = {k: v for k, v in self._pair_ok.items()
+                            if k[0] not in gone and k[1] not in gone}
+        new = []
+        for it in instance.items:  # start poses are locations too: an item there blocks cells
+            key = (it["object_class"], ("init", it["item_id"]))
+            self.poses[key] = np.asarray(it["T_base_init"], dtype=float)
+            new.append(key)
+        self._extend_table(new)
+        self._refresh_counter_locs()
+        return self
+
+    def _refresh_counter_locs(self) -> None:
+        """Locations that occupy the counter band: every buffer cell, plus any init pose
+        geometrically inside the band (items STARTING on the counter count against a cap)."""
+        from .rearrange import in_counter_band  # local: avoids an import cycle
+
+        self.counter_locs = {
+            loc for loc, T in self.poses.items()
+            if isinstance(loc[1], tuple) and (
+                loc[1][0] == "buf"
+                or (loc[1][0] == "init" and in_counter_band(T)))}
+
+    def _extend_table(self, new_locs: list) -> None:
+        """Static test per new location, then one pair test per (new, any-other) pair.
 
         Pairs are computed over EVERY location, not only the statically-free ones. A settled
         start pose is not a legal destination — a resting object's margin-inflated hull touches
         the wire floor it stands on, so it fails the static test — but an object sitting there
         still blocks its neighbours, and dropping those pairs would make every move look free.
         """
-        for loc, T in self.poses.items():
+        new_set = set(new_locs)
+        existing = [l for l in self.poses if l not in new_set]
+        for loc in new_locs:
             cls = loc[0]
             self.n_queries += 1
-            self.static_ok[loc] = not self._worlds[cls].object_in_collision(self._pieces[cls], T)
+            self.static_ok[loc] = not self._worlds[cls].object_in_collision(
+                self._pieces[cls], self.poses[loc])
         # Pairwise tests run with the statics DISABLED, so the pair term is isolated from the
         # static term. Mixing them would make every pair involving a statically-blocked
         # location read "incompatible" — and a settled start pose IS statically blocked (a
@@ -103,8 +142,11 @@ class CompatTable:
             for name in list(world._static_objs):
                 world.set_static_enabled(name, False)
         try:
-            for a, b in itertools.combinations(self.poses, 2):
+            for a, b in itertools.combinations(new_locs, 2):
                 self._pair_ok[(a, b)] = self._pair_free(a, b)
+            for a in new_locs:
+                for b in existing:
+                    self._pair_ok[(a, b)] = self._pair_free(a, b)
         finally:
             for world in self._worlds.values():
                 for name in list(world._static_objs):
@@ -140,7 +182,7 @@ class CompatTable:
 
 
 def optimal_moves(instance, table: CompatTable | None = None, max_expansions: int = 2_000_000,
-                  max_seconds: float | None = 120.0):
+                  max_seconds: float | None = 120.0, counter_cap: int | None = None):
     """Provably minimum number of moves to bring every item to its target location.
 
     A* over assignments of items to locations, with the admissible and consistent heuristic
@@ -149,15 +191,26 @@ def optimal_moves(instance, table: CompatTable | None = None, max_expansions: in
 
     Args:
         instance: A ``rearrange.Instance``.
-        table: Prebuilt :class:`CompatTable`; built here if omitted.
-        max_expansions: Safety bound; ``None`` is returned if the search exceeds it.
+        table: Prebuilt :class:`CompatTable`; built here if omitted. A passed table is
+            re-pointed at THIS instance's start poses (:meth:`CompatTable.set_instance`).
+        max_expansions: Safety bound on A* expansions.
+        max_seconds: Wall-clock bound, or ``None`` for unlimited.
+        counter_cap: Max SIMULTANEOUS items at counter-band locations
+            (``table.counter_locs``), matching the episode driver's cap; ``None`` = no cap.
+            The cap gates only moves whose DESTINATION is in the band (moving out is always
+            legal), exactly the driver's semantics.
 
     Returns:
-        ``(n_moves, table)``, or ``(None, table)`` if unsolvable within the bound.
+        ``(n_moves, status, table)`` with ``status`` in ``("solved", "bound",
+        "unsolvable")``. ``"unsolvable"`` is PROVEN (a goal is off-lattice, or the open list
+        exhausted under an admissible heuristic); ``"bound"`` means the expansion/time
+        budget ran out and the optimum is unknown. ``n_moves`` is ``None`` unless solved.
     """
     classes = sorted({it["object_class"] for it in instance.items})
     if table is None:
         table = CompatTable(instance.state, classes, instance=instance)
+    elif hasattr(table, "set_instance"):
+        table.set_instance(instance)
 
     from .rearrange import at_goal  # local: avoids an import cycle
 
@@ -183,7 +236,7 @@ def optimal_moves(instance, table: CompatTable | None = None, max_expansions: in
                      else (cls, ("init", it["item_id"])))
     start, goal = tuple(start), tuple(goal)
     if any(loc is None for loc in goal):
-        return None, table
+        return None, "unsolvable", table
 
     # Index the locations and precompute compatibility as BITMASKS. The search runs millions of
     # "can these coexist?" checks; a dict lookup or a numpy fancy-index per pair is what makes a
@@ -198,6 +251,16 @@ def optimal_moves(instance, table: CompatTable | None = None, max_expansions: in
             if j != i and not table.compatible(a, loc_list[j]):
                 m |= 1 << j
         conflict[i] = m
+
+    # counter-band occupancy mask for the cap: buffer cells + in-band init poses. Stub
+    # tables without counter_locs fall back to the ("buf", i) convention.
+    counter_locs = getattr(table, "counter_locs", None)
+    if counter_locs is None:
+        counter_locs = {l for l in loc_list if isinstance(l[1], tuple) and l[1][0] == "buf"}
+    buf_mask = 0
+    for i, l in enumerate(loc_list):
+        if l in counter_locs:
+            buf_mask |= 1 << i
 
     start_i = tuple(loc_idx[s] for s in start)
     goal_i = tuple(loc_idx[g] for g in goal)
@@ -241,15 +304,15 @@ def optimal_moves(instance, table: CompatTable | None = None, max_expansions: in
     while open_heap:
         _, g, _, state = heapq.heappop(open_heap)
         if state == goal_i:
-            return g, table
+            return g, "solved", table
         if g > best.get(state, float("inf")):
             continue
         expansions += 1
         if expansions > max_expansions:
-            return None, table
+            return None, "bound", table
         if max_seconds is not None and not expansions % 1024 \
                 and time.perf_counter() - t_start > max_seconds:
-            return None, table
+            return None, "bound", table
 
         occ = mask_of(state)
         misplaced = [k for k in range(n) if state[k] != goal_i[k]]
@@ -264,12 +327,15 @@ def optimal_moves(instance, table: CompatTable | None = None, max_expansions: in
             for loc in dests[idx]:
                 if conflict[loc] & others:
                     continue  # occupied or incompatible with something already placed
+                if counter_cap is not None and (1 << loc) & buf_mask and \
+                        ((others | (1 << loc)) & buf_mask).bit_count() > counter_cap:
+                    continue  # counter band at capacity — mirrors the driver's refusal
                 nxt = state[:idx] + (loc,) + state[idx + 1:]
                 ng = g + 1
                 if ng < best.get(nxt, float("inf")):
                     best[nxt] = ng
                     heapq.heappush(open_heap, (ng + h(nxt), ng, next(tick), nxt))
-    return None, table
+    return None, "unsolvable", table  # open list exhausted: PROVEN infeasible
 
 
 def _nearest_location(table: CompatTable, cls: str, T_target, tol_m: float = 1e-3):

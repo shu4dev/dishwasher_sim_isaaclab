@@ -54,7 +54,7 @@ The pipeline, mirrored by the layout of `scripts/`:
 |---|---|---|---|
 | **Plan** | in-process (`capacity.plan_full_load`) | Kit-free greedy capacity plan: derive slots live, pre-scan placeability, certify the load jointly, gate on z-budget + measured settle reliability | (consumed live by Generate) |
 | **Generate** | `setup/gen_instances.py` | Seeded rearrangement instances (perturbed plans / random drops), physically settled and saved as artifacts | `results/instances/<machine>/<state>/` |
-| **Problem images** | `evaluation/instance_views.py` | One instance's initial-vs-goal stills — the problem, where the episode video is the solving | `media/instances/<machine>/<state>/` |
+| **Problem images** | `evaluation/instance_views.py` | One instance's initial-vs-goal stills — the problem, where the episode video is the solving | `media/instances/<machine>/<state>/<cell>/` (legacy instances without a cell: flat in `<state>/`) |
 | **Benchmark** | `experiment/run_rearrange.py` | Closed-loop algorithm episodes: every move teleports + settles; abort on first fault; move budget; `--video` per-episode MP4 | `results/rearrange/<machine>/<state>/`, `media/rearrange/` |
 
 <table align="center">
@@ -270,6 +270,19 @@ init-mismatch storms are not. Fault/reset thresholds live as module constants in
 `config_hash`); widen only against a measurement.
 
 ## 4 Notes for running and extending
+
+**Difficulty tiers** (`src/dishsim/tiers.py`): 3 presets (easy / medium / hard) + 9
+one-knob ablation cells off medium, over four knobs — roster size/mix, a hard
+**counter-occupancy cap** (6/3/1, ablation 0; enforced by the driver, visible to
+algorithms via `obs["counter_cap"]`/`["counter_count"]`), displaced fraction, and authored
+2-3-swap-cycles. Every tier instance ships with per-object goal ROTATIONS sampled (the
+goal tableau is deliberately unaligned) and a **cap-aware provable optimum** in its meta
+(`compat.optimal_moves(counter_cap=)` — status distinguishes proven-unsolvable from
+search-bound). Generate with `gen_instances.py --cell <name>`, run with
+`run_rearrange.py --cells <names>`, aggregate with
+`scripts/run_py.sh scripts/evaluation/compare_algorithms.py` →
+`results/compare/summary.{csv,md}`.
+
 
 Every multi-object render tints objects **per item** (`config.item_color`): the sourced props
 share one dark-red material, so an untinted 15-item load is unreadable. A colour follows the

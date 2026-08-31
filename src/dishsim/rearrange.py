@@ -53,12 +53,27 @@ COUNTER_GRID_PITCH_M = 0.11  # buffer candidate spacing; FCL gates actual use
 # raw slab (decomposition slop on the large E_body_5 body), which eats the 12 mm release
 # hover to under the candidate-inflation margin and FCL-blocks every buffer cell without it.
 BUFFER_EXTRA_HOVER_M = 0.010
+MAX_CONSEC_REFUSALS = 25    # abort "refusal-loop" after this many straight refused commands
 
 
 def rot_angle_deg(T_a: np.ndarray, T_b: np.ndarray) -> float:
     """Rotation angle [deg] between two homogeneous transforms."""
     R = np.asarray(T_a)[:3, :3].T @ np.asarray(T_b)[:3, :3]
     return float(np.degrees(np.arccos(np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0))))
+
+
+def in_counter_band(T_base_obj) -> bool:
+    """Is this base-frame pose inside the counter staging band?
+
+    World x/y inside ``config.TASK["spawn_rect_w"]`` and object center above the counter
+    top plane. The extended rack's footprint ends below/behind the band on every machine,
+    so no in-machine pose ever tests in-band.
+    """
+    T_w = make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W) @ np.asarray(T_base_obj)
+    x, y, z = T_w[:3, 3]
+    r = config.TASK["spawn_rect_w"]
+    top_z = config.COUNTERTOP_CENTER_W[2] + config.COUNTERTOP_SIZE[2] / 2.0
+    return bool(r["x_min"] <= x <= r["x_max"] and r["y_min"] <= y <= r["y_max"] and z > top_z)
 
 
 @dataclass(frozen=True)
@@ -240,6 +255,10 @@ class ArrangementWorld:
                 out.append(T_base_w @ T_w)
         return out
 
+    def in_counter(self, T_base_obj) -> bool:
+        """Counter-band membership for a base-frame pose (see :func:`in_counter_band`)."""
+        return in_counter_band(T_base_obj)
+
 
 def _move_kind(instance: Instance, move: "Move") -> str:
     """``"goal"`` if the move commands the item's own target pose, else ``"buffer"``.
@@ -256,29 +275,38 @@ def _move_kind(instance: Instance, move: "Move") -> str:
 
 
 def run_episode(instance: Instance, algo, world, oracle, budget: int,
-                algorithm_name: str = "", time_budget_s: float | None = None) -> dict:
-    """Drive one closed-loop episode; abort on the first fault; return the episode record.
+                algorithm_name: str = "", time_budget_s: float | None = None,
+                counter_cap: int | None = None) -> dict:
+    """Drive one closed-loop episode; abort on the first fatal fault; return the record.
 
     ``oracle.execute(move) -> (poses, fault, move_info)`` — settled base-frame poses for the
-    whole roster, ``fault in (None, "unstable-settle", "disturbed")``, and a per-move info
-    dict (e.g. settle_dev_mm, disturbed ids). ``oracle.at_goal(item, T) -> bool``.
+    whole roster, ``fault in (None, "failed-settle", "unstable-settle", "disturbed")``, and
+    a per-move info dict (e.g. settle_dev_mm, disturbed ids). ``"failed-settle"`` is the one
+    NON-fatal fault: the oracle has already returned the item to its pre-move pose
+    (teleport-back), the move counts, and the episode continues — algorithms may retry.
+    ``oracle.at_goal(item, T) -> bool``.
 
     An INFEASIBLE commanded move (one the FCL mirror rejects) is refused and logged, and the
     episode continues: every algorithm can pre-check with the same oracle, so emitting one is
     a search error worth MEASURING (``infeasible_commands``), not a reason to destroy the
     episode. Ending it there would systematically flatter planners that pre-check — the
-    baseline does — over sampling planners that do not.
+    baseline does — over sampling planners that do not. A move INTO the counter band while
+    ``counter_cap`` items already occupy it is refused the same way (kind ``"counter-full"``,
+    counted separately). ``MAX_CONSEC_REFUSALS`` straight refusals abort ``"refusal-loop"``
+    (refusals cost no budget, so a deterministic replanner would otherwise spin forever).
 
     Args:
         budget: Maximum executed moves.
         time_budget_s: Planning-time budget [s] for the whole episode, or ``None`` for
             unlimited. Counts ONLY time inside ``algo.next_move`` — physics and the harness's
             own feasibility checks are the simulator's cost, not the planner's.
+        counter_cap: Max simultaneous items inside the counter band, or ``None`` for no cap.
     """
     classes = {it["item_id"]: it["object_class"] for it in instance.items}
     poses = {it["item_id"]: np.asarray(it["T_base_init"]) for it in instance.items}
     world.sync(poses, classes)
     planned_s = 0.0
+    in_ctr = getattr(world, "in_counter", in_counter_band)
 
     def observe(moves_used):
         return {"items": {it["item_id"]: {"object_class": it["object_class"],
@@ -288,7 +316,9 @@ def run_episode(instance: Instance, algo, world, oracle, budget: int,
                 "moves_used": moves_used, "budget": budget,
                 "time_budget_s": time_budget_s,
                 "time_left_s": (None if time_budget_s is None
-                                else max(0.0, time_budget_s - planned_s))}
+                                else max(0.0, time_budget_s - planned_s)),
+                "counter_cap": counter_cap,
+                "counter_count": int(sum(in_ctr(T) for T in poses.values()))}
 
     obs = observe(0)
     at_goal_initial = sum(v["at_goal"] for v in obs["items"].values())
@@ -296,7 +326,8 @@ def run_episode(instance: Instance, algo, world, oracle, budget: int,
 
     solved, abort = False, None
     planning_time_s, move_log = [], []
-    moves_used = infeasible_commands = 0
+    moves_used = infeasible_commands = counter_full_refusals = failed_settles = 0
+    consec_refusals = 0
     while True:
         if all(v["at_goal"] for v in obs["items"].values()):
             solved = True
@@ -315,16 +346,34 @@ def run_episode(instance: Instance, algo, world, oracle, budget: int,
         if moves_used >= budget:
             abort = "budget"
             break
+        if (counter_cap is not None and in_ctr(move.T_base_obj)
+                and not in_ctr(poses[move.item_id])  # counter->counter keeps occupancy
+                and obs["counter_count"] >= counter_cap):
+            counter_full_refusals += 1
+            consec_refusals += 1
+            move_log.append({"item_id": move.item_id,
+                             "T_base_obj": np.asarray(move.T_base_obj).tolist(),
+                             "kind": "counter-full"})
+            if consec_refusals >= MAX_CONSEC_REFUSALS:
+                abort = "refusal-loop"
+                break
+            obs = observe(moves_used)
+            continue
         if world.move_collides(move.item_id, move.T_base_obj):
             # refused, not fatal — see the docstring. The algorithm keeps its turn and its
             # clock; only the world is unchanged.
             infeasible_commands += 1
+            consec_refusals += 1
             move_log.append({"item_id": move.item_id,
                              "T_base_obj": np.asarray(move.T_base_obj).tolist(),
                              "kind": "infeasible",
                              "blockers": world.blockers(move.item_id, move.T_base_obj)})
+            if consec_refusals >= MAX_CONSEC_REFUSALS:
+                abort = "refusal-loop"
+                break
             obs = observe(moves_used)
             continue
+        consec_refusals = 0
         T_from = np.asarray(poses[move.item_id]).tolist()  # travel distance needs the origin
         poses, fault, info = oracle.execute(move)
         poses = {k: np.asarray(v) for k, v in poses.items()}
@@ -333,6 +382,12 @@ def run_episode(instance: Instance, algo, world, oracle, budget: int,
                          "T_base_obj": np.asarray(move.T_base_obj).tolist(),
                          "T_base_from": T_from, "kind": _move_kind(instance, move), **info})
         world.sync(poses, classes)
+        if fault == "failed-settle":
+            # NON-fatal: the oracle already put the item back; the move counts, play on
+            failed_settles += 1
+            move_log[-1]["kind"] = "failed-settle"
+            obs = observe(moves_used)
+            continue
         if fault is not None:
             abort = fault
             break
@@ -352,6 +407,9 @@ def run_episode(instance: Instance, algo, world, oracle, budget: int,
         "planning_time_s": planning_time_s,
         "planning_time_total_s": round(planned_s, 6),
         "infeasible_commands": infeasible_commands,
+        "counter_cap": counter_cap,
+        "counter_full_refusals": counter_full_refusals,
+        "failed_settles": failed_settles,
         "buffer_moves": sum(m.get("kind") == "buffer" for m in move_log),
         "goal_moves": sum(m.get("kind") == "goal" for m in move_log),
         "travel_m": round(sum(
@@ -387,7 +445,12 @@ class Greedy:
             T_target = it["target"]["T_base_obj"]
             if not self.world.move_collides(item_id, T_target):
                 return Move(item_id, T_target)
-        # pass 2: relocate the first eligible blocker of a misplaced item to a buffer spot
+        # pass 2: relocate the first eligible blocker of a misplaced item to a buffer spot.
+        # Under a counter cap, a full band means this baseline has no legal park — give up
+        # cleanly instead of spamming refused commands into the refusal-loop guard.
+        cap = obs.get("counter_cap")
+        if cap is not None and obs.get("counter_count", 0) >= cap:
+            return None
         for it in self.instance.items:
             item_id = it["item_id"]
             if items[item_id]["at_goal"]:

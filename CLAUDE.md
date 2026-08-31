@@ -74,6 +74,14 @@ scripts/run_kit.sh scripts/evaluation/instance_views.py --headless --enable_came
 scripts/run_kit.sh scripts/experiment/run_rearrange.py --headless --enable_cameras --video \
     --instances "results/instances/bosch800/placement/*.json" --algorithms greedy
 
+# BENCHMARK tiers (dishsim/tiers.py: 3 presets + 9 ablation cells; counter-occupancy cap,
+# authored swap cycles, spun per-object goal rotations, cap-aware compat certificate in
+# every instance's meta). Generate a cell, run cells, aggregate:
+scripts/run_kit.sh scripts/setup/gen_instances.py --headless --cell medium --n 10 --seed 0
+scripts/run_kit.sh scripts/experiment/run_rearrange.py --headless \
+    --cells easy,medium,hard --algorithms greedy          # 60 s planning budget default
+scripts/run_py.sh scripts/evaluation/compare_algorithms.py  # -> results/compare/summary.{csv,md}
+
 # rebake ONE (object, state) cache after a hashed-config change (extract -> decompose):
 scripts/run_kit.sh scripts/setup/extract_geometry.py --headless \
     --machine bosch800 --placement side_winner --scenario placement --object cup
@@ -148,7 +156,13 @@ or silent import shadowing, not clean errors:
   construction. At-goal is judged on the SETTLED pose via `evaluate_placement`.
 - `rearrange.py` is the benchmark core, Kit-free by the oracle/world seam. New algorithms:
   implement `reset(instance, world)` / `next_move(obs)`, one line in `ALGORITHMS` in
-  `run_rearrange.py`.
+  `run_rearrange.py`; accept a `seed=` kwarg if stochastic (the runner delivers a
+  per-(instance, algorithm) sha256-derived seed). `obs` carries `counter_cap` /
+  `counter_count` — a move onto a full counter is refused (`counter-full`, non-fatal,
+  counted); 25 straight refusals abort `refusal-loop`. `unstable-settle` is NON-fatal
+  (oracle teleports the item back; move counts as `failed-settle`); `disturbed` stays
+  fatal. The optimality gap in `compare_algorithms.py` reads each instance's cap-aware
+  `meta.optimum` (computed at generation; never re-solved).
 - Every number is a *measured* value (`docs/joint_report.md`, `docs/bosch800_source_data.md`)
   — never eyeball-edit. Spawn poses place the articulation **root link** (`E_body_5`, not the
   asset origin).

@@ -152,3 +152,46 @@ Cache-anchor note: the shipped bosch800 caches were baked at base placement `sid
 (the restore log prints the matched anchor per cache) — Kit-free tools that recompute
 `config_hash` (`decompose_meshes.py`, `extract_geometry.py`) need the matching
 `--machine bosch800 --placement side_winner`, or they will mis-report the cache as stale.
+
+## Pausing & releasing the machine (shared box)
+
+When no benchmark work is running, stop the project's container so its claim on the box is
+zero (an idle container already holds ~0 CPU/GPU — compute is held by *processes*, not by
+stopped reservations — but a stopped container is the polite, unambiguous state).
+
+```bash
+# 1. confirm nothing of OURS is mid-run (only the `sleep infinity` keeper should show)
+docker top dishsim-isaac
+# if a Kit job is live: let it finish, or kill it INSIDE the container first so
+# records are not cut mid-write:  docker exec dishsim-isaac pkill -f 'isaac|kit'
+
+# 2. stop (keeps the container + its entrypoint installs for a fast restart;
+#    restart: unless-stopped means it STAYS stopped across daemon restarts/reboots)
+docker compose -f docker/compose.yaml stop
+
+# 3. verify the release
+docker ps --filter name=dishsim-isaac        # empty
+nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv  # no dishsim rows
+```
+
+`Exited (137)` is normal: `sleep infinity` ignores SIGTERM, so docker SIGKILLs after the
+10 s grace — there is no state to lose. Prefer `stop` over `down`: `down` removes the
+container, and the next bring-up must recreate it (entrypoint pip reinstalls + the
+readiness wait `bootstrap.sh` performs).
+
+**Restart**: same GPU → `docker compose -f docker/compose.yaml start` (seconds). Different
+GPU (check `nvidia-smi` first, pick the least-loaded) → `DISHSIM_GPU=<n> docker compose -f
+docker/compose.yaml up -d` — the changed config recreates the container, so wait for the
+entrypoint installs (or just run `scripts/tools/bootstrap.sh`, which waits for readiness).
+
+Shared-box safety rules:
+
+1. Act by NAME only — `docker compose -f docker/compose.yaml stop` / `docker stop
+   dishsim-isaac`. Never `docker stop $(docker ps -q)`, never `docker system prune`
+   (it can delete labmates' stopped containers and images), never `nvidia-smi --gpu-reset`.
+2. `nvidia-smi` lists HOST PIDs with no container attribution; root-owned GPU PIDs are
+   usually *other people's containers*. Attribute before judging:
+   `cat /proc/<pid>/cgroup` and compare the container id against `docker ps --no-trunc`.
+3. Kill order: the job inside the container first (`pkill` via `docker exec`), the
+   container second. Never kill container PIDs from the host, never host `sudo`.
+4. Verify after every stop: `docker ps` + `nvidia-smi`, as above.

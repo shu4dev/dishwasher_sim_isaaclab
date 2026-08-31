@@ -31,7 +31,8 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 parser = argparse.ArgumentParser(description="Render an instance's initial and goal arrangements.")
 parser.add_argument("--instance", type=str, required=True, help="Instance JSON (gen_instances.py).")
 parser.add_argument("--out", type=str, default=None,
-                    help="Media dir (default: media/instances/<machine>/<state>).")
+                    help="Media dir (default: media/instances/<machine>/<state>/<cell>; "
+                         "legacy instances without a cell stay flat in <state>).")
 parser.add_argument("--settle_steps", type=int, default=90,
                     help="Physics steps to settle each tableau before its stills.")
 AppLauncher.add_app_launcher_args(parser)
@@ -117,8 +118,11 @@ def main() -> int:
 
     step(WARMUP_STEPS)
 
+    # tier instances mirror their results/ layout: one media dir per difficulty cell
+    cell = INST.meta.get("cell")
     out_dir = (args_cli.out if args_cli.out else
-               os.path.join(PROJECT_ROOT, "media", "instances", config.MACHINE, INST.state))
+               os.path.join(PROJECT_ROOT, "media", "instances", config.MACHINE, INST.state,
+                            *([cell] if cell else [])))
     written = []
     for tag, poses in arrangements.items():
         for item_id, pose in poses.items():
