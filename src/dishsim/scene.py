@@ -15,13 +15,12 @@ Key invariants enforced here:
   shipped caches stay valid).
 - Objects teleport: a runner writes root poses directly and lets physics settle; the only
   actuated degrees of freedom are the dishwasher's own rack/door drives
-  (:func:`set_rack_target_override` + :func:`hold_targets`).
+  (:func:`hold_targets` pins them every step).
 """
 
 import math
 
 import numpy as np
-from scipy.spatial.transform import Rotation
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
@@ -31,52 +30,7 @@ from isaaclab.utils.configclass import configclass
 
 from . import config
 from .machine import DISHWASHER_V0_CFG
-from .transforms import T_inv, make_T
-
-
-# ---------------------------------------------------------------------------------------------
-# frames
-# ---------------------------------------------------------------------------------------------
-
-
-def world_to_base(pos_w) -> np.ndarray:
-    """World position -> base-frame position (full transform; the base may be yawed).
-
-    Reduces to exact ``pos_w - ROBOT_BASE_POS_W`` at the identity base quaternion.
-
-    Returns:
-        Position in the base frame [m], shape [3].
-    """
-    T_base_w = T_inv(make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W))
-    return T_base_w[:3, :3] @ np.asarray(pos_w, dtype=float) + T_base_w[:3, 3]
-
-
-def base_to_world(pos_b) -> np.ndarray:
-    """Base-frame position -> world position (full transform; the base may be yawed).
-
-    Inverse of :func:`world_to_base`; reduces to exact ``pos_b + ROBOT_BASE_POS_W`` at the
-    identity base quaternion.
-
-    Returns:
-        Position in the world frame [m], shape [3].
-    """
-    T_w_base = make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W)
-    return T_w_base[:3, :3] @ np.asarray(pos_b, dtype=float) + T_w_base[:3, 3]
-
-
-def countertop_pose_w(instance: int = 0) -> tuple[np.ndarray, np.ndarray]:
-    """World staging pose of item ``instance`` on the countertop (axis-convention aware).
-
-    Returns:
-        (position [m] shape [3], XYZW quaternion shape [4]).
-    """
-    (pos_w, yaw_deg) = config.OBJECT_COUNTERTOP_POSES_W[instance]
-    r_yaw = Rotation.from_euler("z", float(yaw_deg), degrees=True)
-    if tuple(config.OBJECT_AXIS_OBJ) == (0.0, 1.0, 0.0):  # Y-up mug stands via Rx(+90)
-        r_stand = Rotation.from_euler("x", 90.0, degrees=True)
-    else:  # Z-up and X-up (flat) objects stage as authored
-        r_stand = Rotation.identity()
-    return np.asarray(pos_w, dtype=float), (r_yaw * r_stand).as_quat()  # XYZW
+from .quats import wxyz_to_xyzw, xyzw_to_wxyz
 
 
 # ---------------------------------------------------------------------------------------------
@@ -144,7 +98,8 @@ def _add_object(scene_cfg, spec: dict) -> None:
                                  if color is not None else None),
             ),
             init_state=RigidObjectCfg.InitialStateCfg(
-                pos=tuple(spec["pos"]), rot=tuple(spec["quat"])
+                # spec quats are project-order XYZW; isaaclab 2.1 cfg tuples are WXYZ
+                pos=tuple(spec["pos"]), rot=tuple(xyzw_to_wxyz(list(spec["quat"])))
             ),
         ),
     )
@@ -166,22 +121,6 @@ def _add_object(scene_cfg, spec: dict) -> None:
 # ---------------------------------------------------------------------------------------------
 
 
-#: persistent rack drive-target override consumed by hold_targets (rack transitions ramp
-#: these each step; the scenario defaults apply when None)
-_RACK_TARGET_OVERRIDE: dict[str, float] | None = None
-
-
-def set_rack_target_override(targets: dict[str, float] | None) -> None:
-    """Override the dishwasher rack drive targets that :func:`hold_targets` pins every step.
-
-    A rack transition ramps the moved joint's target through this; pass ``None`` to restore
-    the scenario defaults (do so only when the scenario's post-action state matches — after a
-    completed transition the override must stay at the target for the rest of the run).
-    """
-    global _RACK_TARGET_OVERRIDE
-    _RACK_TARGET_OVERRIDE = dict(targets) if targets else None
-
-
 def hold_targets(scene) -> None:
     """(Re-)issue the standing dishwasher drive targets (racks pinned, door locked).
 
@@ -189,23 +128,18 @@ def hold_targets(scene) -> None:
     to call every step of a settle loop.
     """
     dw = scene["dishwasher"]
-    dw_targets = dw.data.default_joint_pos.torch.clone()
-    if _RACK_TARGET_OVERRIDE:
-        for jname, val in _RACK_TARGET_OVERRIDE.items():
-            jids, _ = dw.find_joints(jname)
-            dw_targets[:, jids[0]] = float(val)
-    dw.set_joint_position_target_index(target=dw_targets)
+    dw.set_joint_position_target(target=dw.data.default_joint_pos.clone())
 
 
 def write_default_states(scene) -> None:
     """Standalone-script reset dance: write default root/joint states, reset, re-arm targets."""
     dw = scene["dishwasher"]
-    root_pose = dw.data.default_root_pose.torch.clone()
+    root_pose = dw.data.default_root_state[:, :7].clone()
     root_pose[:, :3] += scene.env_origins
-    dw.write_root_pose_to_sim_index(root_pose=root_pose)
-    dw.write_root_velocity_to_sim_index(root_velocity=dw.data.default_root_vel.torch.clone())
-    dw.write_joint_position_to_sim_index(position=dw.data.default_joint_pos.torch.clone())
-    dw.write_joint_velocity_to_sim_index(velocity=dw.data.default_joint_vel.torch.clone())
+    dw.write_root_pose_to_sim(root_pose=root_pose)
+    dw.write_root_velocity_to_sim(root_velocity=dw.data.default_root_state[:, 7:].clone())
+    dw.write_joint_position_to_sim(position=dw.data.default_joint_pos.clone())
+    dw.write_joint_velocity_to_sim(velocity=dw.data.default_joint_vel.clone())
     # scene.reset() clears command buffers — targets must be re-armed AFTER it (a target set
     # before reset silently reverts; found the hard way during scene bring-up)
     scene.reset()
@@ -214,8 +148,8 @@ def write_default_states(scene) -> None:
 
 def assert_frames(scene) -> None:
     """Assert the single frame convention this whole project relies on."""
-    dw_pos = scene["dishwasher"].data.root_pos_w.torch[0].cpu().numpy()
-    dw_quat = scene["dishwasher"].data.root_quat_w.torch[0].cpu().numpy()
+    dw_pos = scene["dishwasher"].data.root_pos_w[0].cpu().numpy()
+    dw_quat = wxyz_to_xyzw(scene["dishwasher"].data.root_quat_w[0].cpu().numpy())
     assert np.allclose(dw_pos, config.DISHWASHER_POS_W, atol=1e-4), f"dishwasher root at {dw_pos}"
     # sign-agnostic: q and -q are the same rotation, and the sim may hand back either sign
     assert np.allclose(dw_quat, config.DISHWASHER_QUAT_W, atol=1e-4) or np.allclose(
@@ -232,7 +166,7 @@ def statics_report(scene) -> dict:
     door_ids, _ = dw.find_joints("RevoluteJoint_dishwasher_2_middle")
     down_ids, _ = dw.find_joints("PrismaticJoint_dishwasher_2_down")
     up_ids, _ = dw.find_joints("PrismaticJoint_dishwasher_2_up")
-    jp = dw.data.joint_pos.torch[0]
+    jp = dw.data.joint_pos[0]
     return {
         "door_deg": math.degrees(float(jp[door_ids[0]])),
         "rack_lower_m": float(jp[down_ids[0]]),

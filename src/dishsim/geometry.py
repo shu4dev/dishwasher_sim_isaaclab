@@ -25,6 +25,7 @@ import os
 import numpy as np
 
 from . import config
+from .quats import wxyz_to_xyzw
 
 MESH_DIR = "meshes"
 MANIFEST = "scene_state.json"
@@ -88,13 +89,61 @@ def config_hash() -> str:
 # ---------------------------------------------------------------------------------------------
 
 
+#: Geom prim types the extractor understands (Isaac Lab 2.1 ships no ``utils.mesh`` — the
+#: 3.0 helpers this replaces returned exactly these plus ``Mesh``).
+_GEOM_TYPES = ("Cube", "Sphere", "Cylinder", "Capsule", "Cone")
+
+
 def _mesh_prims_under(prim):
-    from isaaclab.utils.mesh import PRIMITIVE_MESH_TYPES  # noqa: PLC0415
     import isaaclab.sim as sim_utils  # noqa: PLC0415
 
     return sim_utils.get_all_matching_child_prims(
-        prim.GetPath(), lambda p: p.GetTypeName() in PRIMITIVE_MESH_TYPES + ["Mesh"]
+        prim.GetPath(), lambda p: p.GetTypeName() in _GEOM_TYPES + ("Mesh",)
     )
+
+
+def _trimesh_from_geom_prim(mesh_prim) -> "object":
+    """A ``trimesh.Trimesh`` of one Mesh/primitive geom prim, in the prim's LOCAL frame."""
+    import numpy as _np  # noqa: PLC0415
+    import trimesh  # noqa: PLC0415
+    from pxr import UsdGeom  # noqa: PLC0415
+
+    t = mesh_prim.GetTypeName()
+    if t == "Mesh":
+        geom = UsdGeom.Mesh(mesh_prim)
+        pts = _np.asarray(geom.GetPointsAttr().Get() or [], dtype=float)
+        counts = _np.asarray(geom.GetFaceVertexCountsAttr().Get() or [], dtype=int)
+        idx = _np.asarray(geom.GetFaceVertexIndicesAttr().Get() or [], dtype=int)
+        if len(pts) == 0 or len(counts) == 0:
+            return None
+        faces, o = [], 0
+        for c in counts:  # fan-triangulate n-gons
+            for k in range(1, c - 1):
+                faces.append((idx[o], idx[o + k], idx[o + k + 1]))
+            o += c
+        return trimesh.Trimesh(vertices=pts, faces=_np.asarray(faces, dtype=int), process=False)
+    if t == "Cube":
+        size = float(UsdGeom.Cube(mesh_prim).GetSizeAttr().Get())
+        return trimesh.creation.box(extents=(size, size, size))
+    axis_rot = {"X": [0.0, 1.0, 0.0, 90.0], "Y": [1.0, 0.0, 0.0, -90.0], "Z": None}
+    if t == "Sphere":
+        return trimesh.creation.icosphere(radius=float(UsdGeom.Sphere(mesh_prim).GetRadiusAttr().Get()))
+    if t in ("Cylinder", "Capsule", "Cone"):
+        geom = {"Cylinder": UsdGeom.Cylinder, "Capsule": UsdGeom.Capsule, "Cone": UsdGeom.Cone}[t](mesh_prim)
+        r, h = float(geom.GetRadiusAttr().Get()), float(geom.GetHeightAttr().Get())
+        if t == "Cylinder":
+            m = trimesh.creation.cylinder(radius=r, height=h)
+        elif t == "Capsule":
+            m = trimesh.creation.capsule(radius=r, height=h)
+        else:
+            m = trimesh.creation.cone(radius=r, height=h)
+            m.apply_translation((0.0, 0.0, -h / 2.0))  # USD cones are center-origin
+        rot = axis_rot[str(geom.GetAxisAttr().Get() or "Z")]
+        if rot is not None:
+            m.apply_transform(trimesh.transformations.rotation_matrix(
+                _np.radians(rot[3]), rot[:3]))
+        return m
+    return None
 
 
 def extract_prim_mesh(body_prim, stage) -> "object":
@@ -104,23 +153,19 @@ def extract_prim_mesh(body_prim, stage) -> "object":
         A ``trimesh.Trimesh`` (body-frame vertices [m]) or None if no meshes found.
     """
     import trimesh  # noqa: PLC0415
-    import isaaclab.sim as sim_utils  # noqa: PLC0415
-    from isaaclab.utils.mesh import create_trimesh_from_geom_mesh, create_trimesh_from_geom_shape  # noqa: PLC0415
+    from pxr import Usd, UsdGeom  # noqa: PLC0415
 
-    from .transforms import make_T  # noqa: PLC0415
-
+    cache = UsdGeom.XformCache(Usd.TimeCode.Default())
+    inv_body = cache.GetLocalToWorldTransform(body_prim).GetInverse()
     parts = []
     for mesh_prim in _mesh_prims_under(body_prim):
-        mesh = (
-            create_trimesh_from_geom_mesh(mesh_prim)
-            if mesh_prim.GetTypeName() == "Mesh"
-            else create_trimesh_from_geom_shape(mesh_prim)
-        )
+        mesh = _trimesh_from_geom_prim(mesh_prim)
         if mesh is None or len(mesh.vertices) == 0:
             continue
-        mesh.apply_scale(sim_utils.resolve_prim_scale(mesh_prim))
-        rel_pos, rel_quat = sim_utils.resolve_prim_pose(mesh_prim, body_prim)
-        mesh.apply_transform(make_T(rel_pos, rel_quat))
+        # full mesh->body transform (scale included); Gf matrices are row-vector, transpose
+        # to the column convention trimesh/make_T use
+        rel = cache.GetLocalToWorldTransform(mesh_prim) * inv_body
+        mesh.apply_transform(np.array(rel, dtype=float).T)
         parts.append(mesh)
     if not parts:
         return None
@@ -155,8 +200,8 @@ def dump_cache(scene, sim, cache_dir: str = config.CACHE_DIR) -> str:
 
     def body_pose_w(articulation, body_name):
         ids, _ = articulation.find_bodies(body_name)
-        pos = articulation.data.body_link_pos_w.torch[0, ids[0]].cpu().numpy()
-        quat = articulation.data.body_link_quat_w.torch[0, ids[0]].cpu().numpy()
+        pos = articulation.data.body_link_pos_w[0, ids[0]].cpu().numpy()
+        quat = wxyz_to_xyzw(articulation.data.body_link_quat_w[0, ids[0]].cpu().numpy())
         return make_T(pos, quat)
 
     def save_mesh(name, mesh):

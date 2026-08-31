@@ -2,18 +2,18 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Restore archived assets/media on a fresh instance (counterpart of scripts/tools/archive_assets.py).
+"""Restore archived assets/media on a fresh instance (counterpart of the retired archive_assets.py, git history).
 
 Downloads the tarballs from the public HF dataset (or takes local paths), safe-extracts
 them into the project root, re-downloads the ArtVIP originals (the derived dishwasher
 ``.usda`` layers reference that tree), and validates every restored geometry cache's
 ``config_hash`` stamp against the current ``config.py`` before declaring success.
 
-Prerequisites on a fresh box: the planning venv (README setup step 1). The public dataset
+Prerequisites on a fresh box: the runtime container (README setup step 1). The public dataset
 downloads without a token (``huggingface-cli login`` is only needed for a private mirror).
 
-    env_isaaclab/bin/python scripts/tools/restore_assets.py [--repo <id>] [--with_media]
-    env_isaaclab/bin/python scripts/tools/restore_assets.py --local outputs/archive/dishsim_assets_<tag>.tar.gz
+    scripts/run_py.sh scripts/tools/restore_assets.py [--repo <id>] [--with_media]
+    scripts/run_py.sh scripts/tools/restore_assets.py --local outputs/archive/dishsim_assets_<tag>.tar.gz
 """
 
 import argparse
@@ -37,6 +37,13 @@ parser.add_argument("--skip_tests", action="store_true", help="Skip the pytest v
 args = parser.parse_args()
 
 ALLOWED_PREFIXES = ("assets/", "media/", "results/", "MANIFEST.json")
+#: What actually gets EXTRACTED from the archive. The shipped tarball packs `results/` (and a
+#: media tarball would pack `media/`) wholesale from the robot era; on this branch results and
+#: media are LOCAL artifacts (instances, episode records, renders are regenerated here), so
+#: only `assets/` restores — extracting the rest would resurrect ~30 MB of retired robot-era
+#: outputs on every run. Robot-era evidence that predates this rule lives OUTSIDE the repo
+#: roots at /media/corallab-s1/2tbhdd/brianshu/dishsim/robot_era_evidence/.
+EXTRACT_PREFIXES = ("assets/",)
 
 
 def fetch_tarballs() -> list[str]:
@@ -70,8 +77,18 @@ def safe_extract(tar_path: str) -> dict:
         mf = tf.extractfile("MANIFEST.json")
         if mf is not None:
             manifest = json.load(mf)
-        tf.extractall(PROJECT_ROOT, members=[m for m in tf.getmembers()
-                                             if m.name != "MANIFEST.json"], filter="data")
+        # every member is prefix-vetted above; "data" would refuse the deliberate
+        # assets/media/results symlinks onto the big disk (OutsideDestinationError)
+        members = [m for m in tf.getmembers()
+                   if m.name != "MANIFEST.json"
+                   and os.path.normpath(m.name).startswith(EXTRACT_PREFIXES)]
+        skipped = sum(1 for m in tf.getmembers()
+                      if m.name != "MANIFEST.json"
+                      and not os.path.normpath(m.name).startswith(EXTRACT_PREFIXES))
+        if skipped:
+            print(f"[INFO] skipping {skipped} archived members outside {EXTRACT_PREFIXES} "
+                  f"(robot-era results/media — this branch regenerates its own)")
+        tf.extractall(PROJECT_ROOT, members=members, filter="fully_trusted")
     print(f"[INFO] extracted {os.path.basename(tar_path)} "
           f"({manifest.get('n_files', '?')} files, git {manifest.get('git_sha', '?')})")
     return manifest

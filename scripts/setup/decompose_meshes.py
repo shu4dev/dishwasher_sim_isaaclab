@@ -21,7 +21,7 @@ sampled gaps between plate tines must be free, and the same box centered ON a ti
 (negative control: catches missing or misplaced pieces).
 
 Run with:
-    /workspace/isaaclab/env_isaaclab/bin/python scripts/setup/decompose_meshes.py [--force]
+    scripts/run_py.sh scripts/setup/decompose_meshes.py [--force]
 """
 
 import argparse
@@ -58,7 +58,7 @@ if args.placement:
     config.apply_base_placement(args.placement)  # after machine/scenario — they reset it
 CACHE = config.scenario_cache_dir()
 
-from dishsim.checks import FAILURES, check, finish  # noqa: E402
+from dishsim.checks import check, finish  # noqa: E402
 
 
 def coacd_params_for(name: str) -> dict:

@@ -12,9 +12,8 @@ only in the arrangement. Objects are tinted per class (:func:`~dishsim.config.di
 because the sourced props share one dark-red material and an untinted multi-class load renders
 as an undifferentiated mass.
 
-The rack stays at the instance's own state extension (``config.apply_scenario(inst.state)``) —
-NOT the full-travel reveal that :mod:`scripts.evaluation.reveal_render` performs — because the
-instance's poses were certified against that state's collision cache.
+The rack stays at the instance's own state extension (``config.apply_scenario(inst.state)``)
+because the instance's poses were certified against that state's collision cache.
 
     scripts/run_kit.sh scripts/evaluation/instance_views.py --headless --enable_cameras \
         --instance results/instances/bosch800/placement/perturbed_s0.json
@@ -44,7 +43,6 @@ import isaaclab.sim as sim_utils  # noqa: E402
 import torch  # noqa: E402
 from isaaclab.scene import InteractiveScene  # noqa: E402
 from isaaclab.sim import SimulationContext  # noqa: E402
-from isaaclab_physx.physics import PhysxCfg  # noqa: E402
 
 from dishsim import config  # noqa: E402
 from dishsim import rearrange  # noqa: E402
@@ -59,7 +57,8 @@ config.apply_scenario(INST.state)
 config.apply_base_placement(INST.base_placement)
 
 from dishsim import scene as dscene  # noqa: E402
-from dishsim.media import CameraRig  # noqa: E402
+from dishsim.media import CameraRig, release_sim_for_close  # noqa: E402
+from dishsim.quats import xyzw_to_wxyz  # noqa: E402
 from dishsim.transforms import T_to_pos_quat, make_T  # noqa: E402
 
 WARMUP_STEPS = 300  # racks settle at the state's extensions before anything arrives
@@ -88,7 +87,7 @@ def main() -> int:
     }
 
     sim = SimulationContext(
-        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg()))
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device))
     obj_specs = [{"name": it["item_id"],
                   "usd_path": config.OBJECTS[it["object_class"]].usd_path,
                   "pos": (-2.0 - 0.3 * (i % 6), -1.5 + 0.3 * (i // 6), 0.10),
@@ -100,14 +99,14 @@ def main() -> int:
         print(f"[INFO] color {it['item_id']:10s} rgb=({c[0]:.2f}, {c[1]:.2f}, {c[2]:.2f})")
     scene = InteractiveScene(dscene.make_scene_cfg(objects=obj_specs))
     ep_cam = config.EPISODE_CAMERA
-    rig = CameraRig({**{k: v for k, v in config.CAMERAS.items()},
+    rig = CameraRig({**config.CAMERAS,
                      "episode": (tuple(ep_cam["eye"]), tuple(ep_cam["target"]),
                                  dict(ep_cam["lens"]))}, hw=config.CAMERA_HW)
     sim.reset()
     rig.apply_poses(sim.device)
     dscene.write_default_states(scene)
     dt = sim.get_physics_dt()
-    device = scene[items[0]["item_id"]].data.root_pos_w.torch.device
+    device = scene[items[0]["item_id"]].data.root_pos_w.device
 
     def step(n: int) -> None:
         for _ in range(n):
@@ -123,9 +122,11 @@ def main() -> int:
     written = []
     for tag, poses in arrangements.items():
         for item_id, pose in poses.items():
-            scene[item_id].write_root_pose_to_sim_index(root_pose=torch.tensor(
-                np.asarray(pose, dtype=np.float32)[None], device=device))
-            scene[item_id].write_root_velocity_to_sim_index(
+            # recorded pose is pos + XYZW; isaaclab 2.1 wants pos + WXYZ
+            pose_wxyz = np.concatenate([np.asarray(pose[:3]), xyzw_to_wxyz(np.asarray(pose[3:]))])
+            scene[item_id].write_root_pose_to_sim(root_pose=torch.tensor(
+                pose_wxyz.astype(np.float32)[None], device=device))
+            scene[item_id].write_root_velocity_to_sim(
                 root_velocity=torch.zeros((1, 6), dtype=torch.float32, device=device))
         step(args_cli.settle_steps)
         rig.update(dt)
@@ -148,5 +149,6 @@ if __name__ == "__main__":
         traceback.print_exc()
         print(f"[RESULT] FAIL ({type(exc).__name__}: {exc})")
         code = 1
+    release_sim_for_close()
     simulation_app.close()
     raise SystemExit(code)

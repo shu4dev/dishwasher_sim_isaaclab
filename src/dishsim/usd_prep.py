@@ -18,10 +18,9 @@ The ArtVIP assets ship two properties that break relocated spawns:
    N·m/rad.
 
 Derived files are written next to the source (so relative asset references keep resolving); the
-original is never modified. Two derivations exist:
+original is never modified. The derivation (the ``_rl`` passive-door variant lives in git
+history with the retired inspection script):
 
-- :func:`make_dishwasher_rl_usd` (``_rl`` suffix): passive door — used by the archived RL task
-  and by the inspection script's stability/door tests. Keeps the original ArtVIP basket meshes.
 - :func:`make_dishwasher_v0_usd` (``_v0`` suffix): the v0 planning scene — door joint limits
   clamped to a narrow band at the open position and rack drive targets set to the configured
   extensions, so the machine is a *static* obstacle. The lock itself is belt-and-braces: the
@@ -50,17 +49,6 @@ def _derived_stamp(door_open_deg: float, door_band_deg: float, rack_targets: dic
         "rack_gen": config.RACK_GEN,
         "door": (round(float(door_open_deg), 4), round(float(door_band_deg), 4)),
         "rack_targets": {k: round(float(v), 6) for k, v in sorted((rack_targets or {}).items())},
-        "countertop": (config.COUNTERTOP_SIZE, config.COUNTERTOP_CENTER_W),
-    }
-    return rack_gen.params_hash(payload, config.RACK_GEN_VERSION)
-
-
-def _rl_stamp() -> str:
-    """Stamp for the RL/inspection derived copy (rack meshes + countertop, no v0 joints)."""
-    from . import config, rack_gen  # noqa: PLC0415
-
-    payload = {
-        "rack_gen": config.RACK_GEN,
         "countertop": (config.COUNTERTOP_SIZE, config.COUNTERTOP_CENTER_W),
     }
     return rack_gen.params_hash(payload, config.RACK_GEN_VERSION)
@@ -211,63 +199,6 @@ def _author_rack_meshes(stage) -> None:
         UsdPhysics.MassAPI.Apply(xf_prim).CreateMassAttr(float(params["mass_kg"]))
 
 
-def make_dishwasher_rl_usd(src_path: str, force: bool = False) -> str:
-    """Create (or reuse) the passive-door derived copy of a dishwasher USD.
-
-    Args:
-        src_path: Path to the original ``model_<variant>.usd(a)`` file.
-        force: Regenerate even if the derived file already exists.
-
-    Returns:
-        Path to the derived ``model_<variant>_rl.usda`` file.
-    """
-    root, _ = os.path.splitext(src_path)
-    dst_path = f"{root}_rl.usda"
-    if os.path.isfile(dst_path) and not force and _stamped_hash(dst_path) == _rl_stamp():
-        return dst_path
-
-    # deferred: importing pxr at module scope breaks Kit if this package is imported before
-    # SimulationApp starts (which happens — Kit walks importable modules at boot)
-    from pxr import Usd, UsdPhysics  # noqa: PLC0415
-
-    stage = Usd.Stage.Open(src_path)
-
-    # 1) remove world-weld fixed joints (body1 set, body0 empty)
-    removed = []
-    for prim in list(stage.Traverse()):
-        if prim.IsA(UsdPhysics.FixedJoint):
-            joint = UsdPhysics.FixedJoint(prim)
-            if not joint.GetBody0Rel().GetTargets() and joint.GetBody1Rel().GetTargets():
-                removed.append(str(prim.GetPath()))
-    for path in removed:
-        stage.RemovePrim(path)
-
-    # 2) neutralize revolute (door) drives and make all joint drives force-type
-    for prim in stage.Traverse():
-        if prim.IsA(UsdPhysics.RevoluteJoint):
-            drive = UsdPhysics.DriveAPI.Get(prim, "angular")
-            if drive:
-                drive.CreateStiffnessAttr(0.0)
-                drive.CreateTargetPositionAttr(0.0)
-                drive.CreateTypeAttr("force")
-        elif prim.IsA(UsdPhysics.PrismaticJoint):
-            drive = UsdPhysics.DriveAPI.Get(prim, "linear")
-            if drive:
-                drive.CreateTargetPositionAttr(0.0)
-                drive.CreateTypeAttr("force")
-
-    # same procedural racks + countertop as the v0 copy (visual/report consistency); the
-    # joints stay as-shipped — this copy is the mechanical reference for docs/joint_report.md
-    _author_rack_meshes(stage)
-    _author_countertop(stage)
-
-    layer = stage.GetRootLayer()
-    layer.customLayerData = {**(layer.customLayerData or {}), _RACK_STAMP_KEY: _rl_stamp()}
-    layer.Export(dst_path)
-    print(f"[INFO] Passive-door copy written to {dst_path} (removed world welds: {removed or 'none'})")
-    return dst_path
-
-
 def make_dishwasher_v0_usd(
     src_path: str,
     door_open_deg: float = 90.0,
@@ -280,7 +211,7 @@ def make_dishwasher_v0_usd(
 
     Transformations relative to the original:
 
-    1. World-weld fixed joints removed (same reason as :func:`make_dishwasher_rl_usd`).
+    1. World-weld fixed joints removed (the authored world-space weld pins the asset origin).
     2. Every revolute (door) joint: limits clamped to
        ``[door_open_deg - door_band_deg, door_open_deg]`` (USD revolute limits are in degrees),
        drive neutralized (stiffness 0, force type) — the actuator config supplies the hold; the

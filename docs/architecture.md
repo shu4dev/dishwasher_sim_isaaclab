@@ -4,39 +4,32 @@
 dishwasher_sim_isaaclab/
 │
 ├── scripts/
-│   ├── run_kit.sh                    [Kit launcher: exports the Isaac env, then isaaclab.sh -p]
+│   ├── run_kit.sh                    [Kit launcher: docker-execs into dishsim-isaac from the
+│   │                                  host, then isaaclab.sh -p]
+│   ├── run_py.sh                     [Kit-free python the same way (/isaac-sim/python.sh);
+│   │                                  bakes PYTEST_DISABLE_PLUGIN_AUTOLOAD=1]
 │   │
 │   ├── setup/                        [PHASE 1 — assets, the simulation world, collision caches]
-│   │   ├── kit_smoke.py              [dependency + headless-capture gate]
-│   │   ├── inspect_scene.py          [dishwasher survey -> docs/joint_report.md; also authors
-│   │   │                              the passive-door derived USD it inspects]
+│   │   ├── kit_smoke.py              [install gate: planning stack imports inside Kit +
+│   │   │                              headless capture is non-black; wired into bootstrap.sh]
 │   │   ├── extract_geometry.py       [dump the settled statics + object mesh into the cache]
 │   │   ├── decompose_meshes.py       [convex FCL pieces (CoACD / analytic parts)]
-│   │   ├── build_state.py            [bake one machine state's caches for N classes
-│   │   │                              (extract -> decompose)]
-│   │   ├── derive_slots.py           [Kit-free: slot table + placeability + slot_detection.png]
-│   │   ├── preview_rack.py           [rack geometry preview PNGs]
-│   │   ├── gen_instances.py          [settled rearrangement instances (perturbed / random)]
-│   │   ├── plan_full_load.py         [Kit-free: greedy placeable-capacity plan + figure]
-│   │   └── capacity_fill.py          [settle-certify a plan: items arrive one at a time,
-│   │                                  unstable ones re-parked (honest capacity, never aborts),
-│   │                                  neighbour-disturbance check, verdict from the FINISHED
-│   │                                  tableau on seated AND at-goal; --video fill timelapse]
+│   │   └── gen_instances.py          [settled rearrangement instances (perturbed / random)]
 │   │
 │   ├── experiment/
 │   │   └── run_rearrange.py          [benchmark runner: persistent Kit session, closed-loop
 │   │                                  episodes, per-move settle + fault gates, --video]
 │   │
 │   ├── evaluation/
-│   │   ├── reveal_render.py          [render a capacity plan: teleport, settle, stills + orbit]
 │   │   └── instance_views.py         [one instance's initial-vs-goal stills, one Kit boot]
 │   │
 │   └── tools/
-│       ├── archive_assets.py         [tar the generated artifacts, push to the public dataset]
 │       ├── restore_assets.py         [download, safe-extract, validate cache hashes, run tests]
-│       └── bootstrap.sh              [fresh-box bring-up: venv + deps + editable + restore]
+│       └── bootstrap.sh              [fresh-box bring-up: image build if absent + compose up +
+│                                      restore + the kit_smoke gate]
 │
-├── src/dishsim/                      [the environment package (installed editable)]
+├── src/dishsim/                      [the environment package (installed editable by the
+│   │                                  container entrypoint)]
 │   ├── config.py                     [EVERY tunable: object registry, rack params, placement
 │   │                                  modes, cameras, tolerances. Tune here. Machine selector:
 │   │                                  apply_machine("bosch800") swaps the world to the Bosch 800
@@ -46,11 +39,13 @@ dishwasher_sim_isaaclab/
 │   │                                  item_color/display_color + ITEM_COLOR_PALETTE tint
 │   │                                  renders per item (media only, never physics).
 │   │                                  Numbers: docs/bosch800_source_data.md]
-│   ├── machine.py                    [dishwasher ArticulationCfgs; machine-aware USD derivation
+│   ├── machine.py                    [dishwasher ArticulationCfg; machine-aware USD derivation
 │   │                                  incl. the Bosch third rack]
 │   ├── scene.py                      [Kit scene construction: statics + objects, rack drives.
 │   │                                  Object spec dict: name, usd_path, pos, quat, and optional
 │   │                                  contact_filters / color (per-item render tint)]
+│   ├── quats.py                      [XYZW <-> WXYZ conversion at the isaaclab boundary — the
+│   │                                  ONLY place quaternion order converts]
 │   ├── usd_prep.py                   [derived dishwasher USDs; authors the procedural racks;
 │   │                                  make_bosch800_usd authors the Bosch machine from scratch]
 │   ├── rack_gen.py                   [procedural wire racks + cutlery basket + the Bosch
@@ -75,18 +70,20 @@ dishwasher_sim_isaaclab/
 │   ├── rearrange.py                  [benchmark core: instances, closed-loop episode driver,
 │   │                                  FCL arrangement mirror, greedy baseline]
 │   ├── capacity.py                   [greedy placeable-capacity planner: slots -> placeable
-│   │                                  pre-scan -> joint certification -> z-budget/settle gates]
-│   ├── media.py                      [camera rig, video writer, contact sheets]
+│   │                                  pre-scan -> joint certification -> z-budget/settle gates;
+│   │                                  gen_instances calls plan_full_load() in-process]
+│   ├── slotting.py                   [candidate slots, occupancy conflicts (Kit-free)]
+│   ├── media.py                      [camera rig, video writer, release_sim_for_close]
 │   ├── transforms.py                 [pose helpers (XYZW throughout)]
-│   ├── checks.py                     [pass/fail gate helpers for scripts]
-│   └── task/                         [Kit-free arrangement helpers]
-│       └── slotting.py               [candidate slots, occupancy conflicts]
+│   └── checks.py                     [pass/fail gate helpers for scripts]
 │
-├── tests/                            [3 files: the two frozen-invariant pins + the
-│                                      harness's toy-oracle check; venv pytest, no Kit]
+├── tests/                            [4 files / 11 tests: the frozen-invariant pins, the
+│                                      compat ground truth, the harness's toy-oracle check;
+│                                      run via scripts/run_py.sh -m pytest]
 ├── docs/                             [environment, success criteria, measured reports]
-├── assets/  media/  results/         [generated, gitignored]
-├── requirements-planning.txt         [pinned planning-venv deps (measured working set)]
+├── docker/                           [Dockerfile (build record) + compose.yaml (the runtime)]
+├── assets/  media/  results/         [generated, gitignored — symlinks onto the 2 TB drive]
+├── requirements-planning.txt         [pinned planning deps, baked into the image]
 └── pyproject.toml
 ```
 
@@ -98,8 +95,8 @@ Kit-free planning on one side, Kit-side validation on the other:
 config / geometry (cache format, config_hash)
         │
         ▼
-collision_world ── placement ── capacity / rearrange ── task/slotting
-        (plain venv python: plan an arrangement, certify it collision-free)
+collision_world ── placement ── capacity / rearrange ── slotting
+        (Kit-free python via run_py.sh: plan an arrangement, certify it collision-free)
         │
         ▼  artifacts (capacity plans, results/instances/*.json, episode records)
         │
@@ -109,7 +106,7 @@ scene / machine / usd_prep / media   (Kit-side: teleport, settle, judge stabilit
 Boundary convention: only `scene.py` and `machine.py` import `isaaclab`/`pxr`/`omni` at
 module scope; everything else must import in a plain Python process (function-local Kit
 imports in `geometry.py`'s extraction half and `media.py` stay legal). A violation fails
-loudly — venv scripts crash at import.
+loudly — Kit-free scripts crash at import.
 
 ## Completed one-off studies
 
@@ -122,3 +119,7 @@ retired to git history when the study froze, and the measured outcomes live in t
 - The rack-*design* harness that produced the v4 rack layout (`rack_design.py`) was retired
   after the design froze; its measured design rules are recorded in
   [known_limitations.md](known_limitations.md).
+- **Capacity certification + reveal renders** (`capacity_fill.py`, `reveal_render.py`,
+  `plan_full_load.py` CLI, `build_state.py`, `derive_slots.py`, `preview_rack.py`,
+  `inspect_scene.py`, `archive_assets.py`) — retired in the minimal-version cut (git
+  history); the capacity PLANNER itself lives on in `capacity.py`.

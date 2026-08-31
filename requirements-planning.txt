@@ -1,15 +1,13 @@
-# Planning-venv dependencies (CPU side; Kit/Isaac deps come from the Isaac Lab install).
-# Versions are the measured working set recorded in docs/environment.md ("Planning stack").
-# Install into a --system-site-packages venv created from Kit's python (see docs/environment.md):
-#   /workspace/isaaclab/env_isaaclab/bin/pip install -r requirements-planning.txt
+# Planning-stack dependencies (CPU side; Kit/Isaac deps come from the Isaac Lab install).
+# Installed into Kit's python 3.10 by docker/Dockerfile (no venv on the corallab machine).
+# Pins are the newest versions with py3.10 wheels; the Brev-era py3.12 pins are recorded in
+# docs/environment.md history.
 python-fcl==0.7.0.11
 coacd==1.0.11
 trimesh==4.12.2
-matplotlib==3.11.1
+matplotlib==3.10.9  # 3.11.x needs python >= 3.11
 imageio==2.37.4
 
-# Preinstalled in the Isaac Sim python (versions measured, not pip-installed here):
-#   imageio-ffmpeg 0.6.0 (bundled static ffmpeg 7.0.2), pin (Pinocchio) 4.1.0,
-#   pytest 9.1.1 (system site)
-# Asset-archive tooling (scripts/tools/, optional; versions not pinned — not part of the
-# measured planning stack): huggingface_hub requests pyyaml filelock tqdm fsspec
+# Preinstalled in the Isaac Sim python (not pip-installed here).
+# Asset-archive tooling (scripts/tools/) is installed by the Dockerfile alongside:
+#   huggingface_hub requests pyyaml filelock tqdm fsspec

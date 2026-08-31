@@ -5,9 +5,9 @@
     Saved problem instances · Closed-loop algorithms · Physics settles every move
   </p>
   <p align="center">
-    <img src="https://img.shields.io/badge/Isaac%20Sim-6.0.1--rc.7-76B900?style=flat&logo=nvidia&logoColor=white" alt="Isaac Sim 6.0.1-rc.7"/>
-    <img src="https://img.shields.io/badge/Isaac%20Lab-3.0.0-76B900?style=flat&logo=nvidia&logoColor=white" alt="Isaac Lab 3.0.0"/>
-    <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat&logo=python&logoColor=white" alt="Python 3.12"/>
+    <img src="https://img.shields.io/badge/Isaac%20Sim-4.5.0-76B900?style=flat&logo=nvidia&logoColor=white" alt="Isaac Sim 4.5.0"/>
+    <img src="https://img.shields.io/badge/Isaac%20Lab-2.1.1-76B900?style=flat&logo=nvidia&logoColor=white" alt="Isaac Lab 2.1.1"/>
+    <img src="https://img.shields.io/badge/Python-3.10-3776AB?style=flat&logo=python&logoColor=white" alt="Python 3.10"/>
     <img src="https://img.shields.io/badge/License-BSD--3--Clause-blue?style=flat" alt="BSD-3-Clause"/>
   </p>
 </div>
@@ -15,18 +15,19 @@
 <table align="center">
   <tr>
     <td align="center">
-      <img src="docs/figures/loaded_iso.png" width="720" alt="fully loaded dishwasher"/>
+      <img src="docs/figures/instance_goal_iso.png" width="720" alt="a benchmark instance's goal arrangement, physically settled"/>
       <br/>
-      the retired capacity fill (git history) — 29 items placed, 27 settle stably, racks still close
+      a benchmark instance's GOAL arrangement (15 items, per-item tinted), physically settled —
+      <code>evaluation/instance_views.py</code>
     </td>
   </tr>
 </table>
 
-> **Read this first.** Every Kit script runs through `scripts/run_kit.sh` (never bare
-> `isaaclab.sh -p` — it dies at boot with the planning venv present), success is judged from
-> **log content**, never exit codes (`isaaclab.sh -p` exits 0 on crashes), and the Isaac
-> Sim 6.0.1-rc.7 / Isaac Lab 3.0.0 pins must not be changed. The full list of launcher
-> landmines and why they exist: [docs/environment.md](docs/environment.md).
+> **Read this first.** Every Kit script runs through `scripts/run_kit.sh` and every Kit-free
+> one through `scripts/run_py.sh` (both forward into the `dishsim-isaac` container from the
+> host), success is judged from **log content**, never exit codes (`isaaclab.sh -p` exits 0
+> on crashes), and the Isaac Sim 4.5.0 / Isaac Lab v2.1.1 pins must not be changed. The full
+> list of launcher landmines and why they exist: [docs/environment.md](docs/environment.md).
 
 ## 1 Overview
 
@@ -51,43 +52,22 @@ The pipeline, mirrored by the layout of `scripts/`:
 
 | Stage | Command | Does | Writes |
 |---|---|---|---|
-| **Bake** | `setup/build_state.py` | Extract a machine state's settled geometry + decompose it into convex FCL pieces (per object class) | `assets/cache/` |
-| **Plan** | `setup/plan_full_load.py` | Kit-free greedy capacity plan: derive slots live, pre-scan placeability, certify the load jointly, gate on z-budget + measured settle reliability | `results/capacity/.../full_load_plan.json` + figure |
+| **Plan** | in-process (`capacity.plan_full_load`) | Kit-free greedy capacity plan: derive slots live, pre-scan placeability, certify the load jointly, gate on z-budget + measured settle reliability | (consumed live by Generate) |
 | **Generate** | `setup/gen_instances.py` | Seeded rearrangement instances (perturbed plans / random drops), physically settled and saved as artifacts | `results/instances/<machine>/<state>/` |
-| **Benchmark** | `experiment/run_rearrange.py` | Closed-loop algorithm episodes: every move teleports + settles; abort on first fault; move budget | `results/rearrange/<machine>/<state>/`, `media/` (`--video`) |
-| **Certify** | `setup/capacity_fill.py` | Settle-certify a plan: items arrive one at a time under physics, unstable ones are parked (honest capacity, never aborts), verdict from the finished tableau on seated AND at-goal | `results/capacity/.../settled_verification_<state>.json`, `media/capacity/<machine>/<state>/` (`--video`) |
-| **Render** | `evaluation/reveal_render.py` | Teleport a planned load, settle it, produce stills + a 360° orbit | `media/capacity/<machine>/` |
-| **Render** | `evaluation/instance_views.py` | One instance's initial-vs-goal stills — the problem, where the episode video is the solving | `media/instances/<machine>/<state>/` |
+| **Problem images** | `evaluation/instance_views.py` | One instance's initial-vs-goal stills — the problem, where the episode video is the solving | `media/instances/<machine>/<state>/` |
+| **Benchmark** | `experiment/run_rearrange.py` | Closed-loop algorithm episodes: every move teleports + settles; abort on first fault; move budget; `--video` per-episode MP4 | `results/rearrange/<machine>/<state>/`, `media/rearrange/` |
 
 <table align="center">
   <tr>
     <td align="center">
-      <img src="docs/figures/object_library.png" width="300" alt="object library"/>
-      <br/>
-      asset pipeline (git history)
-      <br/>
-      Kitchen-object library
-    </td>
-    <td align="center">
-      <img src="docs/figures/rack_geometry.png" width="300" alt="procedural rack"/>
-      <br/>
-      <code>setup/preview_rack.py</code>
-      <br/>
-      Procedural rack + cutlery basket
-    </td>
-    <td align="center">
       <img src="docs/figures/slot_detection.png" width="300" alt="slot derivation"/>
       <br/>
-      <code>setup/derive_slots.py</code>
-      <br/>
-      Slot derivation from rack geometry
+      Slot derivation from rack geometry (retired producer, git history)
     </td>
-  </tr>
-  <tr>
-    <td align="center" colspan="3">
-      <img src="docs/figures/bosch800_loaded_reveal.png" width="640" alt="Bosch 800 loaded reveal"/>
+    <td align="center">
+      <img src="docs/figures/bosch800_loaded_reveal.png" width="460" alt="Bosch 800 loaded reveal"/>
       <br/>
-      <code>evaluation/reveal_render.py</code> — a planned Bosch 800 load, physically settled (max drift 1.1 mm)
+      A planned Bosch 800 load, physically settled, max drift 1.1 mm (retired producer, git history)
     </td>
   </tr>
 </table>
@@ -113,114 +93,59 @@ The pipeline, mirrored by the layout of `scripts/`:
 - **Ground truth**: `dishsim/compat.py` computes the **provably minimum** move count for an
   instance, so results can be quoted as an optimality gap rather than a relative ranking.
   Feasibility is pairwise-decomposable here, so a compatibility table (seconds) makes an exact
-  A* cheap. Measured on the shipped instances: optima **9, 10, 9**; greedy achieves 9 / fails /
-  9. It is a *geometric-relaxation* optimum — see the caveats in the module docstring.
+  A* cheap. Instances are per-machine artifacts (settle fixed points are engine-relative); on
+  this box's three shipped instances the optima are **9, 8, 8** and greedy solves 3/3 in 9
+  moves. It is a *geometric-relaxation* optimum — see the caveats in the module docstring.
 - **Your algorithm**: one class implementing `reset(instance, world)` / `next_move(obs)`
   (`src/dishsim/rearrange.py`) plus one line in `ALGORITHMS` in
   `scripts/experiment/run_rearrange.py`; accept a `seed=` kwarg if stochastic. A greedy
   baseline ships as the thing to beat — one-blocker lookahead, so swap-cycles defeat it.
 
-### 1.2 What "full load = N" means
-
-The machine's geometric capacity (every slot the racks provide) and its **placeable**
-capacity are different numbers. `dishsim/capacity.py` counts honestly:
-
-- a slot is **placeable** iff the class's convex pieces are collision-free at the slot's
-  nominal release-hover pose in the empty machine;
-- a load is **jointly placeable** only if each item's release-hover pose stays collision-free
-  with every earlier item hovering at its own goal — certification happens at hover on both
-  sides, because a resting object touches the support it stands on;
-- an item may only ride a rack through a rack transition if its worst-case tolerance pose
-  clears the geometry passing overhead (the **z-budget** gate — measured on the Bosch: a
-  tumbler on the middle rack misses the third rack's underside by 15.8 mm at worst-case tilt);
-- a class joins the certified load only at or above its **measured settle reliability**
-  (release-probe campaigns; scaled drinkware wedges into the Bosch OEM wire lattice roughly
-  half the time, so cups/tumblers sit out of the certified Bosch count).
-
-**Measured (2026-08-28, bosch800 @ `side_winner`, policy `plates_first`): FULL LOAD = 39
-items** — `third_out` 24 forks, `middle_out` 0, `placement` 15 (plate 7 + bowl 8). The lower
-rack's 15 are settle-certified, not merely placeable: `capacity_fill.py` seats them one at a
-time under physics and reports **15/15 seated, 15/15 at goal, 0 neighbours disturbed**.
-
-That phase read 6 items until three artifacts were corrected — phantom CoACD volume on the
-door, a 5 mm hull-inflation margin vetoing real 1.6-3.3 mm clearances, and a 0.2 mm separation
-rule that cost a whole bowl row. None of them were geometry, and none required a cache rebake.
-
-Definitions, provenance and the full funnel: [docs/success_criteria.md](docs/success_criteria.md).
-
 ### 1.3 Object library
 
-Sourced from YCB scans or generated procedurally, then **scaled to fit** — the baseline
-machine is compact (lower rack 366 × 287 mm, 154 mm inter-rack clearance, 30 mm tine pitch),
-so a full-size dinner plate cannot nest between the tines; the plate here is scaled to 141 mm
-across. Each `scale` documents the factor against its source asset; the authoring pipeline
-re-measured every built asset and refused to write one that disagreed with the registry by
-more than 2 mm (retired to git history with the public-asset release; the archive ships its
-outputs).
-
-| Class | Source | Scale | Placement mode | Rack |
-|---|---|---|---|---|
-| `mug` | YCB `025_mug` | 0.85 | `floor_stand` | lower |
-| `plate` | YCB `029_plate` | 0.54 | `plate_slot` | lower |
-| `saucer` | YCB `029_plate` | 0.42 | `plate_slot` | lower |
-| `bowl` | YCB `024_bowl` | 0.68 | `floor_stand` | lower |
-| `cup` | YCB `065-a_cups` | 1.10 | `floor_stand` | lower |
-| `fork` | YCB `030_fork` | 0.60 | `basket_drop` | basket |
-| `spoon` | YCB `031_spoon` | 0.60 | `basket_drop` | basket |
-| `knife` | YCB `032_knife` | 0.60 | `basket_drop` | basket |
-| `spatula` | YCB `033_spatula` | 0.45 | `flat_lay` | upper |
-| `tumbler` | procedural | 1.00 | `floor_stand` | lower |
-| `wine_glass` | procedural | 1.00 | `stem_scallop` | upper |
-| `serving_spoon` | procedural | 1.00 | `basket_drop` | basket |
-| `container` | procedural | 1.00 | `upside_down` | upper |
-| `lid` | procedural | 1.00 | `flat_lay` | upper |
-
-On the Bosch twin, `basket_drop` classes reroute to the third-rack flat lay
-(`flat_lay_third`) — the Bosch lower rack carries no cutlery basket. Machine states:
-`both_out`, `both_in`, `placement`, `placement_open` on the baseline; the Bosch adds
-`third_out` and `middle_out` (one loadable rack extended per loading phase).
+14 classes, sourced from YCB scans or generated procedurally, then **scaled to fit** the
+machines; the certified Bosch load uses plates, bowls and forks (drinkware sits out on a
+measured settle-reliability gate). The full registry lives in `config.OBJECTS`; adding a
+class: [docs/extending.md](docs/extending.md).
 
 ### 1.4 Reference documentation
 
 | Doc | Contents |
 |---|---|
-| [docs/environment.md](docs/environment.md) | Hardware/software stack, venv recipe, Isaac Lab 3.0-vs-2.x API deltas, **launcher landmines (canonical)** |
+| [docs/environment.md](docs/environment.md) | Hardware/software stack, container recipe, Isaac Lab 2.1 API notes, **launcher landmines (canonical)** |
 | [docs/architecture.md](docs/architecture.md) | Code structure, the Kit-free/Kit-side layering, completed one-off studies |
 | [docs/success_criteria.md](docs/success_criteria.md) | Slot model per placement mode, settle tolerances, placeable capacity |
 | [docs/known_limitations.md](docs/known_limitations.md) | Honest negative results and open items, with measured evidence |
 | [docs/extending.md](docs/extending.md) | Add an object class / placement mode / machine state |
-| [docs/joint_report.md](docs/joint_report.md) | *Auto-generated* by `setup/inspect_scene.py`: measured articulation numbers every constant derives from |
+| [docs/joint_report.md](docs/joint_report.md) | Measured articulation numbers every constant derives from (generated by the retired inspect_scene.py, git history) |
 | [docs/bosch800_source_data.md](docs/bosch800_source_data.md) | Every Bosch 800 twin number with its provenance |
-| [docs/asset_survey.md](docs/asset_survey.md) | Survey of the 7 ArtVIP dishwasher variants justifying the `dishwasher_2` pick |
 | [docs/figures/README.md](docs/figures/README.md) | Provenance of every tracked figure (producing command + media source) |
 
 ## 2 Environment Setup
 
 ### 2.1 Prerequisites
 
-An Isaac Sim 6.0.1-rc.7 / Isaac Lab 3.0.0 install at `/workspace/isaaclab`. This repo nests
-inside that tree as an independent git repo. See the
-[official installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html),
-and [docs/environment.md](docs/environment.md) for this project's pinned versions. Developed
-and tested on a single NVIDIA **L4** (23 GB) / 8 vCPU / 30 GiB. Everything runs `--headless`;
-only *rendering* additionally needs `--enable_cameras`.
+Docker with the NVIDIA container runtime, and an NVIDIA GPU with a 535-series (or newer)
+driver — the runtime environment (Isaac Sim **4.5.0** + Isaac Lab **v2.1.1**) is fully baked
+into the image built by `docker/Dockerfile`, and nothing installs on the host. Developed and
+validated on the corallab workstation (3× RTX 3090, driver 535.230.02, Ubuntu 20.04 — see
+[docs/environment.md](docs/environment.md)). Everything runs `--headless`; only *rendering*
+additionally needs `--enable_cameras`.
 
-### 2.2 Planning venv
-
-Planning runs on CPU in a venv beside Kit (FCL, CoACD are not part of the Kit environment).
-Create it at **exactly** this path — `isaaclab.sh` looks for a venv there and resolves Python
-to it, which is also why `run_kit.sh` has to re-export the Kit environment.
+### 2.2 Runtime container
 
 ```bash
-/isaac-sim/kit/python/bin/python3 -m venv --system-site-packages /workspace/isaaclab/env_isaaclab
-/workspace/isaaclab/env_isaaclab/bin/pip install -r requirements-planning.txt
-/workspace/isaaclab/env_isaaclab/bin/pip install -e .
+docker build -f docker/Dockerfile -t dishsim-isaac:4.5.0 .   # once (skipped if present)
+docker compose -f docker/compose.yaml up -d                  # long-lived container dishsim-isaac
 ```
 
+The compose file keeps every bulky mutable path (assets, media, results, Kit caches,
+`HF_HOME`) on `/media/corallab-s1/2tbhdd/brianshu/dishsim`; the repo's data dirs are symlinks
+there, and the container is the only root-disk artifact. Pick the least-loaded GPU per shell
+(`nvidia-smi`, then `DISHSIM_GPU=<n> docker compose ... up -d` — shared machine).
 `requirements-planning.txt` pins the measured working set (the table in
-[docs/environment.md](docs/environment.md) is the measurement of record). The optional
-archive tooling (§2.4) additionally needs
-`huggingface_hub requests pyyaml filelock tqdm fsspec` (unpinned).
+[docs/environment.md](docs/environment.md) is the measurement of record); the Dockerfile
+installs it plus pytest and the archive tooling into Kit's python — no venv.
 
 ### 2.3 Assets (public archive — the one-command path)
 
@@ -230,8 +155,7 @@ and this project's own procedural props, racks and geometry caches. One command 
 everything, no token needed:
 
 ```bash
-/workspace/isaaclab/env_isaaclab/bin/python scripts/tools/restore_assets.py \
-    --repo shu4dev/dishsim-assets --with_media
+scripts/run_py.sh scripts/tools/restore_assets.py --repo shu4dev/dishsim-assets --with_media
 ```
 
 The restore downloads the archive (built props, every geometry cache — the ~1.5 h-of-Kit
@@ -240,23 +164,17 @@ validates every cache's `config_hash` against the current `config.py`, and runs 
 suite. `assets/`, `media/`, `results/` are gitignored; only curated figures under
 `docs/figures/` are tracked.
 
-**The archive is the fast path for BOTH machines.** It ships the complete **Bosch 800
-digital-twin world**: the self-authored machine USDs (`assets/machines/bosch800/`) and
-collision caches for all five Bosch rack states baked at the measured `side_winner` anchor
-(`assets/cache/machines/bosch800/`). After a restore, a Bosch capacity plan runs immediately —
-no baking:
+**The archive ships the complete Bosch 800 digital-twin world**: collision caches for all
+five Bosch rack states baked at the measured `side_winner` anchor
+(`assets/cache/machines/bosch800/`); the machine USDs re-author on demand at import. One
+post-restore step: the shipped `E_door_4` CoACD pieces predate a static-CoACD param change,
+so run `decompose_meshes.py` once per cached context (quickstart step 2; the loud
+`missing CoACD pieces` load error names the fix). `--machine bosch800` switches the whole
+stack via `config.apply_machine`; `--placement side_winner` selects the frozen base-frame
+anchor the Bosch caches are expressed in. Bosch numbers and their provenance:
+[docs/bosch800_source_data.md](docs/bosch800_source_data.md).
 
-```bash
-/workspace/isaaclab/env_isaaclab/bin/python scripts/setup/plan_full_load.py \
-    --machine bosch800 --placement side_winner
-```
-
-`--machine bosch800` switches the whole stack (machine USD, caches, cameras, scenarios) via
-`config.apply_machine`; `--placement side_winner` selects the frozen base-frame anchor the
-Bosch caches are expressed in. The same two flags work on every setup script. Bosch numbers
-and their provenance: [docs/bosch800_source_data.md](docs/bosch800_source_data.md).
-
-**One-command bring-up** — everything in §2.2–2.3 (venv, pinned deps, editable install,
+**One-command bring-up** — everything in §2.2–2.3 (image build if absent, container start,
 archive restore + cache validation) in one idempotent script:
 
 ```bash
@@ -265,198 +183,132 @@ scripts/tools/bootstrap.sh          # fresh clone -> planning in ~5 minutes
 
 The division of labor is deliberate: everything expensive **runs once and ships in the
 archive** — geometry extraction and CoACD decomposition (~1.5 h of Kit across both machines).
-What a clone actually iterates on — **arrangement planning** (`plan_full_load.py`, capacity
-policies, slot rules) — is Kit-free and plans per-call against the restored caches. If a run
-asks you to bake, either the archive is stale for your config or you changed a hashed value
-(see §2.4); baking during a planning sweep is always a smell.
+What a clone actually iterates on — instances and algorithms — plans per-call against the
+restored caches. If a run asks you to bake, either the archive is stale for your config or
+you changed a hashed value (see §4); baking during a benchmark sweep is always a smell.
 
 ### 2.4 Rebaking after a config change
 
-The shipped caches serve reproduction as-is. If you change any hashed config value (rack
-parameters, machine geometry, an object spec — or a FROZEN CACHE ANCHOR, which you must not
-touch), the affected caches invalidate loudly and are rebuilt with:
+The shipped caches serve reproduction as-is; a hashed-config change invalidates loudly and
+rebuilds with the two-stage `extract_geometry` → `decompose_meshes` pair (§4). If rebuilding
+the world from nothing instead of restoring, first fetch the ArtVIP source:
 
 ```bash
-./scripts/setup/build_state.py --state placement --classes mug,cup,tumbler,plate,bowl,fork
-```
-
-If you are rebuilding the world from nothing instead of restoring, first fetch the ArtVIP
-source and derive the scene report:
-
-```bash
-scripts/run_kit.sh -c "from huggingface_hub import snapshot_download; \
+scripts/run_py.sh -c "from huggingface_hub import snapshot_download; \
   snapshot_download(repo_id='X-Humanoid/ArtVIP', repo_type='dataset', \
   allow_patterns=['Articulated_objects/major_appliances/dishwasher/**'], local_dir='assets/artvip')"
-scripts/run_kit.sh scripts/setup/inspect_scene.py --headless --test_door
 ```
 
-(The one-time object-library authoring scripts were retired with the public-asset release —
-they live in git history; the archive ships their outputs.)
+(The one-time authoring/inspection scripts live in git history; the archive ships their
+outputs and `docs/joint_report.md` records the measured numbers.)
 
 ### 2.5 Verify the install
 
 ```bash
 scripts/run_kit.sh scripts/setup/kit_smoke.py --headless --enable_cameras
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /workspace/isaaclab/env_isaaclab/bin/python -m pytest tests/
+scripts/run_py.sh -m pytest tests/
 ```
 
 `kit_smoke.py` proves the collision stack imports *inside* the Kit process and that headless
-camera capture produces non-black frames. The suite is deliberately minimal — **3 Kit-free
-files**: the two frozen-invariant pins (config hash + v1 rack geometry, the tripwires that
+camera capture produces non-black frames (bootstrap runs it automatically). The suite is
+deliberately minimal — **4 Kit-free files**: the two frozen-invariant pins (the tripwires that
 protect the shipped caches) and the benchmark driver's toy-oracle check.
 
-> **Note:** `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is required — the system site-packages carry
-> hydra, whose pytest plugin imports `yaml`, a module that only exists inside Kit.
+> **Note:** `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is required outside Kit — the site-packages
+> carry hydra, whose pytest plugin breaks collection there. `scripts/run_py.sh` bakes it in.
 
-## 3 Reproduce the results
+## 3 Quickstart — reproduce the results
 
-The end-to-end path from a fresh setup to the Results table in §5. Venv scripts use
-`$PY = /workspace/isaaclab/env_isaaclab/bin/python`.
+The end-to-end path from a fresh clone to the Results table in §5. Judge every Kit run from
+its log (`[RESULT] PASS`, no tracebacks) — exit codes lie (`isaaclab.sh -p` exits 0 on
+crashes).
 
 ```bash
-# 1. install (§2.1–2.2), then restore the public archive (§2.3) — it ships every collision
-#    cache prebuilt and validated, so there is nothing to bake for reproduction
+# 0. shared box: pick the least-loaded GPU
+nvidia-smi
+DISHSIM_GPU=<n> docker compose -f docker/compose.yaml up -d
 
-# 2. plan the placeable full load on the Bosch twin (Kit-free, seconds)
-$PY scripts/setup/plan_full_load.py --machine bosch800 --placement side_winner
+# 1. bring-up: image build if absent + container + archive restore + the kit_smoke gate
+scripts/tools/bootstrap.sh
+#    GATE: restore prints "[OK] ... @ <placement>" per cache, then kit_smoke "[RESULT] PASS"
 
-# 3. generate settled benchmark instances for the lower-rack state
+# 2. once per restored context: re-decompose (shipped E_door_4 pieces predate a param change).
+#    The anchor MUST match the restore log's "@ side_winner" — a wrong anchor reads as
+#    "cache is stale".
+scripts/run_py.sh scripts/setup/decompose_meshes.py \
+    --machine bosch800 --placement side_winner --scenario placement --object plate
+scripts/run_py.sh scripts/setup/decompose_meshes.py \
+    --machine bosch800 --placement side_winner --scenario placement --object bowl
+
+# 3. gates: tests + Kit-free capacity sanity
+scripts/run_py.sh -m pytest tests/          # GATE: 11 passed
+scripts/run_py.sh -c "
+import sys; sys.path.insert(0, 'src')
+from dishsim import config
+config.apply_machine('bosch800'); config.apply_base_placement('side_winner')
+from dishsim import capacity
+print('total', capacity.plan_full_load(log=lambda *_: None).total_items)"
+#    GATE: total 39 (placement 15 = plate 7 + bowl 8)
+
+# 4. generate settled instances (saved artifacts — every algorithm sees identical inputs)
 scripts/run_kit.sh scripts/setup/gen_instances.py --headless \
-    --mode perturbed --state placement --n 10 --seed 0
+    --mode perturbed --state placement --n 3 --seed 0
 
-# 4. run the greedy baseline closed-loop against them
-scripts/run_kit.sh scripts/experiment/run_rearrange.py --headless \
-    --instances "results/instances/bosch800/placement/*.json" --algorithms greedy
-```
-
-Judge every Kit run from its log (`[RESULT] PASS`, no tracebacks) — exit codes lie. Steps
-3–4 double as the first-run validation of the benchmark pipeline on a fresh box: watch the
-abort reasons in the episode records, and note the fault/reset thresholds live as module
-constants in `src/dishsim/rearrange.py` (deliberately outside `config.py`).
-
-## 4 Running
-
-Run from the repo root. Kit scripts go through `scripts/run_kit.sh`; venv scripts use `$PY`.
-
-### 4.1 Build the collision caches
-
-```bash
-# one machine state, one class (build_state.py chains extract -> decompose)
-scripts/setup/build_state.py --state placement --classes cup
-scripts/setup/build_state.py --machine bosch800 --placement side_winner --state placement --classes cup
-
-# or the stages individually
-scripts/run_kit.sh scripts/setup/extract_geometry.py --headless --scenario placement --object cup
-$PY scripts/setup/decompose_meshes.py --scenario placement --object cup
-```
-
-- `--scenario`: machine state — `both_out`, `both_in`, `placement`, `placement_open`
-  (+ `third_out`, `middle_out` on the Bosch)
-- `--object`: object class (any key from the table in §1.3)
-- `--force` (decompose): re-decompose even when cached pieces exist
-
-### 4.2 Plan an arrangement (Kit-free)
-
-```bash
-# inspect a state's slots: table, empty-machine placeability, slot_detection.png
-$PY scripts/setup/derive_slots.py --object cup --scenario placement
-
-# the greedy placeable-capacity plan (+ per-state figure)
-$PY scripts/setup/plan_full_load.py --machine bosch800 --placement side_winner
-```
-
-Slots derive **live** from the cached rack geometry (`placement.derive_slots`) — there is no
-slot bake to go stale. The plan artifact records, per item, the slot, the mode, and the
-release pose the settle run teleports to; the per-class funnel (`slots_total` → `placeable` →
-`assigned` → `stopped_by`) explains every count.
-
-### 4.3 Run the benchmark (physics-validated per move)
-
-```bash
-# generate instances (per rack state; saved artifacts — every algorithm sees identical inputs)
-scripts/run_kit.sh scripts/setup/gen_instances.py --headless \
-    --mode perturbed --state placement --n 10 --seed 0
-
-# run algorithms closed-loop; one persistent Kit session per state batch
-scripts/run_kit.sh scripts/experiment/run_rearrange.py --headless \
-    --instances "results/instances/bosch800/placement/*.json" --algorithms greedy
-
-# on-demand video (one MP4 per episode) and the settled-load render
-scripts/run_kit.sh scripts/experiment/run_rearrange.py --headless --enable_cameras --video \
-    --instances "results/instances/bosch800/placement/*.json" --algorithms greedy
-scripts/run_kit.sh scripts/evaluation/reveal_render.py --headless --enable_cameras \
-    --plan results/capacity/bosch800/side_winner/full_load_plan.json
-
-# what the algorithm is HANDED vs what it is ASKED for: one instance's initial + goal stills
+# 5. the PROBLEM: one instance's initial + goal stills
 scripts/run_kit.sh scripts/evaluation/instance_views.py --headless --enable_cameras \
     --instance results/instances/bosch800/placement/perturbed_s0.json
 
-# settle-certify the plan itself (items arrive one at a time; --video writes the fill timelapse)
-scripts/run_kit.sh scripts/setup/capacity_fill.py --headless --enable_cameras --video \
-    --plan results/capacity/bosch800/side_winner/full_load_plan.json --state placement
+# 6. the SOLVING: closed-loop episodes with per-episode MP4s
+scripts/run_kit.sh scripts/experiment/run_rearrange.py --headless --enable_cameras --video \
+    --instances "results/instances/bosch800/placement/*.json" --algorithms greedy
+#    GATE: "[RESULT] PASS"; expect 3/3 solved in 9 moves of 45, 0 aborts, 0 infeasible commands
 ```
+
+Re-rolls during step 4 are healthy (the reproduction gate re-settling an arrangement);
+init-mismatch storms are not. Fault/reset thresholds live as module constants in
+`src/dishsim/rearrange.py` (deliberately outside `config.py`, so they can never touch
+`config_hash`); widen only against a measurement.
+
+## 4 Notes for running and extending
 
 Every multi-object render tints objects **per item** (`config.item_color`): the sourced props
 share one dark-red material, so an untinted 15-item load is unreadable. A colour follows the
 item id, so the same object keeps it across the initial still, the goal still and the episode
-video — that is what makes an arrangement followable. Bowls draw one half of the palette and
-plates the other. Tinting is visual only and never touches physics or collision geometry.
+video. Tinting is visual only and never touches physics or collision geometry.
 
 An algorithm implements `reset(instance, world)` / `next_move(obs) -> Move | None`
-(`src/dishsim/rearrange.py`; register it in `ALGORITHMS` in `run_rearrange.py`). Every move
-teleports one object, settles `SETTLE_STEPS_MOVE` physics steps, and the episode ABORTS on
-the first fault — colliding command, unstable settle, disturbed neighbor — or at the move
-budget. Episode records under `results/rearrange/` score: solved, fraction-at-goal, moves,
-planning time.
+(`src/dishsim/rearrange.py`; register it in `ALGORITHMS` in `run_rearrange.py`; accept a
+`seed=` kwarg if stochastic). Every move teleports one object, settles `SETTLE_STEPS_MOVE`
+physics steps, and the episode ABORTS on the first fault — unstable settle or a disturbed
+neighbor — or at the move budget. An infeasible commanded pose is refused and counted
+(`infeasible_commands`), not fatal. The greedy baseline is the thing to beat — one-blocker
+lookahead, so swap-cycles defeat it.
 
-### 4.4 Archive / restore the generated artifacts
+**Rebaking after a hashed-config change** (rack params, machine geometry, an object spec — or
+a FROZEN CACHE ANCHOR, which you must not touch): the affected caches invalidate loudly and
+rebuild with the two-stage pair, per (object, state):
 
 ```bash
-$PY scripts/tools/archive_assets.py --upload      # build tarballs, push to the public dataset
-$PY scripts/tools/restore_assets.py --with_media  # download, extract, validate, run tests
+scripts/run_kit.sh scripts/setup/extract_geometry.py --headless \
+    --machine bosch800 --placement side_winner --scenario <state> --object <class>
+scripts/run_py.sh scripts/setup/decompose_meshes.py \
+    --machine bosch800 --placement side_winner --scenario <state> --object <class>
 ```
+
+Restore the public archive any time with
+`scripts/run_py.sh scripts/tools/restore_assets.py --repo shu4dev/dishsim-assets`
+(the producer side, archive_assets.py, lives in git history).
 
 ## 5 Results
 
 Every claim maps to a recorded artifact; artifacts live under the gitignored `results/` and
-`media/` trees (restorable via §2.3 `--with_media`).
+`media/` trees.
 
 | Claim | Run / artifact | Evidence |
 |---|---|---|
-| **The certified Bosch lower-rack load physically holds**: all 15 planned items (7 plates + 8 bowls) arrive one at a time and settle — **15/15 seated, 15/15 at goal, 0 neighbours disturbed** | `results/capacity/bosch800/side_winner/settled_verification_placement.json` | `media/capacity/bosch800/placement/` (fill timelapse + stills) |
-| **The benchmark runs closed-loop on a 15-item roster**: greedy solves 2 of 3 perturbed instances (15/15 at goal in 9 moves of a 45 budget); the third gives up at 14/15 — an algorithm limit, with **0 harness aborts** across the batch | `results/rearrange/bosch800/placement/` | `media/rearrange/bosch800/placement/` (episode MP4s), `media/instances/bosch800/placement/` (initial vs goal) |
-| **Capacity fill is closable** *(v1 machine, git history)*: 29 items planned, 27 settle stably, 0 displaced during the stow (the 2 parked are the wine-glass stemware stretch goal) | `results/fill/capacity.json` | `media/fill/` (timelapse, orbit, stills) |
-| **Bosch 800 full load settles**: a planned multi-rack load teleported to its release poses settles with max drift 1.1 mm — the plan's poses are physically self-consistent | `media/task/bosch_sanity_load2/` (episode-era artifact of record) | `docs/figures/bosch800_loaded_reveal.png`; regenerate via `reveal_render.py --plan` |
-| **Measured settle-reliability gates**: bowls 59/60 upright on the Bosch lower rack; scaled cups 49/82 and tumblers 64/88 wedge into the OEM wire lattice — which is why drinkware sits out of the certified Bosch count | `results/plate_settle/`, gates frozen in `capacity.MEASURED_SETTLE_RELIABILITY` | [docs/known_limitations.md](docs/known_limitations.md) |
-| *(robot era, git history)* the arm-reachable Bosch full load measured 22 items at the `side_winner` mount (14 forks + 8 lower-rack items); teleport placeability re-counted capacity without the reach constraint and reached 39 (see §1.2) | `main` branch history | [docs/success_criteria.md](docs/success_criteria.md) |
-
-## 5.1 Algorithm-comparison study — status
-
-A quantitative comparison (MS-MCTS vs flat MCTS vs greedy vs a monotone floor, against the
-proven optimum) is **partly built**. What exists today:
-
-| piece | state |
-|---|---|
-| Fast feasibility oracle — `move_collides` 429 ms → **2.8 ms** (~21k queries per 60 s) | done, equivalence-checked on 252 verdicts + 1,800 fuzz checks |
-| Ground truth — `dishsim/compat.py`, exact optimal move count | done; s0 = 9, s1 = 10, s2 = 9 |
-| Harness fairness — per-algorithm instance copy, seeds, planning-time budget, stats channel, richer records | done |
-| The algorithms (`dishsim/msmcts.py`: decomposed × guided factorial, naive UCT, monotone floor) | **not started** |
-| Adversarial instance families (cycles, order-adversarial, buffer-scarce, deep chains) | **not started** |
-| Sweep + aggregator (`scripts/evaluation/compare_algorithms.py`) | **not started** |
-
-Four things to weigh before investing further, each measured and detailed in
-[docs/known_limitations.md](docs/known_limitations.md):
-
-1. **Occlusion-based ordering cannot be tested in the `placement` state** — 0 of 15 goal
-   insertions are blocked by another item. Depth heuristics can only be stressed through
-   resource contention here; real occlusion needs the stowed `both_in` state, which is gated
-   behind a hashed `rail_z` fix and a full rebake.
-2. **Plates and bowls are provably decoupled**, so the 15-item problem is really 7 + 8
-   independent subproblems until cross-class blockers are hand-authored.
-3. **Buffer scarcity is a convention, not a rule**: a move may command any pose, so restricting
-   buffers requires a harness-side legality predicate.
-4. The optimum is a **geometric-relaxation** optimum (settled poses deviate 12.8–22.0 mm), and
-   discretizing placements removes continuous buffer sampling.
+| **The benchmark runs closed-loop on a 15-item roster** (corallab, 2026-08-30): greedy solves 3/3 perturbed instances (15/15 at goal in 9 moves of a 45 budget) with **0 harness aborts, 0 infeasible commands**, against provable optima 9/8/8 (`compat.optimal_moves`) | `results/rearrange/bosch800/placement/` | `media/rearrange/bosch800/placement/` (episode MP4s), `media/instances/bosch800/placement/` (initial vs goal) |
+| **Bosch 800 full load settles**: a planned multi-rack load teleported to its release poses settles with max drift 1.1 mm — the plan's poses are physically self-consistent | episode-era artifact of record (robot-era media, retired; HF archive + git history) | `docs/figures/bosch800_loaded_reveal.png` |
+| **Measured settle-reliability gates**: bowls 59/60 upright on the Bosch lower rack; scaled cups 49/82 and tumblers 64/88 wedge into the OEM wire lattice — which is why drinkware sits out of the certified Bosch count | probe campaign of record (archived: HF tarball `results/plate_settle/`); gates frozen in `capacity.MEASURED_SETTLE_RELIABILITY` | [docs/known_limitations.md](docs/known_limitations.md) |
 
 ## 6 Known limitations
 
@@ -479,7 +331,7 @@ Adding an **object class**, **placement mode**, or **machine state**:
 This project builds on the following open-source projects and datasets. Please visit the URLs
 for their respective licenses:
 
-1. https://github.com/isaac-sim/IsaacLab — simulation framework (the 3.0 API this targets)
+1. https://github.com/isaac-sim/IsaacLab — simulation framework (the v2.1.1 API this targets)
 2. https://github.com/isaac-sim/IsaacSim — simulator and PhysX ground truth
 3. https://huggingface.co/datasets/X-Humanoid/ArtVIP — the articulated `dishwasher_2` asset
    (Apache-2.0)

@@ -11,12 +11,11 @@ name = "dishsim"
 version = "0.1.0"
 description = "Arrangement planning for dishwasher loading, physics-validated in Isaac Sim"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 license = { text = "BSD-3-Clause" }
-# Runtime dependencies are deliberately not pinned here: Kit-side runs use the Isaac Sim python
-# (torch/isaaclab/pxr preinstalled), and planning-side deps (python-fcl, coacd, trimesh,
-# matplotlib, imageio) live in the project venv — see docs/environment.md for the recipe and
-# pinned versions.
+# Runtime dependencies are deliberately not pinned here: everything runs on Kit's python
+# inside the dishsim-isaac container (torch/isaaclab/pxr preinstalled; planning deps baked
+# in by docker/Dockerfile from requirements-planning.txt) — see docs/environment.md.
 dependencies = []
 
 [tool.setuptools.packages.find]
@@ -24,7 +23,7 @@ where = ["src"]
 
 [tool.ruff]
 line-length = 110
-target-version = "py312"
+target-version = "py310"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

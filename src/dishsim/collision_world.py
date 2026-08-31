@@ -94,10 +94,8 @@ class CollisionWorld:
 
         # ---- statics ------------------------------------------------------------------------
         self._static_objs: dict[str, list[fcl.CollisionObject]] = {}
-        self._static_T: dict[str, np.ndarray] = {}
         for name, entry in self.manifest["statics"].items():
             T = np.array(entry["T_base_body"])
-            self._static_T[name] = T
             pieces = self._load_pieces(name, entry)
             self._static_objs[name] = [fcl.CollisionObject(_fcl_convex(piece), _tf(T)) for piece in pieces]
         self._static_mgr = fcl.DynamicAABBTreeCollisionManager()
@@ -309,34 +307,4 @@ class CollisionWorld:
             for obj in self._static_objs[name]:
                 self._static_mgr.unregisterObject(obj)
             disabled.add(name)
-        self._static_mgr.update()
-
-    def set_static_offset(self, name: str, offset_y_body: float) -> None:
-        """Re-pose a static body's pieces by a translation along its BODY-frame y axis.
-
-        Body y is the rack prismatic axis (the joints' localRot is identity), so this slides a
-        rack to an intermediate extension relative to its CACHED pose. The cached extensions
-        are recorded in ``manifest["statics_state"]``. Pass 0.0 to restore.
-        """
-        T = self._static_T[name] @ np.array(
-            [[1.0, 0, 0, 0], [0, 1.0, 0, float(offset_y_body)], [0, 0, 1.0, 0], [0, 0, 0, 1.0]]
-        )
-        for obj in self._static_objs[name]:
-            obj.setTransform(_tf(T))
-        self._static_mgr.update()
-
-    def set_static_transform(self, name: str, T_base_body: np.ndarray) -> None:
-        """Re-pose a static body's pieces to an ABSOLUTE base-frame transform.
-
-        The geometry never rebuilds — only the transforms move, so one loaded world serves
-        many machine configurations. Later :meth:`set_static_offset` calls compose against
-        the pose set here.
-
-        Args:
-            T_base_body: New base-frame pose of the body, shape [4, 4].
-        """
-        T = np.asarray(T_base_body, dtype=float).copy()
-        self._static_T[name] = T
-        for obj in self._static_objs[name]:
-            obj.setTransform(_tf(T))
         self._static_mgr.update()

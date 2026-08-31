@@ -37,7 +37,7 @@ its grid actually has:
 | `basket_drop` | 3 bays (lateral — the v4 basket splits along x) | `gap_left1`, `gap_centre`, `gap_right1` |
 
 Names are ordinal within the RACK, so they are invariant to how far it is pulled out; which
-slots are *placeable* is not, and is measured per state (`scripts/setup/derive_slots.py`).
+slots are *placeable* is not, and is measured per state (`placement.derive_slots`, recomputed live).
 
 ### Known: `floor_stand` tilt is not met by every class
 
@@ -49,90 +49,7 @@ they are simply outside a tolerance derived from a different object. Closing thi
 per-class placement tuning (a smaller release hover for tall/narrow items, or a per-class
 `tol_tilt_deg` in `config.PLACEMENT_MODES`).
 
-## Placeable capacity — what "full load = N" means (Bosch 800, v2)
-
-The machine's geometric capacity (every slot the racks provide) and its certified capacity
-are different numbers; only the second defines a full load. The planner
-(`src/dishsim/capacity.py`, CLI `scripts/setup/plan_full_load.py`) counts an item only if ALL
-of:
-
-1. **Placeable** — the class's convex pieces are collision-free at the slot's nominal release
-   pose in the EMPTY machine (`CollisionWorld.object_in_collision`; slots derive live via
-   `placement.derive_slots`), the same predicate slot assignment uses;
-2. **Jointly certified** — at plan time its release pose stays collision-free with every
-   earlier item of the load resting at its own goal pose in the state's FCL world (without
-   this, "N placeable slots" overcounts — adjacent rest poses overlap);
-3. **Transition-safe** — its worst-case tolerance pose (full tilt + bottom allowance) clears
-   the geometry that passes overhead during the scripted rack transitions by
-   ≥ 15 mm (`capacity.Z_BUDGET_MARGIN_M`);
-4. **Packable** — it clears every already-assigned slot under the shared occupancy rule
-   (`src/dishsim/task/slotting.py`).
-
-**Measured result (2026-08-28, Bosch @ side_winner, policy `plates_first`): FULL LOAD = 39
-items** — `third_out` 24 forks, `middle_out` 0, `placement` 15 (plate 7 + bowl 8). The lower
-rack's 15 are settle-verified, not merely placeable: `scripts/setup/capacity_fill.py` seats
-them one at a time under physics and reports **15/15 seated, 15/15 at goal, zero neighbours
-disturbed** (`results/capacity/bosch800/side_winner/settled_verification_placement.json`,
-`media/capacity/bosch800/placement/`).
-
-That phase read 6 items (plate 1 + bowl 5) until three artifacts were corrected on 2026-08-28,
-none of them geometry:
-
-* `E_door_4`'s CoACD hulls overhung the true door by **4.09 mm** — CoACD's manifold preprocess
-  re-meshes onto a voxel grid, adding an isotropic skin. That phantom volume alone blocked 5 of
-  the 8 plate gaps, whose real clearance is 7.3–7.8 mm. The door mesh is watertight, so
-  `COACD["E_door_4"]["preprocess_mode"] = "off"` decomposes it exactly (0.000 mm overhang at
-  1.000x source volume). Plate placeability 1/8 -> 7/8; the one remaining block is a genuine
-  candy-cane tine collision.
-* `COLLISION_MARGIN_M` 5 mm -> 2 mm. Hull inflation is a pre-filter, not the certificate (the
-  settle gates are); at 5 mm it vetoed real clearances of 1.6–3.3 mm.
-* `TASK["slot_separation_margin_m"]` 10 mm -> 8 mm. Two bowls two grid cells apart sit at
-  exactly 120.0 mm and the rule demanded 120.2 — a 0.2 mm veto that forced three-cell spacing.
-  Bowls 5 -> 8. (Greedy assignment is NOT the limit: it equals the exact maximum independent
-  set on this grid.)
-
-Still open, and why the count is not larger: the dish library is ~half scale (plate = 139 mm
-disc, an ArtVIP-era constraint) while this machine is rated for 270–320 mm plates; the modeled
-tine bank spans 400 mm in one rank where the source doc derives ~500 mm across two; and the
-bowl candidate lattice is a 60 mm grid that caps the open floor at 8 where ~12 physically fit.
-
-Historical context: the robot-era arm-reachable full load measured 22 items (2026-08-14,
-Bosch @ side_winner, policy `plates_first`: `third_out` 14 forks + `placement` 8 — plate 2,
-bowl 6); teleport placeability re-counts this without the reach constraint. For contrast the
-retired teleport fill (git history) seated 29 on the v1 machine. Phases execute TOP-DOWN
-(`capacity.LOADING_STATES`) so no transition ever stows the loaded lower rack
-(known_limitations: the sill climb stalls under load); a planned load renders settled via
-`scripts/evaluation/reveal_render.py --plan <plan JSON>`.
-
-Two measured gates shrink raw placeability into the certified load:
-
-- *settle reliability* (< 90 % excluded): upright cups and tumblers wedge into the coarse
-  wire lattice about half the time on both racks (cup 53-76 %, tumbler 73 %; bowls 98 %) —
-  see known_limitations "Upright drinkware". This empties the middle rack, whose only
-  capacity-relevant load was drinkware: slots there are plentiful but not dependably
-  placeable.
-- *z-budget* (< 15 mm worst-case clearance excluded): a middle-rack tumbler would be struck
-  by the third rack sliding overhead (−15.8 mm).
-
-Measured rules the numbers depend on:
-
-- **Plate occupancy is per-gap, not per-disc-radius.** The old circle rule read a plate as a
-  70.6 mm sphere: with the 10 mm margin two plates needed 151.2 mm of separation, and even
-  gaps 0 and 3 of the Bosch bank sit 150 mm apart — ONE plate per bank. Distinct tine gaps
-  are now compatible by design (the bank's pitch is the separation; joint certification still
-  vets each pair).
-- **`middle_out` floor slots target the EXTENDED middle rack** (`E_shelf_03`). The original
-  derivation hardcoded the lower rack, so the A2-era "middle 2" destinations actually
-  measured placing into the STOWED lower rack through the tub mouth (1 cell per class).
-  Re-derived and re-baked 2026-08-14 (`placement._floor_stand_rack_body`): the "middle-rack
-  thinness" flagged at A2 was this derivation artifact, not a real limit (robot-era funnels
-  after the fix: cup 41 / tumbler 39 of 56 slots on the extended rack). v1 derivations are
-  byte-identical (the lower rack is the extended rack in every v1 state).
-- **The middle rack takes cups only.** Worst-case z-budget against the third rack's underside
-  (rail 0.635): cup +20.6 mm, tumbler −15.8 mm, mug +18.0 mm (excluded on Bosch anyway) —
-  a "successfully placed" tumbler could be struck by the third rack sliding out overhead.
-
-### Plate settle tolerances are per-machine (measured 2026-08-14)
+## Plate settle tolerances are per-machine (measured 2026-08-14)
 
 `PLACEMENT_MODES` is machine-overridable since v2, and the Bosch overrides the `plate_slot`
 settle tolerances: `tol_lateral_m` 0.012 → **0.018**, `tol_tilt_deg` 12 → **16**. The v1

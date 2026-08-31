@@ -15,6 +15,44 @@ import os
 import numpy as np
 
 
+def release_sim_for_close(sim=None) -> None:
+    """Disarm isaaclab 2.1's timeline on-stop callback so ``simulation_app.close()`` returns.
+
+    ``SimulationContext`` subscribes a stop-event handler that spins
+    ``while not timeline.is_playing(): render()`` — meant to keep a GUI app rendering after a
+    user hits stop, but in a headless standalone ``close()`` stops the timeline itself and the
+    callback deadlocks the shutdown at full CPU (measured on this box: kit_smoke finished its
+    work in <1 min, then burned 7.6 cores for 40+ min inside ``close()``). Setting the private
+    disable flag is the same mechanism ``SimulationContext.reset()`` uses around its own
+    internal stop/starts; unsubscribing the handle is what ``clear_instance()`` would do —
+    ``close()`` just reaches the orchestrator stop first. Call this right before
+    ``simulation_app.close()`` in every standalone script.
+
+    Also flushes python's stdio: 4.5's ``close()`` ends in Kit's fast shutdown, which
+    terminates the process natively (exit 0) — a redirected, block-buffered stdout would
+    otherwise lose every print of the run, including the ``[RESULT]`` line the logs are
+    judged by (measured on this box).
+    """
+    import sys  # noqa: PLC0415
+
+    sys.stdout.flush()
+    sys.stderr.flush()
+    try:
+        if sim is None:
+            from isaaclab.sim import SimulationContext  # noqa: PLC0415  (Kit-only)
+
+            sim = SimulationContext.instance()
+        if sim is None:  # no context was ever created — nothing to disarm
+            return
+        sim._disable_app_control_on_stop_handle = True
+        handle = getattr(sim, "_app_control_on_stop_handle", None)
+        if handle is not None:
+            handle.unsubscribe()
+            sim._app_control_on_stop_handle = None
+    except Exception as exc:  # never let shutdown hygiene mask a real result
+        print(f"[WARN] release_sim_for_close: {exc!r}")
+
+
 class CameraRig:
     """Named fixed cameras rendering RGB at a common resolution.
 
@@ -34,10 +72,9 @@ class CameraRig:
         import isaaclab.sim as sim_utils  # noqa: PLC0415  (Kit-only)
         from isaaclab.sensors import Camera, CameraCfg  # noqa: PLC0415
 
-        # COPY, never alias. Callers pass config.CAMERAS itself, and set_view writes into
-        # _specs — so aliasing lets a temporary close-up permanently overwrite the module-level
-        # pose (measured: a re-aimed "iso" made every later restore-from-config a no-op, and
-        # each subsequent recording stored the wrong camera).
+        # COPY, never alias: callers pass config.CAMERAS itself, and holding references
+        # would let any future in-place re-aim silently overwrite the module-level poses
+        # (measured, git history — the retired runtime re-aim feature corrupted recordings).
         from . import config  # noqa: PLC0415
 
         self._specs = {k: (tuple(v[0]), tuple(v[1])) for k, v in cam_specs.items()}
@@ -75,22 +112,6 @@ class CameraRig:
                 targets=torch.tensor([target], dtype=torch.float32, device=device),
             )
 
-    def set_view(self, name: str, eye, target, device: str) -> None:
-        """Re-aim one camera at runtime (e.g. a close-up framed on a measured pose)."""
-        import torch  # noqa: PLC0415
-
-        self._specs[name] = (tuple(eye), tuple(target))
-        self.cams[name].set_world_poses_from_view(
-            eyes=torch.tensor([tuple(eye)], dtype=torch.float32, device=device),
-            targets=torch.tensor([tuple(target)], dtype=torch.float32, device=device),
-        )
-
-    def restore_view(self, name: str, device: str) -> None:
-        """Re-aim a camera back to its configured pose after a temporary close-up."""
-        from . import config  # noqa: PLC0415
-
-        eye, target = config.CAMERAS[name]
-        self.set_view(name, eye, target, device)
 
     def update(self, dt: float) -> None:
         for cam in self.cams.values():
@@ -104,14 +125,14 @@ class CameraRig:
         frame, per extra camera — which is what makes adding a wide episode view look expensive
         when it is not.
         """
-        frame = self.cams[name].data.output["rgb"].torch[0].detach().cpu().numpy()
+        frame = self.cams[name].data.output["rgb"][0].detach().cpu().numpy()
         return frame[..., :3].astype(np.uint8)
 
     def grab(self) -> dict[str, np.ndarray]:
         """Latest RGB frame per camera as HxWx3 uint8 (call :meth:`update` first)."""
         out = {}
         for name, cam in self.cams.items():
-            frame = cam.data.output["rgb"].torch[0].detach().cpu().numpy()
+            frame = cam.data.output["rgb"][0].detach().cpu().numpy()
             out[name] = frame[..., :3].astype(np.uint8)
         return out
 
@@ -145,36 +166,6 @@ class VideoWriter:
 
     def close(self) -> None:
         self._writer.close()
-
-
-def write_orbit(rig: CameraRig, scene, sim, dt: float, path: str, *, center,
-                radius: float = 1.25, height: float = 0.55, n_frames: int = 240,
-                camera: str = "iso", fps: int | None = None) -> str:
-    """A 360° orbit clip around ``center`` [m, world], stepping physics per frame.
-
-    The shared final-evidence shot (the loaded-machine orbit, the full-load
-    episode's closing orbit). Steals the named camera for the sweep and restores its
-    configured pose after.
-
-    Returns:
-        The clip path.
-    """
-    from . import config  # noqa: PLC0415
-
-    writer = VideoWriter(path, fps=fps or config.CAMERA_FPS)
-    c = np.asarray(center, dtype=float)
-    for k in range(n_frames):
-        a = 2.0 * np.pi * k / n_frames
-        eye = c + np.array([radius * np.cos(a), radius * np.sin(a), height])
-        rig.set_view(camera, eye, c, sim.device)
-        scene.write_data_to_sim()
-        sim.step()
-        scene.update(dt)
-        rig.update(dt)
-        writer.add(rig.grab_one(camera))
-    writer.close()
-    rig.restore_view(camera, sim.device)
-    return path
 
 
 def contact_sheet(images: list[np.ndarray], labels: list[str], out_png: str, cols: int = 4) -> str:

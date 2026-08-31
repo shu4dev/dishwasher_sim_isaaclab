@@ -2,13 +2,11 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Machine articulation configs: the ArtVIP dishwasher (variant ``dishwasher_2``) + derived twins.
+"""Machine articulation configs: the static dishwasher twins.
 
-``DISHWASHER_CFG`` keeps the RL-era passive-door setup that the inspection script's
-stability/door tests are written against; the passive-door derived USD (world-weld removed,
-door drive neutralized — see :mod:`dishsim.usd_prep`) is authored on demand by that script,
-not at import time. ``DISHWASHER_V0_CFG`` is the static variant (door locked open at 90 deg,
-racks at the scenario extensions).
+``DISHWASHER_V0_CFG`` is the static machine (door locked open at 90 deg, racks at the
+scenario extensions); the derived USD is authored on demand at import (see
+:mod:`dishsim.usd_prep`).
 
 Joint names (verified against the composed stage, see ``docs/joint_report.md``): door
 ``RevoluteJoint_dishwasher_2_middle`` (axis X, limits 0–90 deg, body ``E_door_4``), racks
@@ -23,6 +21,7 @@ from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 
 from . import ASSETS_DIR, config
+from .quats import xyzw_to_wxyz
 from .usd_prep import make_dishwasher_v0_usd
 
 # ---------------------------------------------------------------------------------------------
@@ -43,52 +42,6 @@ DISHWASHER_DOOR_JOINT = "RevoluteJoint_dishwasher_2_middle"
 DISHWASHER_RACK_JOINTS = ["PrismaticJoint_dishwasher_2_up", "PrismaticJoint_dishwasher_2_down"]
 if config.HAS_THIRD_RACK:
     DISHWASHER_RACK_JOINTS = DISHWASHER_RACK_JOINTS + [config.RACK_THIRD_JOINT]
-
-DISHWASHER_CFG = ArticulationCfg(
-    spawn=sim_utils.UsdFileCfg(
-        # Placeholder: the sole consumer (inspect_scene.py) authors the passive-door derived
-        # USD itself via usd_prep.make_dishwasher_rl_usd and overwrites spawn.usd_path before
-        # spawning — authoring it here at import time would tax every live-path process.
-        usd_path=_DISHWASHER_SRC_USD,
-        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-            fix_root_link=True,
-            enabled_self_collisions=False,
-        ),
-        activate_contact_sensors=True,
-    ),
-    init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.0),
-        rot=(0.0, 0.0, 0.0, 1.0),
-        joint_pos={
-            DISHWASHER_DOOR_JOINT: 0.0,  # door closed
-            DISHWASHER_RACK_JOINTS[0]: 0.0,  # racks stowed
-            DISHWASHER_RACK_JOINTS[1]: 0.0,
-        },
-    ),
-    actuators={
-        # passive door: no spring, viscous damping + friction only (overrides the USD drive
-        # that would otherwise pull the door toward 90 deg). The bottom-hinged door is
-        # gravity-unstable at 0 deg (~0.2 N*m closed-state gravity torque on the 1.06 kg door),
-        # so the joint friction acts as the latch surrogate that keeps it closed unaided.
-        "door": ImplicitActuatorCfg(
-            joint_names_expr=[DISHWASHER_DOOR_JOINT],
-            effort_limit_sim=50.0,
-            velocity_limit_sim=10.0,
-            stiffness=0.0,
-            damping=5.0,
-            friction=0.6,
-        ),
-        # racks held stowed with a stiff position drive
-        "racks": ImplicitActuatorCfg(
-            joint_names_expr=DISHWASHER_RACK_JOINTS,
-            effort_limit_sim=100.0,
-            velocity_limit_sim=1.0,
-            stiffness=200.0,
-            damping=10.0,
-        ),
-    },
-)
-"""ArtVIP dishwasher_2 with a passive (freely swinging, damped) door and stowed racks."""
 
 # v0 derived copy: static machine — door limits clamped open, rack drive targets at the
 # configured extensions. The baseline machine derives from the ArtVIP source
@@ -129,7 +82,8 @@ DISHWASHER_V0_CFG = ArticulationCfg(
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=config.DISHWASHER_POS_W,
-        rot=config.DISHWASHER_QUAT_W,
+        # config quats are project-order XYZW; isaaclab 2.1 cfg tuples are WXYZ
+        rot=xyzw_to_wxyz(config.DISHWASHER_QUAT_W),
         joint_pos={
             DISHWASHER_DOOR_JOINT: config.DOOR_INIT_RAD,
             "PrismaticJoint_dishwasher_2_up": config.RACK_UPPER_EXT_M,

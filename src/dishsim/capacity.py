@@ -20,7 +20,7 @@ no reachability, no motion planning):
   the third rack's underside by 15.8 mm at worst-case tilt, a cup clears by 20.6 mm — which
   is why a full load puts only cups on the middle rack.
 
-Packing (candidate order, occupancy) is shared with :mod:`dishsim.task.slotting`; assignment
+Packing (candidate order, occupancy) is shared with :mod:`dishsim.slotting`; assignment
 is greedy first-fit (measured 2026-08-28: on the lower-rack grid it equals the exact maximum
 independent set, so there is no packing headroom in the algorithm itself).
 
@@ -30,7 +30,6 @@ machine -> object -> scenario -> placement). :func:`plan_full_load` flips
 per-class read runs under ``config.active_object``.
 """
 
-import json
 import os
 from dataclasses import dataclass, field
 
@@ -39,7 +38,7 @@ import numpy as np
 from . import config, placement, rack_gen
 from .collision_world import CollisionWorld, load_object_pieces
 from .geometry import config_hash
-from .task import slotting
+from . import slotting
 
 CAPACITY_SCHEMA_VERSION = 1
 
@@ -131,15 +130,6 @@ class PlannedPlacement:
     T_base_slot: np.ndarray
     T_base_obj: np.ndarray
 
-    def to_json(self) -> dict:
-        return {
-            "item_id": self.item_id, "object_class": self.object_class,
-            "instance": self.instance, "state": self.state, "slot_id": self.slot_id,
-            "slot_name": self.slot_name, "mode": self.mode, "rack": self.rack,
-            "T_base_slot": np.asarray(self.T_base_slot).tolist(),
-            "T_base_obj": np.asarray(self.T_base_obj).tolist(),
-        }
-
 
 @dataclass
 class PhaseCapacity:
@@ -151,12 +141,6 @@ class PhaseCapacity:
     #: assigned, stopped_by (``"z-budget" | "overlap-or-blocked" | "cap" | None`` — None =
     #: never requested).
     funnel: dict[str, dict] = field(default_factory=dict)
-
-    def counts(self) -> dict:
-        out: dict[str, int] = {}
-        for it in self.items:
-            out[it.object_class] = out.get(it.object_class, 0) + 1
-        return out
 
 
 @dataclass
@@ -171,19 +155,6 @@ class CapacityPlan:
     @property
     def total_items(self) -> int:
         return sum(len(p.items) for p in self.phases)
-
-    def to_json(self) -> dict:
-        return {
-            "schema_version": CAPACITY_SCHEMA_VERSION,
-            "machine": self.machine, "base_placement": self.base_placement,
-            "policy": self.policy, "config_hash_by_state": self.config_hash_by_state,
-            "classes": self.classes, "total_items": self.total_items,
-            "phases": [
-                {"state": p.state, "counts": p.counts(), "funnel": p.funnel,
-                 "items": [it.to_json() for it in p.items]}
-                for p in self.phases
-            ],
-        }
 
 
 def capacity_classes() -> list[str]:
@@ -287,9 +258,13 @@ def load_state_tables(state: str, classes: list[str]) -> _StateTables:
         cdir = config.scenario_cache_dir(state, object_name=cls)
         if not os.path.exists(os.path.join(cdir, "scene_state.json")):
             raise FileNotFoundError(
-                f"missing cache {cdir} — bake it with: scripts/setup/build_state.py "
+                f"missing cache {cdir} — bake it with:\n"
+                f"  scripts/run_kit.sh scripts/setup/extract_geometry.py --headless "
                 f"--machine {config.MACHINE} --placement {config.BASE_PLACEMENT} "
-                f"--state {state} --classes {cls}")
+                f"--scenario {state} --object {cls}\n"
+                f"  scripts/run_py.sh scripts/setup/decompose_meshes.py "
+                f"--machine {config.MACHINE} --placement {config.BASE_PLACEMENT} "
+                f"--scenario {state} --object {cls}")
         with config.active_object(cls):
             live_hash = config_hash()
             slots[cls] = {s.slot_id: s for s in placement.derive_slots(cdir)}
@@ -477,94 +452,3 @@ def _try_place_one(cls: str, state: str, tables: _StateTables, world: CollisionW
             slot_id=sid, slot_name=str(names_inv.get(sid, sid)), mode=mode, rack=slot.rack,
             T_base_slot=np.asarray(slot.T_base_slot), T_base_obj=T_obj)
     return None
-
-
-def write_plan(plan: CapacityPlan, path: str, extra: dict | None = None) -> str:
-    """Serialize the plan (atomic tmp+rename); ``extra`` merges top-level keys (figure
-    path, generation stamp)."""
-    payload = plan.to_json()
-    payload.update(extra or {})
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(payload, f, indent=1)
-    os.replace(tmp, path)
-    return path
-
-
-def render_placeability_figure(plan: CapacityPlan, tables_by_state: dict[str, _StateTables],
-                               out_png: str) -> str:
-    """Top-down placeability map, one panel per loading state, in the WORLD frame.
-
-    Filled dot = placeable slot (collision-free release pose, empty machine), hollow circle =
-    not placeable, dark ring = assigned by the plan — the states differ by fill and ring,
-    never by color alone.
-    """
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from scipy.spatial.transform import Rotation
-
-    ink, muted, series = "#1f1f1f", "#9a9a9a", "#2a78d6"
-    T_w_base = np.eye(4)
-    T_w_base[:3, :3] = Rotation.from_quat(config.ROBOT_BASE_QUAT_W).as_matrix()  # XYZW
-    T_w_base[:3, 3] = config.ROBOT_BASE_POS_W
-
-    fig, axes = plt.subplots(1, len(plan.phases), figsize=(5.2 * len(plan.phases), 5.6),
-                             sharex=True, sharey=True)
-    axes = np.atleast_1d(axes)
-    rect = config.TASK["spawn_rect_w"]
-    for ax, phase in zip(axes, plan.phases):
-        tables = tables_by_state[phase.state]
-        assigned = {(it.object_class, it.slot_id) for it in phase.items}
-        n_reach = n_total = 0
-        for cls in sorted(tables.slots):
-            for sid, slot in tables.slots[cls].items():
-                p = (T_w_base @ np.append(slot.T_base_slot[:3, 3], 1.0))[:2]
-                placeable = bool(tables.placeable[cls].get(sid, False))
-                n_total += 1
-                n_reach += placeable
-                if (cls, sid) in assigned:
-                    ax.scatter(*p, s=64, facecolor=series, edgecolor=ink, linewidth=1.6,
-                               zorder=4)
-                elif placeable:
-                    ax.scatter(*p, s=26, facecolor=series, edgecolor="none", alpha=0.75,
-                               zorder=3)
-                else:
-                    ax.scatter(*p, s=22, facecolor="none", edgecolor=muted, linewidth=0.9,
-                               zorder=2)
-        ax.add_patch(plt.Rectangle((rect["x_min"], rect["y_min"]),
-                                   rect["x_max"] - rect["x_min"],
-                                   rect["y_max"] - rect["y_min"],
-                                   facecolor="none", edgecolor=muted, linestyle="--",
-                                   linewidth=1.0))
-        ax.plot(*config.ROBOT_BASE_POS_W[:2], marker="s", markersize=7, color=ink)
-        counts = ", ".join(f"{k} {v}" for k, v in sorted(phase.counts().items())) or "none"
-        ax.set_title(f"{phase.state} — {len(phase.items)} placed ({counts})",
-                     fontsize=10, color=ink)
-        ax.text(0.02, 0.02, f"{n_reach}/{n_total} slot-class pairs placeable",
-                transform=ax.transAxes, fontsize=8, color=muted)
-        ax.set_aspect("equal")
-        ax.set_xlabel("world x [m]", fontsize=8, color=ink)
-        ax.tick_params(labelsize=7, colors=muted)
-        for s in ax.spines.values():
-            s.set_color(muted)
-    axes[0].set_ylabel("world y [m]", fontsize=8, color=ink)
-    handles = [
-        plt.Line2D([], [], marker="o", ls="", mfc=series, mec="none", ms=6,
-                   label="placeable (collision-free release pose)"),
-        plt.Line2D([], [], marker="o", ls="", mfc="none", mec=muted, ms=6,
-                   label="not placeable"),
-        plt.Line2D([], [], marker="o", ls="", mfc=series, mec=ink, mew=1.6, ms=9,
-                   label="assigned in the full load"),
-        plt.Line2D([], [], ls="--", color=muted, label="counter staging band"),
-        plt.Line2D([], [], marker="s", ls="", color=ink, ms=6, label="base anchor"),
-    ]
-    fig.legend(handles=handles, loc="lower center", ncol=5, fontsize=8, frameon=False)
-    fig.suptitle(f"Placeable capacity — {plan.machine} @ {plan.base_placement}: "
-                 f"full load = {plan.total_items} items", fontsize=12, color=ink)
-    fig.tight_layout(rect=(0, 0.06, 1, 0.95))
-    os.makedirs(os.path.dirname(out_png), exist_ok=True)
-    fig.savefig(out_png, dpi=160, facecolor="white")
-    plt.close(fig)
-    return out_png

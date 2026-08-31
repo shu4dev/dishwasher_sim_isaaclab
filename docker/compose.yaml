@@ -1,0 +1,56 @@
+# Copyright (c) 2026, dishsim project.
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Long-lived dishsim runtime container on the corallab workstation.
+#
+#   docker compose -f docker/compose.yaml up -d       # start (builds nothing; image is prebuilt)
+#   scripts/run_kit.sh <script> --headless ...        # host-side entry; forwards in here
+#   scripts/run_py.sh -m pytest tests/                # Kit-free python the same way
+#
+# Storage contract (root disk is 95% full): the image is the ONLY root-disk artifact.
+# Everything mutable lives on the 2 TB drive under /media/corallab-s1/2tbhdd/brianshu/dishsim,
+# which is mounted at its host path so the repo's assets/media/results/logs/outputs symlinks
+# resolve identically on both sides. Kit's shader/data/pip caches are redirected there too.
+#
+# GPU: device 1 by default; labmates' jobs move around, so check `nvidia-smi` and pick the
+# least-loaded card per shell before starting:
+#   DISHSIM_GPU=0 docker compose -f docker/compose.yaml up -d
+
+services:
+  dishsim:
+    image: dishsim-isaac:4.5.0
+    container_name: ${DISHSIM_NAME:-dishsim-isaac}
+    restart: unless-stopped
+    # The base image's entrypoint launches the streaming sim — override it: editable-install
+    # the repo on every start (idempotent, seconds) so `import dishsim` works everywhere,
+    # then just stay alive for docker exec. The isaaclab core package and pytest ride along
+    # because the local image predates the Dockerfile lines that bake them — those installs
+    # land in the container's writable layer and die with it, so every start re-applies them
+    # (rebuilding the image would cost root disk for nothing).
+    entrypoint: ["bash", "-c",
+                 "/isaac-sim/python.sh -m pip install -q --no-build-isolation -e /workspace/isaaclab/source/isaaclab
+                  && /isaac-sim/python.sh -m pip install -q pytest -e /workspace/dishsim
+                  && exec sleep infinity"]
+    command: []
+    environment:
+      - ACCEPT_EULA=Y
+      - PRIVACY_CONSENT=Y
+      - HF_HOME=/media/corallab-s1/2tbhdd/brianshu/dishsim/hf_home
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${DISHSIM_GPU:-1}"]
+              capabilities: [gpu]
+    volumes:
+      - ${DISHSIM_REPO:-..}:/workspace/dishsim
+      - /media/corallab-s1/2tbhdd/brianshu:/media/corallab-s1/2tbhdd/brianshu
+      # Kit/Omniverse caches — GBs once shaders warm; kept off the root disk.
+      - /media/corallab-s1/2tbhdd/brianshu/dishsim/kit_cache:/isaac-sim/kit/cache
+      - /media/corallab-s1/2tbhdd/brianshu/dishsim/ov_data/cache_ov:/root/.cache/ov
+      - /media/corallab-s1/2tbhdd/brianshu/dishsim/pip_cache:/root/.cache/pip
+      - /media/corallab-s1/2tbhdd/brianshu/dishsim/ov_data/glcache:/root/.cache/nvidia/GLCache
+      - /media/corallab-s1/2tbhdd/brianshu/dishsim/ov_data/computecache:/root/.nv/ComputeCache
+      - /media/corallab-s1/2tbhdd/brianshu/dishsim/ov_data/logs:/root/.nvidia-omniverse/logs
+      - /media/corallab-s1/2tbhdd/brianshu/dishsim/ov_data/data:/root/.local/share/ov/data

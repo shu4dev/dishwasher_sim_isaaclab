@@ -50,7 +50,6 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
-from isaaclab_physx.physics import PhysxCfg
 
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
@@ -63,15 +62,12 @@ config.apply_base_placement("side_winner")
 
 from dishsim import capacity, instance_gen, rearrange  # noqa: E402
 from dishsim import scene as dscene  # noqa: E402
+from dishsim.media import release_sim_for_close  # noqa: E402
+from dishsim.quats import wxyz_to_xyzw, xyzw_to_wxyz  # noqa: E402
 from dishsim.transforms import T_inv, T_to_pos_quat, make_T  # noqa: E402
 
 MAX_INSTANCE_ATTEMPTS = 4  # whole-instance re-rolls on dead-end sampling / unstable settles
 # ponytail: whole-instance re-roll on a single unstable item; per-item resampling if yield matters
-
-
-# sample_initials lives in dishsim.instance_gen so a Kit-free generator can share it — this
-# script boots Kit at import, so nothing outside it could import a local copy.
-sample_initials = instance_gen.sample_initials
 
 
 def main() -> int:
@@ -103,12 +99,12 @@ def main() -> int:
                  for i, it in enumerate(roster)]
     park_w = {s["name"]: s["pos"] for s in obj_specs}
     sim = SimulationContext(
-        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg()))
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device))
     scene = InteractiveScene(dscene.make_scene_cfg(objects=obj_specs))
     sim.reset()
     dscene.write_default_states(scene)
     dt = sim.get_physics_dt()
-    device = scene["dishwasher"].data.joint_pos.torch.device
+    device = scene["dishwasher"].data.joint_pos.device
     T_w_base = make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W)
     T_base_w = T_inv(T_w_base)
 
@@ -124,14 +120,16 @@ def main() -> int:
             pos_w, quat = T_to_pos_quat(T_w_base @ np.asarray(T_base))
         else:
             quat = (0.0, 0.0, 0.0, 1.0)
-        scene[item_id].write_root_pose_to_sim_index(root_pose=torch.tensor(
-            np.concatenate([pos_w, quat])[None], dtype=torch.float32, device=device))
-        scene[item_id].write_root_velocity_to_sim_index(
+        # project poses are pos + XYZW; isaaclab 2.1 wants pos + WXYZ
+        scene[item_id].write_root_pose_to_sim(root_pose=torch.tensor(
+            np.concatenate([pos_w, xyzw_to_wxyz(np.asarray(quat))])[None],
+            dtype=torch.float32, device=device))
+        scene[item_id].write_root_velocity_to_sim(
             root_velocity=torch.zeros((1, 6), dtype=torch.float32, device=device))
 
     def measured(item_id):
-        return T_base_w @ make_T(scene[item_id].data.root_pos_w.torch[0].cpu().numpy(),
-                                 scene[item_id].data.root_quat_w.torch[0].cpu().numpy())
+        return T_base_w @ make_T(scene[item_id].data.root_pos_w[0].cpu().numpy(),
+                                 wxyz_to_xyzw(scene[item_id].data.root_quat_w[0].cpu().numpy()))
 
     step(300)  # racks settle at the scenario extensions
 
@@ -142,7 +140,7 @@ def main() -> int:
         settled = None
         for attempt in range(MAX_INSTANCE_ATTEMPTS):
             rng = np.random.default_rng(args_cli.seed + k + 1000 * attempt)
-            initials, displaced = sample_initials(roster, tables, world, rng, n_displace)
+            initials, displaced = instance_gen.sample_initials(roster, tables, world, rng, n_displace)
             if initials is None:
                 print(f"[WARN] {name}: sampling dead end (attempt {attempt}) — re-rolling")
                 continue
@@ -214,5 +212,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     code = main()
+    release_sim_for_close()
     simulation_app.close()
     raise SystemExit(code)

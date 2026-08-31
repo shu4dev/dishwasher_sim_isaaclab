@@ -42,7 +42,9 @@ parser.add_argument("--out", type=str, default=os.path.join(PROJECT_ROOT, "resul
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
+_enable_cameras = args_cli.enable_cameras  # 2.1's AppLauncher pops this off the namespace
 app_launcher = AppLauncher(args_cli)
+args_cli.enable_cameras = _enable_cameras
 simulation_app = app_launcher.app
 
 """Rest everything follows."""
@@ -56,7 +58,6 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
-from isaaclab_physx.physics import PhysxCfg
 
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
@@ -85,23 +86,11 @@ config.apply_base_placement(BASE_PLACEMENT)
 
 from dishsim import rearrange  # noqa: E402
 from dishsim import scene as dscene  # noqa: E402
-from dishsim.media import CameraRig, VideoWriter  # noqa: E402
+from dishsim.media import CameraRig, VideoWriter, release_sim_for_close  # noqa: E402
+from dishsim.quats import wxyz_to_xyzw, xyzw_to_wxyz  # noqa: E402
 from dishsim.transforms import T_inv, T_to_pos_quat, make_T  # noqa: E402
 
 ALGORITHMS = {"greedy": rearrange.Greedy}
-
-
-def _make_algo(name: str, seed: int):
-    """Construct a registry algorithm, passing ``seed`` only if it accepts one.
-
-    Keeps the zero-arg contract the deterministic baselines rely on while letting a
-    stochastic planner be seeded — without forcing every algorithm to grow a constructor.
-    """
-    cls = ALGORITHMS[name]
-    try:
-        return cls(seed=seed)
-    except TypeError:
-        return cls()
 
 
 def _episode_seed(base: int, instance_name: str, algo_name: str) -> int:
@@ -121,13 +110,14 @@ class IsaacOracle:
         self.scene, self.sim, self.roster, self.step = scene, sim, roster, step_fn
         self.T_w_base = make_T(config.ROBOT_BASE_POS_W, config.ROBOT_BASE_QUAT_W)
         self.T_base_w = T_inv(self.T_w_base)
-        self.device = scene["dishwasher"].data.joint_pos.torch.device
+        self.device = scene["dishwasher"].data.joint_pos.device
 
     def teleport(self, item_id, T_base):
         pos_w, quat = T_to_pos_quat(self.T_w_base @ np.asarray(T_base))
-        self.scene[item_id].write_root_pose_to_sim_index(root_pose=torch.tensor(
-            np.concatenate([pos_w, quat])[None], dtype=torch.float32, device=self.device))
-        self.scene[item_id].write_root_velocity_to_sim_index(
+        # project poses are pos + XYZW; isaaclab 2.1 wants pos + WXYZ
+        self.scene[item_id].write_root_pose_to_sim(root_pose=torch.tensor(
+            np.concatenate([pos_w, xyzw_to_wxyz(quat)])[None], dtype=torch.float32, device=self.device))
+        self.scene[item_id].write_root_velocity_to_sim(
             root_velocity=torch.zeros((1, 6), dtype=torch.float32, device=self.device))
 
     def park(self, item_id, pos_w):
@@ -135,8 +125,8 @@ class IsaacOracle:
 
     def measured(self, item_id):
         return self.T_base_w @ make_T(
-            self.scene[item_id].data.root_pos_w.torch[0].cpu().numpy(),
-            self.scene[item_id].data.root_quat_w.torch[0].cpu().numpy())
+            self.scene[item_id].data.root_pos_w[0].cpu().numpy(),
+            wxyz_to_xyzw(self.scene[item_id].data.root_quat_w[0].cpu().numpy()))
 
     def poses(self):
         return {it["item_id"]: self.measured(it["item_id"]) for it in self.roster}
@@ -193,7 +183,7 @@ def main() -> int:
     park_w = {s["name"]: s["pos"] for s in obj_specs}
 
     sim = SimulationContext(
-        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg()))
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device))
     rig = None
     if args_cli.video:
         assert args_cli.enable_cameras, "--video needs --enable_cameras"
@@ -272,7 +262,7 @@ def main() -> int:
                 # derived per (instance, algorithm) so a stochastic planner is replayable and
                 # two algorithms on one instance do not share a stream
                 seed = _episode_seed(args_cli.seed, inst.name, algo_name)
-                record = rearrange.run_episode(inst, _make_algo(algo_name, seed), world, oracle,
+                record = rearrange.run_episode(inst, ALGORITHMS[algo_name](), world, oracle,
                                                budget=budget, algorithm_name=algo_name,
                                                time_budget_s=args_cli.time_budget_s)
                 record["seed"] = seed
@@ -296,5 +286,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     code = main()
+    release_sim_for_close()
     simulation_app.close()
     raise SystemExit(code)

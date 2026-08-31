@@ -40,9 +40,3 @@ def T_inv(T: np.ndarray) -> np.ndarray:
     out[:3, :3] = R.T
     out[:3, 3] = -R.T @ T[:3, 3]
     return out
-
-
-def rot_angle_deg(R_a: np.ndarray, R_b: np.ndarray) -> float:
-    """Geodesic angle between two rotation matrices [deg]."""
-    R = np.asarray(R_a)[:3, :3].T @ np.asarray(R_b)[:3, :3]
-    return float(np.degrees(np.arccos(np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0))))

@@ -404,18 +404,6 @@ def object_pose_for_mode(slot: SlotFrame, spin: float, lateral: np.ndarray, tilt
     return T
 
 
-def sample_goal_poses(slot: SlotFrame, n: int, rng: np.random.Generator) -> list[np.ndarray]:
-    """Sample object poses in the slot's tolerance region (uniform spin, small lateral/tilt)."""
-    poses = []
-    hover = float(config.placement_mode_params(slot.mode)["release_hover_m"])
-    for _ in range(n):
-        spin = rng.uniform(0.0, 2.0 * np.pi)
-        lateral = rng.uniform(-config.SLOT_TOL_LATERAL_M, config.SLOT_TOL_LATERAL_M, 2) * 0.66
-        tilt = rng.uniform(-1.0, 1.0, 2) * np.radians(config.SLOT_TOL_TILT_DEG) * 0.3
-        poses.append(object_pose_for_mode(slot, spin, lateral, tilt, hover))
-    return poses
-
-
 def evaluate_placement(slot: SlotFrame, T_base_obj: np.ndarray) -> dict:
     """Per-mode success evaluation of a settled object pose (physics-backed).
 

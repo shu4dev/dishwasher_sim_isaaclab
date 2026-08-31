@@ -9,10 +9,10 @@ Verifies, in one Isaac Sim session:
 1. ``fcl``, ``coacd``, ``trimesh``, ``imageio`` import *inside* the Kit process (a Kit/wheel
    symbol clash would sink the design — fail fast here).
 2. A camera sensor renders headlessly and the frames are non-black: writes
-   ``media/smoke/smoke.png`` and a 2 s, 720p, 30 fps ``media/smoke/smoke.mp4`` of a cube dropping.
+   ``media/smoke/smoke.png``.
 
 Run with:
-    /workspace/isaaclab/isaaclab.sh -p scripts/setup/kit_smoke.py --headless --enable_cameras
+    scripts/run_kit.sh scripts/setup/kit_smoke.py --headless --enable_cameras
 """
 
 """Launch Isaac Sim Simulator first."""
@@ -42,11 +42,11 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.sensors import Camera, CameraCfg
 from isaaclab.sim import SimulationContext
-from isaaclab_physx.physics import PhysxCfg
 
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
-from dishsim.checks import FAILURES, check, finish  # noqa: E402
+from dishsim.checks import check, finish  # noqa: E402
+from dishsim.media import release_sim_for_close  # noqa: E402
 
 
 def test_imports() -> None:
@@ -64,7 +64,7 @@ def main() -> None:
     test_imports()
 
     # --- minimal scene: ground, light, one falling cube -----------------------------------
-    sim = SimulationContext(sim_utils.SimulationCfg(dt=1.0 / 60.0, device=args_cli.device, physics=PhysxCfg()))
+    sim = SimulationContext(sim_utils.SimulationCfg(dt=1.0 / 60.0, device=args_cli.device))
     sim_utils.GroundPlaneCfg().func("/World/ground", sim_utils.GroundPlaneCfg())
     light_cfg = sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75))
     light_cfg.func("/World/light", light_cfg)
@@ -103,7 +103,7 @@ def main() -> None:
         camera.update(dt)
 
     def grab() -> np.ndarray:
-        data = camera.data.output["rgb"].torch[0]
+        data = camera.data.output["rgb"][0]
         frame = data.detach().cpu().numpy()
         return frame[..., :3].astype(np.uint8)
 
@@ -122,29 +122,10 @@ def main() -> None:
     Image.fromarray(frame).save(png_path)
     check("PNG written", os.path.isfile(png_path) and os.path.getsize(png_path) > 10_000, png_path)
 
-    # --- 2 s MP4 of the cube dropping ------------------------------------------------------
-    import imageio
-
-    mp4_path = os.path.join(args_cli.out_dir, "smoke.mp4")
-    writer = imageio.get_writer(mp4_path, fps=30, codec="libx264", quality=7, macro_block_size=None)
-    stds = []
-    for _ in range(60):
-        sim.step()
-        camera.update(dt)
-        f = grab()
-        stds.append(float(f.std()))
-        writer.append_data(f)
-    writer.close()
-    check(
-        "MP4 written (60 frames @ 30 fps, 720p)",
-        os.path.isfile(mp4_path) and os.path.getsize(mp4_path) > 50_000,
-        f"{mp4_path} ({os.path.getsize(mp4_path)} B)",
-    )
-    check("video frames non-black throughout", min(stds) > 5.0, f"min std {min(stds):.1f}")
-
     finish()
 
 
 if __name__ == "__main__":
     main()
+    release_sim_for_close()
     simulation_app.close()

@@ -43,7 +43,6 @@ import sys
 import isaaclab.sim as sim_utils
 from isaaclab.scene import InteractiveScene
 from isaaclab.sim import SimulationContext
-from isaaclab_physx.physics import PhysxCfg
 
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
@@ -58,12 +57,13 @@ if args_cli.placement:
     config.apply_base_placement(args_cli.placement)  # after machine/scenario — they reset it
 
 from dishsim import geometry as dgeom  # noqa: E402
+from dishsim.media import release_sim_for_close  # noqa: E402
 from dishsim import scene as dscene  # noqa: E402
 
 
 def main() -> None:
     sim = SimulationContext(
-        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, physics=PhysxCfg(), use_fabric=False)
+        sim_utils.SimulationCfg(dt=config.SIM_DT, device=args_cli.device, use_fabric=False)
     )
     scene = InteractiveScene(dscene.make_scene_cfg())
     sim.reset()
@@ -89,4 +89,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    release_sim_for_close()
     simulation_app.close()
