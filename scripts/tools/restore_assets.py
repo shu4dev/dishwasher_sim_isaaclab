@@ -5,18 +5,26 @@
 """Restore archived assets/media on a fresh instance (counterpart of the retired archive_assets.py, git history).
 
 Downloads the tarballs from the public HF dataset (or takes local paths), safe-extracts
-them into the project root, re-downloads the ArtVIP originals (the derived dishwasher
-``.usda`` layers reference that tree), and validates every restored geometry cache's
+them into the project root, verifies every extracted file's sha256 against the tarball's
+``MANIFEST.json`` (tarballs cut before 2026-09 carry no digests and are extracted unverified),
+and — for the ``assets`` kind — re-downloads the ArtVIP originals (the derived dishwasher
+``.usda`` layers reference that tree) and validates every restored geometry cache's
 ``config_hash`` stamp against the current ``config.py`` before declaring success.
+
+Kinds (``latest.json["files"][kind]`` names each tarball): ``assets`` (caches, props,
+derived USDs — the default), ``media`` (recorded evidence), ``models`` (the standalone
+Bosch 800 USD asset under ``assets/models/``), ``evidence`` (its validation report, stills
+and video under ``assets/evidence/``). Producer: ``archive_assets.py``.
 
 Prerequisites on a fresh box: the runtime container (README setup step 1). The public dataset
 downloads without a token (``huggingface-cli login`` is only needed for a private mirror).
 
-    scripts/run_py.sh scripts/tools/restore_assets.py [--repo <id>] [--with_media]
-    scripts/run_py.sh scripts/tools/restore_assets.py --local outputs/archive/dishsim_assets_<tag>.tar.gz
+    scripts/run_py.sh scripts/tools/restore_assets.py [--repo <id>] [--kinds assets models evidence]
+    scripts/run_py.sh scripts/tools/restore_assets.py --local outputs/archive/dishsim_<kind>_<tag>.tar.gz
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -26,15 +34,22 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 parser = argparse.ArgumentParser(description="Restore archived assets/media from HF (or local tarballs).")
-parser.add_argument("--repo", type=str, default=None,
-                    help="HF dataset repo id (default: <whoami>/dishsim-assets).")
+parser.add_argument("--repo", type=str, default="shu4dev/dishsim-assets",
+                    help="HF dataset repo id (default: shu4dev/dishsim-assets, public, no token).")
 parser.add_argument("--file", type=str, default="latest",
                     help="Assets tarball filename in the repo (default: resolve via latest.json).")
-parser.add_argument("--with_media", action="store_true", help="Also restore the media tarball.")
+parser.add_argument("--kinds", nargs="+", default=["assets"],
+                    choices=["assets", "media", "models", "evidence"],
+                    help="Tarball kinds to restore (default: assets).")
+parser.add_argument("--with_media", action="store_true",
+                    help="Also restore the media tarball (alias for adding 'media' to --kinds).")
 parser.add_argument("--local", type=str, nargs="*", default=None,
                     help="Local tarball path(s) instead of downloading.")
 parser.add_argument("--skip_tests", action="store_true", help="Skip the pytest validation pass.")
 args = parser.parse_args()
+
+if args.with_media and "media" not in args.kinds:
+    args.kinds.append("media")
 
 ALLOWED_PREFIXES = ("assets/", "media/", "results/", "MANIFEST.json")
 #: What actually gets EXTRACTED from the archive. The shipped tarball packs `results/` (and a
@@ -42,23 +57,26 @@ ALLOWED_PREFIXES = ("assets/", "media/", "results/", "MANIFEST.json")
 #: media are LOCAL artifacts (instances, episode records, renders are regenerated here), so
 #: only `assets/` restores — extracting the rest would resurrect ~30 MB of retired robot-era
 #: outputs on every run. Robot-era evidence that predates this rule lives OUTSIDE the repo
-#: roots at /media/corallab-s1/2tbhdd/brianshu/dishsim/robot_era_evidence/.
+#: roots at /media/corallab-s1/2tbhdd/brianshu/dishsim/robot_era_evidence/. The ``models``
+#: and ``evidence`` kinds live under ``assets/`` too, so this single prefix covers them.
 EXTRACT_PREFIXES = ("assets/",)
 
 
 def fetch_tarballs() -> list[str]:
     if args.local:
         return [os.path.abspath(p) for p in args.local]
-    from huggingface_hub import HfApi, hf_hub_download  # noqa: PLC0415
+    from huggingface_hub import hf_hub_download  # noqa: PLC0415
 
-    repo = args.repo or f"{HfApi().whoami()['name']}/dishsim-assets"
+    repo = args.repo
     print(f"[INFO] restoring from https://huggingface.co/datasets/{repo}")
     if args.file == "latest":
         latest = json.load(open(hf_hub_download(repo_id=repo, repo_type="dataset",
                                                 filename="latest.json")))
-        names = [latest["files"]["assets"]]
-        if args.with_media and "media" in latest["files"]:
-            names.append(latest["files"]["media"])
+        missing = [k for k in args.kinds if k not in latest["files"]]
+        if missing:
+            raise SystemExit(f"[FAIL] latest.json has no tarball for kind(s) {missing}; "
+                             f"available: {sorted(latest['files'])}")
+        names = [latest["files"][k] for k in args.kinds]
     else:
         names = [args.file]
     return [hf_hub_download(repo_id=repo, repo_type="dataset", filename=n) for n in names]
@@ -91,7 +109,34 @@ def safe_extract(tar_path: str) -> dict:
         tf.extractall(PROJECT_ROOT, members=members, filter="fully_trusted")
     print(f"[INFO] extracted {os.path.basename(tar_path)} "
           f"({manifest.get('n_files', '?')} files, git {manifest.get('git_sha', '?')})")
+    verify_digests(manifest)
     return manifest
+
+
+def verify_digests(manifest: dict) -> None:
+    """Compare every extracted member against the sha256 recorded at archive time."""
+    digests = manifest.get("sha256")
+    if not digests:
+        print("[INFO] no sha256 manifest in this tarball (pre-2026-09 archive) — skipping verify")
+        return
+    bad = []
+    for rel, want in sorted(digests.items()):
+        if not os.path.normpath(rel).startswith(EXTRACT_PREFIXES):
+            continue
+        path = os.path.join(PROJECT_ROOT, rel)
+        h = hashlib.sha256()
+        try:
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+        except FileNotFoundError:
+            bad.append(f"{rel}: missing after extract")
+            continue
+        if h.hexdigest() != want:
+            bad.append(f"{rel}: sha256 mismatch")
+    if bad:
+        raise SystemExit("[FAIL] manifest verification:\n  " + "\n  ".join(bad))
+    print(f"[INFO] sha256 verified for {len(digests)} extracted files")
 
 
 def ensure_artvip() -> None:
@@ -163,13 +208,15 @@ def validate_caches(manifest: dict) -> bool:
 
 def main() -> None:
     tarballs = fetch_tarballs()
-    manifest = {}
+    manifest = None
     for p in tarballs:
         m = safe_extract(p)
-        if m.get("kind") == "assets" or "assets" in os.path.basename(p):
+        if m.get("kind") == "assets" or "_assets_" in os.path.basename(p):
             manifest = m
-    ensure_artvip()
-    ok = validate_caches(manifest)
+    ok = True
+    if manifest is not None:  # the cache pack was restored: ArtVIP tree + config_hash gate
+        ensure_artvip()
+        ok = validate_caches(manifest)
     if not args.skip_tests:
         import subprocess  # noqa: PLC0415
 

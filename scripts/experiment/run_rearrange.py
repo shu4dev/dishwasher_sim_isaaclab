@@ -37,7 +37,8 @@ parser.add_argument("--cells", type=str, default=None,
 parser.add_argument("--instances_root", type=str,
                     default="results/instances/bosch800/placement")
 parser.add_argument("--algorithms", type=str, default="greedy", help="Comma list of registry names.")
-parser.add_argument("--budget_mult", type=float, default=3.0, help="Move budget = ceil(mult * n_items).")
+parser.add_argument("--budget_mult", type=float, default=3.0,
+                    help="Move budget = ceil(mult * n_items); <= 0 = unlimited.")
 parser.add_argument("--video", action="store_true", help="Record one MP4 per episode (needs --enable_cameras).")
 parser.add_argument("--seed", type=int, default=0,
                     help="Base seed; each (instance, algorithm) gets a derived seed, recorded.")
@@ -106,7 +107,7 @@ from dishsim.media import CameraRig, VideoWriter, release_sim_for_close  # noqa:
 from dishsim.quats import wxyz_to_xyzw, xyzw_to_wxyz  # noqa: E402
 from dishsim.transforms import T_inv, T_to_pos_quat, make_T  # noqa: E402
 
-ALGORITHMS = {"greedy": rearrange.Greedy}
+ALGORITHMS = {"greedy": rearrange.Greedy, "greedy_offline": rearrange.OfflineGreedy}
 try:  # sampling planners register when their module imports cleanly (never sink a batch)
     from dishsim import rrt as _rrt
 
@@ -309,7 +310,8 @@ def main() -> int:
                 for it in roster:
                     it["T_base_init"] = oracle.measured(it["item_id"])
                 n_items = len(roster)
-                budget = math.ceil(args_cli.budget_mult * n_items)
+                budget = (None if args_cli.budget_mult <= 0
+                          else math.ceil(args_cli.budget_mult * n_items))
                 # derived per (instance, algorithm) so a stochastic planner is replayable and
                 # two algorithms on one instance do not share a stream
                 seed = _episode_seed(args_cli.seed, inst.name, algo_name)

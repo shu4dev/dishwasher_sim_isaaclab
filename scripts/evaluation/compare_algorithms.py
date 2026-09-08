@@ -49,6 +49,11 @@ def _mean(xs):
     return round(statistics.fmean(xs), 3) if xs else None
 
 
+def _std(xs):
+    xs = [x for x in xs if x is not None]
+    return round(statistics.pstdev(xs), 3) if xs else None
+
+
 def main() -> int:
     paths = sorted({p for g in args.records
                     for p in glob.glob(g if os.path.isabs(g)
@@ -87,9 +92,13 @@ def main() -> int:
                                 for r in gapped if r["instance_meta"]["optimum"]]),
             "no_opt": len(solved) - len(gapped),
             "moves": _mean([r.get("moves_used") for r in solved]),
+            "moves_std": _std([r.get("moves_used") for r in solved]),
             "moves_eff": _mean([r.get("moves_used", 0) - r.get("failed_settles", 0)
                                 for r in solved]),
             "plan_total_s": _mean([r.get("planning_time_total_s") for r in solved]),
+            "plan_total_std_s": _std([r.get("planning_time_total_s") for r in solved]),
+            "plan_all_s": _mean([r.get("planning_time_total_s") for r in completed]),
+            "plan_all_std_s": _std([r.get("planning_time_total_s") for r in completed]),
             "plan_ms_med": round(statistics.median(plan_ms), 3) if plan_ms else None,
             "infeasible": _mean([r.get("infeasible_commands") for r in completed]),
             "counter_full": _mean([r.get("counter_full_refusals") for r in completed]),
@@ -122,7 +131,9 @@ def main() -> int:
                 "Measurement names: success rate = `success` · planning time = "
                 "`plan_total_s`/`plan_ms_med` · number of steps = `moves`. (Relocation "
                 "distance is retired for now; records still log raw `travel_m`.)\n\n"
-                "Success rate over ALL completed episodes; steps/gap/time over SOLVED only; gap "
+                "Success rate over ALL completed episodes; steps/gap/time over SOLVED only "
+                "(`plan_all_s` additionally averages planning time over ALL completed, "
+                "budget-exhausted failures included; `*_std` columns are population std); gap "
                 "only where the cap-aware optimum is proven. `moves_eff` excludes "
                 "failed-settle retries. A null effect on the cap-ablation cells at medium "
                 "displacement is expected signal (where the knob starts to bind). NEGATIVE "

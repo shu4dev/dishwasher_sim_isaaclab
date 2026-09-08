@@ -97,7 +97,8 @@ def main() -> int:
                  for i, it in enumerate(items)]
     for it in items:  # the legend a viewer needs to read the tableaux
         c = config.item_color(it["item_id"])
-        print(f"[INFO] color {it['item_id']:10s} rgb=({c[0]:.2f}, {c[1]:.2f}, {c[2]:.2f})")
+        print(f"[INFO] color {it['item_id']:10s} "
+              + ("asset material" if c is None else f"rgb=({c[0]:.2f}, {c[1]:.2f}, {c[2]:.2f})"))
     scene = InteractiveScene(dscene.make_scene_cfg(objects=obj_specs))
     ep_cam = config.EPISODE_CAMERA
     rig = CameraRig({**config.CAMERAS,

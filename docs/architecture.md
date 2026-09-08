@@ -121,5 +121,6 @@ retired to git history when the study froze, and the measured outcomes live in t
   [known_limitations.md](known_limitations.md).
 - **Capacity certification + reveal renders** (`capacity_fill.py`, `reveal_render.py`,
   `plan_full_load.py` CLI, `build_state.py`, `derive_slots.py`, `preview_rack.py`,
-  `inspect_scene.py`, `archive_assets.py`) — retired in the minimal-version cut (git
-  history); the capacity PLANNER itself lives on in `capacity.py`.
+  `inspect_scene.py`) — retired in the minimal-version cut (git history); the capacity
+  PLANNER itself lives on in `capacity.py`. `archive_assets.py` came back in 2026-09 as the
+  kind-aware producer for the HF archive (`--kinds models evidence`; sha256 manifests).

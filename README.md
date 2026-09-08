@@ -174,6 +174,21 @@ stack via `config.apply_machine`; `--placement side_winner` selects the frozen b
 anchor the Bosch caches are expressed in. Bosch numbers and their provenance:
 [docs/bosch800_source_data.md](docs/bosch800_source_data.md).
 
+**Standalone Bosch 800 asset (opt-in tarball kinds).** The same dataset also carries an
+independently authored, redistributable Bosch 800 USD (`bosch800.usdc` + rack exports +
+textures) and its validation evidence, as two extra tarball kinds that `latest.json` names
+beside the cache archive; every file is sha256-verified against the tarball manifest on
+restore. It is a visual/manipulation asset, not (yet) the benchmark machine — see
+[docs/bosch800_asset.md](docs/bosch800_asset.md):
+
+```bash
+scripts/run_py.sh scripts/tools/restore_assets.py --kinds models            # ~2 MB
+scripts/run_py.sh scripts/tools/restore_assets.py --kinds models evidence   # +74 MB stills/video
+```
+
+Producer side (re-cut + publish after an asset revision): `scripts/tools/archive_assets.py
+--kinds models evidence [--upload]`; the upload merges into the remote `latest.json`.
+
 **One-command bring-up** — everything in §2.2–2.3 (image build if absent, container start,
 archive restore + cache validation) in one idempotent script:
 
@@ -310,7 +325,7 @@ scripts/run_py.sh scripts/setup/decompose_meshes.py \
 
 Restore the public archive any time with
 `scripts/run_py.sh scripts/tools/restore_assets.py --repo shu4dev/dishsim-assets`
-(the producer side, archive_assets.py, lives in git history).
+(the producer side is `scripts/tools/archive_assets.py`).
 
 ## 5 Results
 
