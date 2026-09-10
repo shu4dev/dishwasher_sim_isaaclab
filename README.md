@@ -31,6 +31,14 @@
 
 ## 1 Overview
 
+The independently authored **Frigidaire FDPC4221AS** has two dedicated collections:
+[source, build tools and documentation](frigidaire/README.md) under `frigidaire/`,
+and the asset installation target `assets/models/frigidaire_fdpc4221as/`, containing
+USDs, rack layouts, dimensions, reference photos and archived releases. The cleanup
+is currently [staged here](build/frigidaire_collection/README.md); its current USD
+build and Isaac validation are pending runtime access. See the source README for
+reproduction commands and delivery status.
+
 This repo is a **benchmark for dishwasher rearrangement planning**: given a physically
 settled initial arrangement and an exact target arrangement in an articulated dishwasher
 (experiments run on a self-authored **Bosch 800 digital twin** with a third rack; the ArtVIP
@@ -222,6 +230,7 @@ outputs and `docs/joint_report.md` records the measured numbers.)
 ```bash
 scripts/run_kit.sh scripts/setup/kit_smoke.py --headless --enable_cameras
 scripts/run_py.sh -m pytest tests/
+scripts/run_py.sh -m pytest frigidaire/tests/
 ```
 
 `kit_smoke.py` proves the collision stack imports *inside* the Kit process and that headless

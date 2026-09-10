@@ -15,7 +15,10 @@ if [ ! -d /isaac-sim ]; then
     ROOT="$(cd "$(dirname "$0")/.." && pwd)"
     REL="$(realpath --relative-to="$ROOT" "$PWD" 2>/dev/null || echo .)"
     case "$REL" in ..*) REL=. ;; esac
+    # HF_TOKEN is forwarded only when set in this shell (archive_assets.py --upload);
+    # it stays a process env var - never written to disk or the compose file.
     exec docker exec -w "/workspace/dishsim/$REL" -e PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+        ${HF_TOKEN:+-e HF_TOKEN} \
         dishsim-isaac /workspace/dishsim/scripts/run_py.sh "$@"
 fi
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1

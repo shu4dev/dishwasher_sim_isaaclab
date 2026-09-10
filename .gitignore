@@ -12,6 +12,7 @@
 # Logs and outputs
 /logs
 /outputs
+/frigidaire
 wandb/
 
 # Python

@@ -14,10 +14,14 @@ loud at load (`missing CoACD pieces for '<body>' — run scripts/setup/decompose
 first`) but the staleness check cannot see it coming, and a restore-only box hits it because
 the shipped archive predates the change.
 
-Practical consequences, until the archive is re-cut (archive_assets.py, git history):
-after restoring assets, run `scripts/run_py.sh scripts/setup/decompose_meshes.py` once per context (Kit-free,
-seconds). The upside of the same asymmetry is that re-decomposing a static invalidates
-**nothing** — it is the cheapest honest fix available in this codebase.
+Practical consequences: the archive was re-cut from this box on 2026-09-10
+(`scripts/tools/archive_assets.py`), so `assets` tags dated 2026-09-10 or later ship the exact
+E_door_4 pieces and need no post-restore step. Restoring an OLDER tag still requires
+`scripts/run_py.sh scripts/setup/decompose_meshes.py` once per context (Kit-free, seconds),
+with `--machine/--placement/--scenario/--object` matching the restore log's `[OK] ... @
+<placement>` line. The upside of the same asymmetry is that re-decomposing a static invalidates
+**nothing** — it is the cheapest honest fix available in this codebase. Any future static-CoACD
+edit reopens this item until the next re-cut; `archive_assets.py --status` flags the stale build.
 
 ## CoACD's manifold preprocess inflates authored bodies (2026-08-28, measured)
 

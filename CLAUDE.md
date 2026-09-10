@@ -90,11 +90,11 @@ scripts/run_py.sh scripts/setup/decompose_meshes.py \
 ```
 
 Caches ship in the public archive — restore first (`bootstrap.sh` / `restore_assets.py`),
-never rebake what the archive carries. ONE exception until the archive is re-cut: the shipped
-E_door_4 CoACD pieces predate `COACD["E_door_4"]["preprocess_mode"] = "off"`, so a restore-only
-box runs `decompose_meshes.py` once per context (Kit-free, seconds) — pass
-`--machine/--placement/--scenario/--object` matching the restore log's `[OK] ... @ <placement>`
-line; a wrong anchor mis-reports "cache is stale". See docs/known_limitations.md.
+never rebake what the archive carries. Archive tags dated 2026-09-10 or later are cut from THIS
+box and already carry the exact E_door_4 pieces (`COACD["E_door_4"]["preprocess_mode"] = "off"`);
+only a restore of an older tag needs the one-off `decompose_meshes.py` pass described in
+docs/known_limitations.md. Check archive state with
+`scripts/run_py.sh scripts/tools/archive_assets.py --status` (read-only, no token).
 
 **`./isaaclab.sh -p` exits 0 even when the wrapped script crashes.** Judge every Kit run from
 log content (`[RESULT] PASS`, absence of tracebacks / `free(): invalid pointer`), never the

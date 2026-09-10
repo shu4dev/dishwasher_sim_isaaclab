@@ -19,11 +19,14 @@ license = { text = "BSD-3-Clause" }
 dependencies = []
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["src", "frigidaire/src"]
+
+[tool.setuptools.package-data]
+dishsim_frigidaire = ["*.json"]
 
 [tool.ruff]
 line-length = 110
 target-version = "py310"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "frigidaire/tests"]

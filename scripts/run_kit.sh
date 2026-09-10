@@ -17,7 +17,7 @@ if [ ! -d /isaac-sim ]; then
     ROOT="$(cd "$(dirname "$0")/.." && pwd)"
     REL="$(realpath --relative-to="$ROOT" "$PWD" 2>/dev/null || echo .)"
     case "$REL" in ..*) REL=. ;; esac
-    exec docker exec -w "/workspace/dishsim/$REL" dishsim-isaac \
+    exec docker exec -w "/workspace/dishsim/$REL" ${HF_TOKEN:+-e HF_TOKEN} dishsim-isaac \
         /workspace/dishsim/scripts/run_kit.sh "$@"
 fi
 exec /workspace/isaaclab/isaaclab.sh -p "$@"

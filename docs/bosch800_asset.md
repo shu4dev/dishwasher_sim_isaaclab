@@ -66,6 +66,11 @@ metrologically verified digital twin.
 textures. Their link origin is the rack wire-plane reference; spawn a loose lower rack at
 least 30 mm above a floor so its wheels do not initially penetrate it.
 
+A revision of the lower rack based on the four local `bottom_rack` photographs is
+staged separately. See [lower rack polish](../frigidaire/docs/lower_rack_polish.md) for its geometry,
+installation and Isaac Sim capture scripts, and current validation status. It has
+not yet replaced the prebuilt binaries described here.
+
 `LowerRack/Manipulation` and `MiddleRack/Manipulation` provide named local handle and
 candidate dish sites. These are starting hints, not a complete slot library or a
 collision-free grasp guarantee. Use the actual dish size and gripper geometry in the
@@ -89,7 +94,8 @@ and needs no token. Each tarball carries a `MANIFEST.json` with a sha256 per fil
 `restore_assets.py` verifies every extracted file against it:
 
 ```bash
-# standalone Bosch 800 asset only (~2.3 MB, seconds)
+# standalone machine assets (~6 MB, seconds): this Bosch 800 asset plus the preliminary
+# Frigidaire FDPC4221AS revisions under assets/models/frigidaire_fdpc4221as{,_v2}/
 scripts/run_py.sh scripts/tools/restore_assets.py --kinds models
 # add its validation evidence (~74 MB: stills, video, validation.json, previous-asset zip)
 scripts/run_py.sh scripts/tools/restore_assets.py --kinds models evidence
@@ -104,16 +110,23 @@ N=$(curl -sL $B/latest.json | python3 -c 'import json,sys;print(json.load(sys.st
 curl -L -o $N $B/$N && tar xzf $N
 ```
 
-Re-cutting the tarballs after an asset revision (producer side, Kit-free):
+Re-cutting the tarballs after an asset revision (producer side, Kit-free). Build first, inspect
+the tarballs (`tar -tzf`; `*.zip` duplicates under `assets/models/` are excluded by design), then
+upload exactly those files with `--no-build --tag`:
 
 ```bash
+scripts/run_py.sh scripts/tools/archive_assets.py --status                          # what differs?
 scripts/run_py.sh scripts/tools/archive_assets.py --kinds models evidence            # build only
 HF_TOKEN=<write token> scripts/run_py.sh scripts/tools/archive_assets.py \
-    --kinds models evidence --upload                                                # + publish
+    --kinds models evidence --upload --no-build --tag <date>_<gitsha> \
+    --card outputs/archive/hf_README.md                                             # + publish
+scripts/run_py.sh scripts/tools/archive_assets.py --status                          # -> SYNCED
 ```
 
-The upload merges into the remote `latest.json`, so the benchmark's `assets` tarball keeps
-resolving unchanged.
+`run_py.sh` forwards `HF_TOKEN` into the container only when it is set in that shell; the token
+is never written anywhere. The upload merges into the remote `latest.json`, so kinds not in
+`--kinds` keep resolving unchanged — and it aborts rather than blanking the pointer map when
+the remote file cannot be read (`--fresh` is the opt-in for an empty repo).
 
 ## Runs under this repo's stack (corallab, Isaac Sim 4.5.0 / Isaac Lab 2.1.1)
 
