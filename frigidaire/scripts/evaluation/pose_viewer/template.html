@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dish pose atlas · Isaac Sim experiment</title>
+  <style>/* VIEWER_CSS */</style>
+</head>
+<body>
+  <header class="page-header">
+    <div class="brand"><span class="brand-icon" aria-hidden="true">◉</span><span>DISHWASHER LAB <span class="brand-slash">/</span> POSE EXPLORER</span></div>
+    <span class="run-tag"><span class="live-dot"></span>RECORDED IN ISAAC SIM 4.5</span>
+  </header>
+  <main>
+    <section class="intro">
+      <div><p class="eyebrow">FRIGIDAIRE FDPC4221AS · RANDOM PLACEMENT STUDY</p><h1>Every pose, a different possibility.</h1><p class="intro-copy">Explore plates, bowls, and mugs on both racks. Each pose is an independent, single-object trial.</p></div>
+      <div class="stats" aria-label="Experiment totals"><div><strong id="total-count">—</strong><span>sampled poses</span></div><div><strong id="accepted-count">—</strong><span>accepted</span></div><div><strong id="strict-count">—</strong><span>strictly inside</span></div></div>
+    </section>
+    <div class="scope-note"><span aria-hidden="true">ⓘ</span><span>Showing all recorded samples, not every continuous position and rotation. Accepted poses passed rack closure with the door open; eight use a 1 mm containment tolerance. Two trials remain numerically unresolved.</span></div>
+    <section class="workspace" aria-label="Interactive pose viewer">
+      <aside class="filters">
+        <div class="panel-heading"><h2>Explore poses</h2><button id="reset-filters" class="text-button">Reset</button></div>
+        <label class="field-label" for="kind-filter">OBJECT</label>
+        <select id="kind-filter"><option value="all">All objects</option><option value="dinner_plate">Dinner plate</option><option value="bowl">Bowl</option><option value="mug">Mug</option></select>
+        <label class="field-label" for="rack-filter">RACK</label>
+        <select id="rack-filter"><option value="all">Both racks</option><option value="LowerRack">Lower rack</option><option value="UpperRack">Upper rack</option></select>
+        <label class="field-label" for="outcome-filter">RESULT</label>
+        <select id="outcome-filter"><option value="accepted">Accepted placements</option><option value="strict">Strictly inside</option><option value="tolerance">Uses 1 mm tolerance</option><option value="all">All sampled poses</option><option value="rejected">Rejected trials</option><option value="unresolved">Numerically unresolved</option></select>
+        <label class="field-label" for="search">FIND A TRIAL</label>
+        <input id="search" type="search" placeholder="e.g. bowl_UpperRack_00055" autocomplete="off" spellcheck="false">
+        <div class="divider"></div>
+        <span class="field-label">SCENE</span>
+        <label class="check"><input id="show-other-rack" type="checkbox"><span>Show the other rack</span></label>
+        <label class="check"><input id="show-shell" type="checkbox"><span>Show cabinet surfaces</span></label>
+        <label class="check"><input id="show-axes" type="checkbox" checked><span>Object orientation axes</span></label>
+        <label class="check"><input id="show-cloud" type="checkbox"><span>Available origins at this stage</span></label>
+        <p class="hint">Markers show filtered poses with a recorded scene at the selected stage. These are independent alternatives, never a simultaneous load.</p>
+        <div class="legend"><span><i style="--dot:#2d8290"></i>Plate</span><span><i style="--dot:#d78b54"></i>Bowl</span><span><i style="--dot:#7778bb"></i>Mug</span></div>
+        <button id="export-filtered" class="outline-button full">↓ Export filtered poses</button>
+      </aside>
+      <div class="stage-column">
+        <div class="stage-toolbar"><div class="segmented" aria-label="Recorded pose stage"><button data-stage="final" class="active">Final</button><button data-stage="settled">Settled</button><button data-stage="sampled">Sampled</button></div><span id="stage-caption">Measured final pose</span></div>
+        <div id="viewport" tabindex="0" aria-label="3D pose view. Drag to orbit, scroll to zoom, right drag to pan.">
+          <div class="scene-label"><span id="scene-kind">Loading geometry…</span><span id="scene-rack"></span></div>
+          <div id="stage-notice" class="stage-notice" hidden></div>
+          <div id="stage-missing" class="stage-missing" hidden><strong id="missing-title"></strong><p id="missing-description"></p><button id="show-available-pose" class="outline-button">View rejected proposal</button></div>
+          <div id="webgl-error" class="webgl-error" hidden>3D rendering is unavailable in this browser. The complete pose list, coordinates, and JSON exports remain available. Enable WebGL to see the meshes.</div>
+          <div class="camera-controls" aria-label="Camera views"><button data-view="iso" title="Isometric view" class="active">3D</button><button data-view="front">Front</button><button data-view="top">Top</button><button data-view="side">Side</button><button id="fit-camera" title="Fit the selected rack">Fit</button></div>
+          <div class="viewport-bottom"><span>Drag to orbit · Scroll to zoom · Right-drag to pan</span><span class="axis-key"><b class="axis-x">X</b><b class="axis-y">Y</b><b class="axis-z">Z ↑</b></span></div>
+        </div>
+        <div class="transport"><button id="prev-pose" aria-label="Previous pose">←</button><button id="play-poses" aria-label="Play through recorded poses">▶</button><button id="next-pose" aria-label="Next pose">→</button><input id="pose-slider" type="range" min="0" max="0" value="0" aria-label="Select a pose"><span id="pose-progress">0 / 0</span></div>
+        <p class="reconstruction-note">Exact saved transforms with source visual meshes. This is a reconstruction of simulation output; playback steps through independent trials.</p>
+      </div>
+      <aside class="inspector" aria-label="Selected pose details">
+        <div class="panel-heading"><h2>Pose details</h2><span id="result-badge" class="badge">—</span></div>
+        <p id="trial-id" class="trial-id">—</p>
+        <p id="result-description" class="result-description"></p>
+        <div class="divider"></div>
+        <div class="detail-heading"><span class="field-label">POSITION</span><span>world · metres</span></div>
+        <div id="position-values" class="vector-values"></div>
+        <div class="detail-heading"><span class="field-label">ROTATION</span><span>Euler XYZ · degrees</span></div>
+        <div id="euler-values" class="vector-values"></div>
+        <div class="detail-heading"><span class="field-label">QUATERNION</span><span>XYZW · exact orientation</span></div>
+        <div id="quaternion-values" class="quaternion-values"></div>
+        <p class="hint">Coordinates describe the object origin. Euler XYZ angles are one representation of the saved quaternion.</p>
+        <div class="divider"></div>
+        <dl id="pose-metrics" class="metrics"></dl>
+        <button id="export-pose" class="primary-button full">↓ Download this pose</button>
+      </aside>
+    </section>
+    <section class="gallery-section" aria-label="All filtered pose cards">
+      <div class="gallery-heading"><div><p class="eyebrow">THE FULL COLLECTION</p><h2>Browse every recorded pose <span id="filtered-count" class="count-pill">—</span></h2></div><p id="gallery-description">Select a card to inspect its position and rotation.</p></div>
+      <div id="pose-gallery" class="pose-gallery"></div>
+      <div id="empty-state" class="empty-state" hidden><h3>No poses match these filters.</h3><p>Try another object, rack, or outcome.</p><button id="empty-reset" class="outline-button">Reset filters</button></div>
+    </section>
+    <details class="about"><summary>About this experiment and coordinate system</summary><div><p>The experiment sampled 100 proposals for each of three objects on each rack, with uniform 3D rotations. Objects that passed the initial collision check were released and allowed to settle before the selected rack retracted. Acceptance required support, rest, whole-mesh containment within 1 mm, rack closure within 5 mm, and the recorded contact limits. Door closure, an insertion path from outside the rack, and multi-object capacity were not tested.</p><p>All coordinates are in world metres with Z up; stored quaternions use X, Y, Z, W order. “Sampled” shows the proposed world pose with the selected rack open; 395 colliding proposals were never physically released. These appear only when Sampled is explicitly selected, as red ghosts labeled “Never dropped.” “Settled” is the measured pre-retraction pose. “Final” is the last saved final-hold pose when available. Missing stages remain empty: the viewer never substitutes a proposal for a final result. The gray enclosure outline represents the nominal containment boundary.</p><p>Only the selected rack transform was saved at initialization, so the sampled view omits other component meshes. Strict containment is an additional zero-tolerance filter in both world and measured Cabinet frames. Accepted placements passed this simulation's checks; normal-use reachability and repeatability in a real dishwasher have not been established.</p><p id="provenance"></p><p>Renderer: <a href="https://threejs.org/" rel="noreferrer">Three.js</a>, MIT license (embedded). The page contains its own meshes, data, and renderer and works offline.</p></div></details>
+  </main>
+  <footer><span>DISHWASHER LAB</span><span>600 sampled possibilities. One object at a time.</span><span id="footer-run"></span></footer>
+  <script id="pose-data" type="application/json">/* VIEWER_DATA */</script>
+  <script>/* THREE_LIBRARY */</script>
+  <script>/* VIEWER_JS */</script>
+</body>
+</html>

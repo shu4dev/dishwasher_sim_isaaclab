@@ -167,9 +167,23 @@ or silent import shadowing, not clean errors:
   — never eyeball-edit. Spawn poses place the articulation **root link** (`E_body_5`, not the
   asset origin).
 
+## Frigidaire exposure scorer (2026-09-17)
+
+A Kit-free ray-cast proxy that ranks arrangements of the SAME objects in the Frigidaire
+FDPC4221AS by how much of their food-contact surface the spray arms can reach; it is not a
+cleaning measurement. Lives in the gitignored `frigidaire/` package: `exposure.py`, the
+`frigidaire_exposure_{demo,summary,search,settled_best}.py` scripts, `frigidaire/tests/test_exposure.py`.
+Reference, commands, results and landmines: `frigidaire/docs/exposure.md`; human quickstart:
+`frigidaire/docs/exposure_quickstart.md`. Outputs under `results/exposure/frigidaire/`.
+Two traps: Warp kernels must live in a file (never `python -c`), and settling a search
+proposal must go through `frigidaire_organized_validate.py`, because the claims evidence
+script rejects lower-rack mugs.
+
 ## Ground rules
 
 - `assets/`, `media/`, `results/`, `logs/`, `outputs/` are gitignored; never commit them.
+  `experiments/` is a symlink index over them (machine → experiment → trial); edit the real
+  folders, and add new runs there as one entry with a short README.
   Curated figures go to `docs/figures/` (tracked, provenance in its README).
 - Media is on-demand (`--video` needs `--enable_cameras`); JSON records are the primary
   artifacts. **Tint objects per item in any multi-object render** (`config.item_color`,

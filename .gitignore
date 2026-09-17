@@ -12,8 +12,17 @@
 # Logs and outputs
 /logs
 /outputs
-/frigidaire
 wandb/
+
+# build/ is a SYMLINK onto the 2 TB drive since 2026-09-17 (holds the Frigidaire
+# collection); `build/` below matches only a real directory, so ignore the link too.
+/build
+
+# experiments/ is a local symlink index over the ignored data roots.
+/experiments
+
+# root-level convenience symlink to the pose viewer
+/index.html
 
 # Python
 __pycache__/
