@@ -638,3 +638,374 @@ tag. The measured evidence phases took 126.03 s for physics and 38.04 s for
 rendering/contact inspection, excluding application startup. Logs are
 `logs/frigidaire_physics_release_clean.log`, `logs/frigidaire_render_release_clean.log`,
 `logs/frigidaire_demo_scripted.log`, and `logs/frigidaire_demo_passive.log`.
+
+## 2026-09-21/22: tape-measured racks and basket (v4 source; v3 archived)
+
+The sections above describe the photo-fitted geometry (v1 to v3). On 2026-09-21 the
+user tape-measured the real racks and basket. The source `geometry.py` was rewritten
+to those numbers, the USD collection was rebuilt on 2026-09-22, and the previous build
+was archived first as `build/frigidaire_collection/history/v3` (165 files, 301.6 MB).
+The current geometry page is [docs/geometry.md](../geometry.md); this section is the
+record of what was measured, decided and run.
+
+### Tape measurements (cm)
+
+| Part | Quantity | Tape |
+|---|---|---|
+| Upper rack | outer W x D x H | 48 x 51.5 x 12.5 |
+| Upper rack | tine columns | 4, 9 apart |
+| Upper rack | tines per column, pitch | 13 at 3.7 in the outer columns, 11 in the middle two (two missing at the centre) |
+| Upper rack | margins left / right / front / rear | 12 / 12 / 8 / 5.5 |
+| Lower rack | outer W x D x H | 52.5 x 56.3 x 11.5 |
+| Lower rack | grid, pitch | 12 columns x 6 rows; 3.6 left-right, 8 front-back |
+| Lower rack | tine height | 9.5; the two middle rows 4.5 |
+| Lower rack | margins left / right / front / rear | 7.7 / 10.5 / 10.5 / 12 |
+| Basket | body L x W x depth | 32 x 13 x 9.5 |
+| Basket | height at the handle | 22 |
+| Basket | compartments | four in a row (three cross partitions) |
+
+The user said the basket is the only part that matters; the rest of the appliance may
+relax in realism.
+
+### Decisions confirmed with the user
+
+| Id | Decision |
+|---|---|
+| D1 | Outer size, tine count and pitch are trusted. Margins are DERIVED: side margin = symmetric leftover; front/rear split the leftover depth by the tape ratio. Reported as derived. |
+| D2 | Upper middle columns lack positions 6 and 7 of 13 from the front. |
+| D3 | Lower rows 3 and 4 (all their tines) are 45 mm. |
+| D4 | Basket rear-right inside the right rim, long axis along Y; tines under its footprint removed and base rails truncated; wire-lattice walls; handle arch along the long axis to 220 mm. |
+| D5 | Scope: geometry + USD rebuild + validation + assembly evidence + cutlery pose pool regenerated + HOTEC re-plan/re-render. Claims manifests, initial states, organized states, planner pool/results, random-pose metadata and exposure results are NOT regenerated and are stale. |
+| D6 | New revision ids (`upper_tines_4x13_v2`, `lower_tines_6x12_v2`, `basket_1x4_320x130_v1`); v3 archived. |
+| D7 | Tests re-pinned to the new geometry. |
+| D8 | Claims variant A resized: front bank 6 dinner + 2 salad + 2 bowls, rear bank 6 dinner + 2 salad, 5 tumblers per side. Variant B retired (no bank has 11 usable gaps). |
+
+### Derivations (mm)
+
+| Rack | Leftover | Split | Result |
+|---|---|---|---|
+| Upper, width | 480 - 3 x 90 = 150 | symmetric | side 105 (tape 120) |
+| Upper, depth | 515 - 12 x 37 = 71 | 80 : 55 | front 42.074, rear 28.926 (tape 80 / 55) |
+| Lower, width | 525 - 11 x 36 = 129 | 77 : 105 | left 54.577, right 74.423 (tape 77 / 105) |
+| Lower, depth | 563 - 5 x 80 = 163 | 105 : 120 | front 76.067, rear 86.933 (tape 105 / 120) |
+
+The tape margins over-determine the field by 30 mm (X) and 64 mm (Y) upstairs and
+53 mm (X) and 62 mm (Y) downstairs. Upper columns x = +-45, +-135; positions
+y = -215.426 + 37 i. Lower columns x = -207.923 + 36 i; rows y = -205.433 + 80 j;
+heights 95, 95, 45, 45, 95, 95 on a base at z = 6. The basket footprint x [104, 234],
+y [-64, 256] plus 6 mm clearance removes columns 10 to 12 (1-based) of rows 3 to 6:
+12 tines, leaving 60 (12, 12, 9, 9, 9, 9). Plate banks sit at y = -165.433 (front, 11
+gaps) and y = 154.567 (rear, 8 gaps). A 260 mm dinner plate centred on a bank would cut
+the rim wire (rows 80 mm apart in a 563 mm rack), so plate candidates seat 25 mm
+rearward in the front bank and 15 mm forward in the rear bank (claims), 10 mm rearward
+for the HOTEC front-bank plates, and the plate fixture site moved to y = -150.
+
+### Upper shelf redesign
+
+The photo-fitted mug valley and crest were dropped. In a 480 mm rim the crest
+(outer column + 20.5 = 155.5) left 79.5 mm to the wall at 235, less than an 80 mm
+tumbler. Each side floor is now one V-shelf: central ridge +-53 at z -10 carrying the
+inner columns, shoulders at 62 (z +5) and 72 (z -5), floor z -12.2 at the outer column
+(x 135), the glass trough at x 185 (z -18), rising at the same 6.6 deg gradient to x 225
+(z -13.4), then the wall foot at 232 (z +2), the wall at 235 (z 61) and the rim at 237.8
+(z 125). Cup channel site x +-103.5, glass trough site x +-185. An inverted 80 mm
+tumbler stands upright in the trough with about 8 mm to the outer tine column and
+5 mm to the wall foot; the 125 mm wall caps its outward lean at about 4 deg. The tine
+columns, not floor crests, separate the cup channel from the glass channel.
+
+### Basket (own frame, origin at the bottom face centre)
+
+Envelope 130 x 320 x 95 body, handle arch top 220 (feet at y +-154, z 92; flat top
+half-span 40 at z 214.5, wire r 5.5); rims r 3 inside the envelope; three cross
+partitions at y = -80, 0, +80 (compartment centres y = -120, -40, 40, 120); lattice
+floor 45 cross x 17 long ribs (r 1.1, floor top z 5.6); long walls 31 uprights, end walls
+12 uprights, 8 courses; corner posts r 2.5; 252 wire paths. Seat in the lower rack
+[169, 96, 7.5]; assembly origin [169, 104, 222.5]. Clearance audit (`[RESULT] PASS`):
+tines and base rails 14.03 mm, right wall 3.5 mm, floor 1.26 mm, remaining rack
+1.64 mm, visible wheel-bracket z gap 0.42 mm, no rails under the basket, 12 removed tines.
+
+### Commands run, in order
+
+```bash
+# 1. archive the previous build as v3
+python3 frigidaire/scripts/setup/stage_frigidaire_collection.py --archive-current v3 \
+    --out-dir build/frigidaire_collection
+# 2. previews (48 upper tines; 60 lower tines + basket_front/top/oblique.png)
+python3 frigidaire/scripts/evaluation/frigidaire_upper_rack_preview.py \
+    --out-dir build/frigidaire_collection/images/upper_rack
+python3 frigidaire/scripts/evaluation/frigidaire_lower_rack_preview.py \
+    --out-dir build/frigidaire_collection/images/lower_rack
+# 3. clearance audit -> validation/lower_rack_clearance.json
+python3 frigidaire/scripts/evaluation/frigidaire_lower_rack_clearance.py
+# 4. USD rebuild
+scripts/run_py.sh frigidaire/scripts/setup/build_frigidaire.py
+# 5. composition inspection
+scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_collection_inspect.py \
+    --collection-dir build/frigidaire_collection
+# 6. cutlery pose pool (Kit-free FCL), copied to src/dishsim_frigidaire/cutlery_candidates.json
+scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_cutlery_pose_search.py \
+    --write-candidates build/frigidaire_diagnostics/cutlery_candidates.json
+# 7. claims variant A dry run (Kit-free FCL; a diagnostic, not the claims evidence)
+scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_claim_layouts.py --variant A \
+    --out-dir build/frigidaire_diagnostics/claims_v4
+# 8. tests
+scripts/run_py.sh -m pytest frigidaire/tests -q
+scripts/run_py.sh -m pytest tests -q
+# 9. assembly physics evidence (Kit)
+scripts/run_kit.sh frigidaire/scripts/evaluation/frigidaire_asset_evidence.py --headless --device cpu \
+    --assembly-only --physics-only --usd build/frigidaire_collection/usd/fdpc4221as.usdc \
+    --out-dir build/frigidaire_collection/images/assembly
+```
+
+| Step | Result | Record |
+|---|---|---|
+| archive | 165 files, 301.6 MB | `build/frigidaire_collection/history/v3/archive_manifest.json` |
+| previews | 48 / 60 tines drawn | `images/upper_rack/`, `images/lower_rack/measurements.json` |
+| clearance | `[RESULT] PASS` | `validation/lower_rack_clearance.json` |
+| build | `[RESULT] PASS` | `logs/frigidaire_v4_build.log`; `usd/parameters.json`, `usd/geometry_validation.json` |
+| inspect | `[RESULT] PASS` | `logs/frigidaire_v4_inspect.log` |
+| cutlery pose pool | free poses fork 1031, knife 1132, tablespoon 1440, teaspoon 1495; greedy simultaneous 9 / 9 / 6 / 9 (gate >= 4), one kind per compartment; `claims.BASKET_KEYS` = the first four greedy poses per kind; no physics refinement | `logs/frigidaire_v4_cutlery_search.log` |
+| claims A dry run | `[RESULT] PASS`, 49 objects: 12 dinner + 4 salad + 2 lower bowls; 10 tumblers (all upright, 10 mm hover) + 2 saucers + 3 upper bowls; 16 cutlery | `build/frigidaire_diagnostics/claims_v4/claim_A_geometry.json`, `logs/frigidaire_v4_claims_dry_run.log` |
+| tests | `frigidaire/tests` 421 passed, 6 skipped (the planner pool tests skip as stale: the cached organized pool records v3 usdc hashes and the old basket seat); Bosch `tests/` 60 passed | `logs/frigidaire_v4_pytest.log`, `logs/bosch_tests_2026-09-22.log` |
+| assembly physics | `[RESULT] PASS`, all `[OK]` gates including basket lift and replacement (tracking error < 0.03 mm, rack disturbance < 4 um); combined certification INCOMPLETE until the render pass below | `logs/frigidaire_v4_assembly_physics.log` |
+| assembly render | `[RESULT] PASS`, all `[OK]` image and settled-contact gates (peak penetration about 1.3 um); combined certification PASS, `evidence.json.result == "PASS"` (scope assembly) | `logs/frigidaire_v4_assembly_render.log`, `images/assembly/evidence.json` |
+| HOTEC v2 layout (Kit-free) | `[RESULT] PASS`: plates 8/8, bowls 6/8 (lower 2, upper 4), cups 8/8, counter 2 bowls (v1 on the old racks: bowls 4/8, counter 4); cups near-upright like the tumblers | `results/hotec/frigidaire/v2/layout.json`, `logs/hotec_v2_layout.log` |
+| HOTEC v2 settle and orbit (Kit) | `[RESULT] PASS`: settle passed after 6.25 s simulated (no restarts), max placed-to-settled displacement 23 mm / 13 deg (a lower plate), all 24 pieces contained, assets unchanged, 288-frame orbit; wall time 109 s | `results/hotec/frigidaire/v2/hotec_v2_{settle,evidence}.json`, `logs/hotec_v2_load.log`; host copies `media/hotec_wheatstraw/v2/`; `docs/figures/hotec_loaded_fdpc4221as.png` regenerated |
+| package check | `[RESULT] PASS: Frigidaire collection check` (history v1, v2, v3 listed) | `python3 frigidaire/scripts/setup/package_frigidaire.py --collection-dir build/frigidaire_collection --check` |
+| history README | regenerated from `stage_frigidaire_collection.history_readme()` so it names the v2 / v2 / basket_1x4 revisions as current | `build/frigidaire_collection/history/README.md` |
+
+### Stale after this revision
+
+Everything recorded against the v3 hashes describes the archived geometry only:
+
+- `build/frigidaire_collection/validation/claims/` (the claims manifests; the v4 dry run above is a diagnostic under `build/frigidaire_diagnostics/claims_v4`)
+- `results/initial_states/frigidaire/` (packing states and their organized counterparts)
+- `results/planner/frigidaire/` (candidate pool and planner results)
+- `results/random_poses/frigidaire/` (random-pose metadata)
+- `results/exposure/frigidaire/` (every recorded exposure score)
+- `results/hotec/frigidaire/v1/` (the HOTEC v1 load)
+
+The authoritative list is `stale_results` in
+`build/frigidaire_collection/history/v3/archive_manifest.json`.
+
+## 2026-09-22 (later): v3 outer floor restored inside the tape rim (`upper_tines_4x13_v3`)
+
+After the tape rebuild the user compared the racks with the previous build and said the outer
+wire structure of the upper rack was further from the real rack than v3 had been. Read-only
+comparison of the committed (v3) and working-tree generators showed identical wire families
+and counts (21 cross loops, 9 longitudinal loops, top and mid rims, grip, carriers) and
+vertical lower-rack walls in both; the v3 upper side wall was also near-vertical (3.5 deg).
+What the V-shelf of `upper_tines_4x13_v2` had removed was the v3 signature: the mug valley and
+ridge beside the outer column and the glass slope descending outward to a deep trough against
+the wall. Inside the 480 mm rim a verbatim v3 crest (+18 mm at column + 20.5 = 155.5) leaves
+75 mm to the wall foot, which no 80 mm tumbler mouth passes at floor level.
+
+### Decisions (pop-up)
+
+| Question | Answer |
+|---|---|
+| Which rack | upper only |
+| What looked wrong | the outer floor/wall shape (flare framing corrected: it is the slope-to-trough shape), rim height and loop count queried |
+| Widths | keep the tape rims (480 x 515, rim 125); re-fit the v3 shape inside them |
+| Flare vs the 80 mm prototype tumbler | realistic shape first; the tumbler count is whatever FCL places |
+| Rim height / loops | keep 125 mm from the tape; keep 21 / 9 loops |
+| Section | v3 look with a LOW ridge (+4 mm nominal instead of +18) so near-upright 80 mm tumblers and 71 mm cups still fit |
+| Validation | full pipeline again (build, inspect, claims dry run, tests, assembly physics + render, HOTEC run v3, docs) |
+| Archive | overwrite the one-day-old v4 build, no archive; only the upper revision id changes |
+
+Rollers and wheels stay on the cabinet tracks (not raised by the user).
+
+### Section (half, nominal corners, mm)
+
+ridge 53 @ -10, shoulder 62 @ +5 and 72 @ -5, valley 145.5 @ -18 (column + 10.5), ridge 155.5 @ +4
+(column + 20.5; about +0.3 after the 9 mm fillet), trough 220 @ -18 (rim - 17.8), wall foot 231 @ +2
+(rim - 6.8), wall 235 @ 61, rim 237.8 @ 125. Longitudinal cradles at +-220, +-187.75, +-145.5,
++-72, 0. Sites: cup channel +-108.75, glass channel +-187.75. `channel_profile` keys:
+`mug_valley_offset_from_column`, `ridge_offset_from_column`, `ridge_z`, `trough_inset_from_rim`,
+`wall_foot_inset_from_rim`, `central_ridge_half_width`. Consumers: `claims._glass_channel_x`
+(mid slope), `UPPER_GLASS_FLOOR -.002` (the higher, wall-foot mouth contact), `TUMBLER_VARIANTS`
+near-upright family (0 / 4 / 8 deg, insets 0 / +3 / -3 / +5 mm, lifts 10-12 mm), `loading.candidates`
+mirror, `organized_candidates` xs +-.18775 / +-.10875, HOTEC `CUP_VARIANTS`.
+
+### Commands and results, in order
+
+| Step | Result | Record |
+|---|---|---|
+| source smoke | 48 / 60 tines; section minimum -16.8 mm in the valley, trough -14.8 mm, ridge +0.3 mm, wall foot +3.2 mm | host python3 |
+| upper preview | `[RESULT] GENERATED: 48 tines`; front view shows valley, low ridge, outward slope, trough at the wall | `images/upper_rack/` |
+| asset tests | 14 passed (section test re-pinned: trough within 3 mm of the minimum and against the wall, ridge > 10 mm above the valley and below +6 mm, slope monotonic) | |
+| build | `[RESULT] PASS`; `lower_rack.usdc` and `silverware_basket.usdc` sha256 unchanged (325671ed..., 70e93880...), `upper_rack.usdc` fdde95e4... | `logs/frigidaire_v5_build.log` |
+| inspect | `[RESULT] PASS` | `logs/frigidaire_v5_inspect.log` |
+| claims A dry run | `[RESULT] PASS`, 49 objects; all 10 tumblers upright (`x0.18275_lift0.012`) | `build/frigidaire_diagnostics/claims_v5/`, `logs/frigidaire_v5_claims_dry_run.log` |
+| tests | `frigidaire/tests` 421 passed, 6 skipped (planner pool stale) | `logs/frigidaire_v5_pytest.log` |
+| lower preview, clearance, history README | regenerated for the new source hash; clearance `[RESULT] PASS` (unchanged numbers) | `images/lower_rack/`, `validation/lower_rack_clearance.json`, `history/README.md` |
+| HOTEC v3 layout (Kit-free) | `[RESULT] PASS`: plates 8/8, bowls 6/8, cups 8/8, counter 2 | `results/hotec/frigidaire/v3/layout.json`, `logs/hotec_v3_layout.log` |
+| assembly physics | `[RESULT] PASS`, all 14 `[OK]` gates including basket lift and replacement; combined certification INCOMPLETE until the render pass below | `logs/frigidaire_v5_assembly_physics.log` |
+| assembly render | `[RESULT] PASS`, combined certification PASS, `evidence.json.result == "PASS"` (scope assembly) | `logs/frigidaire_v5_assembly_render.log`, `images/assembly/evidence.json` |
+| package check | `[RESULT] PASS: Frigidaire collection check` | `python3 frigidaire/scripts/setup/package_frigidaire.py --collection-dir build/frigidaire_collection --check` |
+| HOTEC v3 settle and orbit (Kit) | `[RESULT] PASS`: settle 6.24 s (no restarts), max displacement 25 mm / 14 deg (cups sliding down the restored glass slope), all 24 pieces contained, assets unchanged, 288-frame orbit; wall time 114 s | `results/hotec/frigidaire/v3/hotec_v3_{settle,evidence}.json`, `logs/hotec_v3_load.log`; host copies `media/hotec_wheatstraw/v3/`; `docs/figures/hotec_loaded_fdpc4221as.png` regenerated |
+
+Run v2 (`results/hotec/frigidaire/v2`, `media/hotec_wheatstraw/v2`) and the v4 assembly evidence
+are superseded by the above; the v4 usd was overwritten in place (no archive, per the user).
+
+## 2026-09-22 (later still): the v3 basket design at the tape dimensions (`basket_1x4_320x130_v2`)
+
+After the upper-rack fix the user asked for the basket to be "the old design with the new
+dimensions". Read-only comparison of the v3 generator (`git show HEAD:...geometry.py`) with the
+tape rebuild's box basket, plus the basket photos (front, top, top_down, bottom), settled what
+"the old design" means: a body that tapers toward the floor (v3: 74.6 x 296.9 mm floor under an
+88 x 312 mm rim), a substantial double bottom edge and a double top lip, a dense 7 mm square
+lattice, corner posts, three tapered cross partitions with a top edge, and a solid elongated
+loop handle with an open aperture lying over one long wall on two support straps.
+
+### Decisions (pop-up)
+
+| Question | Answer |
+|---|---|
+| Handle | the v3 loop over one long wall (not the centred arch); the OUTER (+X) wall toward the rack's right side, as v3 |
+| Handle top | 220 mm as measured, so the v3 loop shape rides on taller legs (the photos' one-third proportion noted, tape wins) |
+| Taper | the v3 floor/rim ratios (0.848 / 0.952) under the 130 x 320 rim |
+| Partitions | equal quarters at y = -80, 0, +80 (top-down photo) |
+| Other v3 details | all back: double rims and lip, 7 mm lattice, tapered partitions with top edge, corner posts, straps |
+| Validation | full pipeline again, overwrite the same-day build in place, no archive |
+
+### Numbers (mm, basket frame)
+
+Top rim centreline +-62 / +-157 at z 92; bottom rim +-52.1 / +-149.3 at z 5; reinforcement
+0.5 mm outside at z 14 (r 2.3); lip 0.5 mm inside at z 87 (r 2.4); floor ribs 43 x 15 (r 1.1) at
+z 3 / 4.5; walls 43 / 15 uprights and 8 courses (z 21 to 80); corner posts r 2.5; partitions 15
+uprights + 9 courses + top edge (z 90) at y = -80 / 0 / +80; handle plane x = 58, legs y = +-109
+from the rim to z 163.5, flat top z 213.5 (surface 220) spanning +-75, lower rail z 172 / 176,
+straps at y = +-80. Lattice counts derive from the 7 mm pitch in `_derive_parameters`.
+The seat is unchanged (`[169, 96, 7.5]`): the top-rim footprint, removed tines and rails stay;
+the tapered bottom rim clears the right wall and the rear floor bend by about 8 mm (was 3.5 / 1.6).
+
+### Commands and results, in order
+
+| Step | Result | Record |
+|---|---|---|
+| source smoke | basket 297 wires, centreline extent +-62 / +-157 / 3 to 213.5, families as designed | host python3 |
+| basket tests | asset, clearance, random-pose tests 54 passed after re-pinning the wall probe (+18 mm) and adding `test_basket_keeps_the_v3_design_at_the_tape_size` | |
+| lower preview | `[RESULT] GENERATED: 60 tines` + `basket_front/top/oblique.png` | `images/lower_rack/` |
+| clearance | `[RESULT] PASS`: tines 14.03, right wall 8.05, floor 3.4, remaining 8.48, bracket 1.92 mm | `validation/lower_rack_clearance.json` |
+| build | `[RESULT] PASS`; racks unchanged (`upper_rack.usdc` fdde95e4..., `lower_rack.usdc` 325671ed...), `silverware_basket.usdc` f6b59b82... | `logs/frigidaire_v6_build.log` |
+| inspect | `[RESULT] PASS` | `logs/frigidaire_v6_inspect.log` |
+| cutlery pose pool | free poses fork 997, knife 1518, tablespoon 1391, teaspoon 1304; greedy simultaneous 9 / 9 / 6 / 9; `claims.BASKET_KEYS` re-picked | `logs/frigidaire_v6_cutlery_search.log`, `cutlery_candidates.json` |
+| claims A dry run | `[RESULT] PASS`, 49 objects, all 16 cutlery | `build/frigidaire_diagnostics/claims_v6/`, `logs/frigidaire_v6_claims_dry_run.log` |
+| tests | `frigidaire/tests` 422 passed, 6 skipped | `logs/frigidaire_v6_pytest.log` |
+| HOTEC v4 layout (Kit-free) | `[RESULT] PASS`: plates 8/8, bowls 6/8, cups 8/8, counter 2 | `results/hotec/frigidaire/v4/layout.json`, `logs/hotec_v4_layout.log` |
+| assembly physics | `[RESULT] PASS`, all 14 `[OK]` gates including basket lift and replacement with the loop handle; combined certification INCOMPLETE until the render pass below | `logs/frigidaire_v6_assembly_physics.log` |
+| assembly render | `[RESULT] PASS`, combined certification PASS, `evidence.json.result == "PASS"` (scope assembly) | `logs/frigidaire_v6_assembly_render.log`, `images/assembly/evidence.json` |
+| package check | first `[RESULT] FAIL` (`Stale upper_rack source geometry measurements`: the upper preview's recorded source hash predated the basket edit of the shared generator), `[RESULT] PASS` after regenerating `images/upper_rack/` | `python3 frigidaire/scripts/setup/package_frigidaire.py --collection-dir build/frigidaire_collection --check` |
+| HOTEC v4 settle and orbit (Kit) | `[RESULT] PASS`: settle 6.23 s (no restarts), max displacement 25 mm / 15 deg (cups down the glass slope), all 24 pieces contained, assets unchanged, 288-frame orbit; wall time 122 s | `results/hotec/frigidaire/v4/hotec_v4_{settle,evidence}.json`, `logs/hotec_v4_load.log`; host copies `media/hotec_wheatstraw/v4/`; `docs/figures/hotec_loaded_fdpc4221as.png` regenerated |
+| history README | regenerated via `history_readme()` (names `basket_1x4_320x130_v2` as current) | `build/frigidaire_collection/history/README.md` |
+
+Runs v2 and v3 of the HOTEC load and the earlier same-day assembly evidence are superseded; the box-basket usd was overwritten in place (no archive, per the user).
+
+## 2026-09-22 (evening): basket axes corrected to 320 x 95 x 130, re-seated (`basket_1x4_320x95_v3`)
+
+The user, on seeing the `basket_1x4_320x130_v2` renders: "Swap the length and depth the handle
+side is 22cm the other side should be 13cm. Use the front view x Y should be 13cm and handle add
+up to 22 and Z should be 9.5. Fix the asset". Read from the FRONT view of the real basket: it is
+32 cm long (Y), 9.5 cm wide (X) and 13 cm tall (Z, body), with the handle top at 22 cm. The two
+earlier same-day readings (130 wide x 95 tall, the `basket_1x4_320x130_v1` box and the
+`basket_1x4_320x130_v2` v3-design body) had the width and the height swapped. The v3
+photo-fitted design decided in the previous step is unchanged (tapered lattice body, double bottom
+edge and top lip, corner posts, three tapered cross partitions with a top edge, elongated loop
+handle with an open aperture over the +X long wall on two straps); only the size and the seat
+changed. Source of truth: `PARAMETERS["silverware_basket"]` in `geometry.py` (`length_y` .320,
+`width_x` .095, `body_height` .130, `handle_top_z` .220; taper .848 / .952; rims; 7 mm floor and
+wall lattice pitch, 9.2 mm course pitch; counts derived in `_derive_parameters`) and
+`PARAMETERS["lower_rack"]` (`basket_reserved_x/y` derived from the seat).
+
+### Decisions (pop-up)
+
+| Question | Answer |
+|---|---|
+| Dimensions | 320 long (Y) x 95 wide (X) top rim, 130 mm body height (Z), handle top 220 mm; the v3 design as is |
+| Seat | re-seat against the right wall for the narrower body (x 184, sweep below) rather than keep the 130 mm basket's x 169 |
+
+### Derivations (mm)
+
+- Seat sweep along X inside the right rim: the tapered bottom rim keeps 8.0 mm to the sloping
+  right wall fillet at x 184 (was 169 for the 130 mm wide basket); seat `[184, 96, 7.5]`, assembly
+  origin `[184, 104, 222.5]`. The rear floor bend stays at about 8 mm.
+- Reserved bay x [130.5, 237.5], y [-70, 262] (the 95 x 320 footprint x [136.5, 231.5],
+  y [-64, 256] plus 6 mm). Tine mask 64 present (12, 12, 10, 10, 10, 10): columns 11-12
+  (1-based; x 152.08 and 188.08) of rows 3-6 removed, 8 tines; the base rails of rows 3-6 end at
+  column 10 (x 116.08). Plate banks: front 11 gaps (9 left of the bowl zone), rear 9 gaps. The
+  lower-rack revision id stays `lower_tines_6x12_v2` (the mask is derived from the seat, not a
+  design change).
+- Basket body (own frame): top rim centreline +-44.5 / +-157 at z 127 (r 3); floor envelope
+  80.6 x 304.6 (bottom rim +-37.3 / +-149.3 at z 5); reinforcement z 14 (r 2.3, 0.5 outside);
+  top lip z 122 (r 2.4, 0.5 inside); floor lattice 43 cross x 11 long ribs at 7 mm (r 1.1),
+  apertures about 4.8 mm; long walls 43 uprights, end walls 10 uprights; corner posts r 2.5;
+  partitions at y = -80, 0, +80 with 10 tapered uprights and a top edge at z 125 (r 2.1).
+- Course counts from the 9.2 mm pitch in `_derive_parameters`: walls
+  round((127 - 12 - 21) / 9.2) + 1 = 11 courses (z 21 to 115), partitions
+  round((127 - 9 - 14) / 9.2) + 1 = 12 courses (z 14 to 118).
+- Handle: plane x = 40.5 (4 mm inside the top rim), legs at y = +-109 from the rim (z 127) to
+  z 163.5, the v3 bends to a flat top at z 213.5 (surface 220) spanning y = +-75 (r 6.5), lower
+  rail r 5.5 at z 172 (middle) / 176 (ends), aperture about 30 mm, straps at y = +-80 from the
+  floor up the outer wall to the lower rail. Sites: handle_center [40.5, 0, 213.5],
+  handle_aperture [40.5, 0, 192], utensil [0, -120, 96], compartments at y -120 / -40 / 40 / 120.
+  289 wire paths.
+
+### Consumer and test changes
+
+- `claims.py` docstring: the rear bank has 9 gaps (the basket bay omits columns 11-12); variant A
+  claims 8 of them (6 dinner + 2 salad). `claims.BASKET_KEYS` re-picked from the new pose pool
+  (the first four greedy poses per kind).
+- `frigidaire_hotec_load.py` docstring: the basket bay removes columns 11-12 of rows 3-6;
+  `REAR_GAPS` is every second of the 9 gaps the bay leaves.
+- Tests re-pinned: tines per row `[12, 12, 10, 10, 10, 10]` and the seat `[.184, .096, .0075]`
+  (`test_frigidaire_asset.py`), basket extent `.095 x .320` and the v3 taper of it
+  (`test_frigidaire_asset.py`), seat x 184.0, 8 removed tines and the 18 mm wall-probe shift
+  (`test_frigidaire_lower_clearance.py`), plate gaps `(9, 9)` front-usable / rear
+  (`test_frigidaire_lower_loading.py`), the claims blocked-gap comment (`lower_rear_07`, the last
+  claimed gap of the rear bank: 9 gaps, 8 claimed; `test_frigidaire_claims.py`).
+
+### Commands and results, in order
+
+| Step | Result | Record |
+|---|---|---|
+| lower preview (host) | 64 tines (12, 12, 10, 10, 10, 10), 8 removed, basket block at seat `[184, 96, 7.5]`, 289 wires; `basket_front/top/oblique.png` | `images/lower_rack/measurements.json` |
+| clearance audit | `[RESULT] PASS`: tines and base rails 14.41, right wall 8.0, floor 3.4, remaining rack 8.48, bracket z gap 1.92 mm, no rails under the basket, 8 removed tines | `validation/lower_rack_clearance.json` |
+| build | `[RESULT] PASS`; `silverware_basket.usdc` 80225c34... (`basket_1x4_320x95_v3`, 289 wire paths), `lower_rack.usdc` d9adf05a... (`lower_tines_6x12_v2`), `upper_rack.usdc` unchanged fdde95e4... (`upper_tines_4x13_v3`) | `logs/frigidaire_v7_build.log` |
+| inspect | `[RESULT] PASS` | `logs/frigidaire_v7_inspect.log` |
+| cutlery pose pool | free poses fork 908, knife 1413, tablespoon 755, teaspoon 1137; greedy simultaneous 9 / 9 / 5 / 9 (gate >= 4) | `logs/frigidaire_v7_cutlery_search.log`, `cutlery_candidates.json` |
+| claims A dry run | `[RESULT] PASS`, 49 objects: lower 12 dinner + 4 salad + 2 bowls, upper 10 tumblers + 2 saucers + 3 bowls, basket 16 cutlery | `build/frigidaire_diagnostics/claims_v7/claim_A_geometry.json`, `logs/frigidaire_v7_claims_dry_run.log` |
+| tests | `frigidaire/tests` 422 passed, 6 skipped (planner pool stale); re-run after the docstring fixes below with the same result | `logs/frigidaire_v7_pytest.log` |
+| HOTEC v5 layout (Kit-free) | `[RESULT] PASS`: plates 8/8, bowls 6/8, cups 8/8, counter 2 (same as v2-v4: no HOTEC piece touches the basket) | `results/hotec/frigidaire/v5/layout.json`, `logs/hotec_v5_layout.log` |
+| HOTEC v5 settle and orbit (Kit) | `[RESULT] PASS`: settle 6.23 s (no restarts), max displacement 25 mm / 14 deg, all 24 pieces contained, assets unchanged, 288-frame orbit; wall time 120 s | `results/hotec/frigidaire/v5/hotec_v5_{settle,evidence}.json`, `logs/hotec_v5_load.log`; host copies `media/hotec_wheatstraw/v5/`; `docs/figures/hotec_loaded_fdpc4221as.png` regenerated |
+| history README, staged README | regenerated via `history_readme()`; `build/frigidaire_collection/README.md` refreshed from `docs/collection_readme.md` (the staged copy still described the v3 racks) | `build/frigidaire_collection/{history/README.md,README.md}` |
+| docs verification (workflow) | a read-only verifier re-derived every number (consistent) and found stale comment text in `geometry.py` (130 x 320 envelope), `claims.py` (12 tines, 320 x 130 x 95), `frigidaire_claim_report.py` (60-tine) and two test comments; all fixed, which changed the hashed source, so inspect and the assembly evidence were re-run (rows below) | `logs/frigidaire_v7_inspect.log` |
+| inspect (after the docstring fixes) | `[RESULT] PASS` | `logs/frigidaire_v7_inspect.log` |
+| assembly physics (final sources) | `[RESULT] PASS`, all 14 `[OK]` gates including basket lift and replacement with the 95 mm basket at seat x 184 | `logs/frigidaire_v7_assembly_physics.log` |
+| assembly render (final sources) | `[RESULT] PASS`, combined certification PASS, `evidence.json.result == "PASS"` (scope assembly) | `logs/frigidaire_v7_assembly_render.log`, `images/assembly/evidence.json` |
+| package check | `[RESULT] PASS: Frigidaire collection check` (after regenerating both previews for the current source hash; the check had first flagged the stale upper preview and then the edited sources) | `python3 frigidaire/scripts/setup/package_frigidaire.py --collection-dir build/frigidaire_collection --check` |
+
+The same-day builds with the 130 mm-wide baskets (v1 box, v2 v3-design) and their evidence are
+superseded; the usd was overwritten in place (no archive, per the user). HOTEC runs v2 to v4 are kept
+on disk but superseded by v5.
+
+The two earlier same-day baskets (v1 box 130 x 320 x 95 with a centred arch, v2 = the v3 design
+at 130 x 320 x 95) are superseded; the builds were overwritten in place, no archive.
+
+## Outside heights (2026-09-23)
+
+Prompted by the cm dimension drawings (`docs/figures/frigidaire_{upper,lower}_rack_cm.png`,
+`frigidaire_rack_dimensions_cm.py`): the build had placed each rack's rim wire CENTRE at the tape
+height above an internal datum, while the user measured outside, bottom to top (pop-up answer).
+Measured on the generated wires, the upper rack was 145.9 mm outside (its floor dips 16.8 mm below
+the datum), the lower 119.4 mm and the basket 128.5 / 218.5 mm from its lowest wire. User choices:
+lower the upper rim (keep floor, tines, rollers), fix the lower rim and the basket too, rebuild and
+re-run HOTEC. Done: upper `rim_height` .125 -> .1041, lower .115 -> .1106 (new `outer_height_tape`
+parameters, pinned by `test_outer_heights_match_the_tape`); basket bottom features 1.5 mm lower in
+its own frame and seat z 7.5 -> 9 mm, so it rests where it did and measures 130 / 220; revisions
+`upper_tines_4x13_v4`, `lower_tines_6x12_v3`, `basket_1x4_320x95_v4`; the mm-for-cm typo in the
+margin notes fixed. Pipeline: `--archive-current v4`, previews, clearance PASS (tine clearance 14.41 -> 14.63 mm, resting clearances unchanged), build,
+cutlery search (counts 908/1413/750/1108, simultaneous 9/9/5/9; two teaspoon `BASKET_KEYS`
+re-picked), claims A dry run `claims_v8` (PASS, 49), tests 423 passed / 6 skipped + Bosch 61, inspect,
+assembly evidence physics 14/14 and render 34/34, combined PASS, package check PASS. HOTEC on the
+new twin: v11 (v8 poses) PASS, v12 (v9 poses) PASS, v13 (sequential) FAIL at the known mid-zone bowl.

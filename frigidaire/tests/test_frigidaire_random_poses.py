@@ -132,8 +132,9 @@ class RandomPoseTests(unittest.TestCase):
         json.dumps(domains, allow_nan=False)
         self.assertEqual(set(domains["sampling_bounds_by_rack"]), set(RACKS))
         lower, upper = (domains["sampling_bounds_by_rack"][rack] for rack in RACKS)
-        np.testing.assert_allclose(lower["lower_m"][:2], [-.54864/2, -.58166/2])
-        np.testing.assert_allclose(upper["upper_m"][:2], [.508/2, .54864/2])
+        # Tape-measured outer rims (PARAMETERS lower_rack / upper_rack wire_width, wire_depth).
+        np.testing.assert_allclose(lower["lower_m"][:2], [-.525/2, -.563/2])
+        np.testing.assert_allclose(upper["upper_m"][:2], [.480/2, .515/2])
         self.assertAlmostEqual(lower["lower_m"][2], .002)
         # Rounded troughs are shallower than the unfilleted -18 mm control points.
         self.assertGreater(upper["lower_m"][2], -.018)

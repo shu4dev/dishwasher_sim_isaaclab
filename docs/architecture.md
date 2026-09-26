@@ -51,6 +51,8 @@ dishwasher_sim_isaaclab/
 │   ├── rack_gen.py                   [procedural wire racks + cutlery basket + the Bosch
 │   │                                  third-rack tray (Kit-free)]
 │   ├── prop_gen.py                   [procedural props: tumbler, wine glass, container, lid]
+│   ├── hotec_gen.py                  [HOTEC wheat-straw plate/bowl/cup: parametric lathe,
+│   │                                  brimful capacity, .usda writer, no mass (Kit-free)]
 │   ├── compat.py                     [Kit-free ground truth: pairwise compatibility table +
 │   │                                  A* optimal solver (optimal_moves) for the benchmark's
 │   │                                  optimality-gap metric. static_ok (legal destination) and
@@ -77,9 +79,10 @@ dishwasher_sim_isaaclab/
 │   ├── transforms.py                 [pose helpers (XYZW throughout)]
 │   └── checks.py                     [pass/fail gate helpers for scripts]
 │
-├── tests/                            [4 files / 11 tests: the frozen-invariant pins, the
-│                                      compat ground truth, the harness's toy-oracle check;
-│                                      run via scripts/run_py.sh -m pytest]
+├── tests/                            [8 files / 60 tests: the frozen-invariant pins, the
+│                                      compat ground truth, the harness's toy-oracle check,
+│                                      the HOTEC generator properties; run via
+│                                      scripts/run_py.sh -m pytest]
 ├── docs/                             [environment, success criteria, measured reports]
 ├── docker/                           [Dockerfile (build record) + compose.yaml (the runtime)]
 ├── assets/  media/  results/         [generated, gitignored — symlinks onto the 2 TB drive]

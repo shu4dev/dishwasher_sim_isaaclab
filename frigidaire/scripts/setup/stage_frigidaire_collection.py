@@ -84,6 +84,91 @@ def archive_sources():
             yield path, Path(path.name)
 
 
+HISTORY_VERSIONS = {
+    "v1": "first release: 32-tine upper rack, 56-tine lower rack, photo-proportioned basket",
+    "v2": "the same 32/56-tine geometry with the 67-object full-load evidence",
+    "v3": "52-tine upper rack, 72-tine lower rack, basket shifted 27.5 mm right; claims A/A2/B FCL layouts and settle evidence",
+    "v4": "first tape-measured build (48/64 tines, 320 x 95 x 130 mm basket) with centreline rim heights: upper 14.6 cm and lower 11.9 cm "
+          "outside, basket 12.85 cm; HOTEC loads v5-v10 and the claims dry run v7 ran on it",
+}
+STALE_RESULTS = [
+    "build/frigidaire_collection/validation/claims/", "build/frigidaire_collection/validation/composition.json",
+    "build/frigidaire_collection/validation/release_check.json", "build/frigidaire_collection/validation/workspace_checks.json",
+    "build/frigidaire_collection/images/lower_rack/", "build/frigidaire_collection/images/upper_rack/",
+    "results/planner/frigidaire/", "results/initial_states/frigidaire/", "results/random_poses/frigidaire/",
+    "results/exposure/frigidaire/", "results/hotec/frigidaire/v1/", "build/frigidaire_diagnostics/",
+]
+STALE_RESULTS_BY_VERSION = {"v4": [
+    "build/frigidaire_collection/validation/composition.json", "build/frigidaire_collection/validation/lower_rack_clearance.json",
+    "build/frigidaire_collection/images/lower_rack/", "build/frigidaire_collection/images/upper_rack/",
+    "build/frigidaire_collection/images/assembly/", "results/hotec/frigidaire/v2/ to v10/",
+    "results/exposure/frigidaire/hotec/", "build/frigidaire_diagnostics/claims_v4/ to claims_v7/",
+    "build/frigidaire_diagnostics/cutlery_candidates.json", "build/frigidaire_diagnostics/cutlery_pose_search.json",
+]}
+
+
+def history_readme():
+    """History README naming every archived version and the current source revisions."""
+    from dishsim_frigidaire.geometry import PARAMETERS
+    current = ", ".join("%s `%s`" % (label, PARAMETERS[key].get("geometry_revision", "fdpc4221as_photo_v1"))
+                        for label, key in (("upper rack", "upper_rack"), ("lower rack", "lower_rack"),
+                                           ("basket", "silverware_basket")))
+    lines = ["# Historical Frigidaire releases", ""]
+    lines += ["- `%s/`: %s." % (version, what) for version, what in HISTORY_VERSIONS.items()]
+    lines += ["", "These are unchanged earlier USD bundles, galleries, reports and archives. Their source "
+              "paths and certification hashes describe their original release. None of them validates the "
+              "current source revisions (%s). The copy map and checksums are in "
+              "../validation/collection_manifest.json." % current, ""]
+    return "\n".join(lines)
+
+
+def archive_current(out_dir, version):
+    """Copy the current staged collection (usd, images, validation, README) into history/<version>.
+
+    Run this BEFORE rebuilding the USD: the build rewrites usd/ in place. Nothing is removed.
+    """
+    out_dir = Path(out_dir).absolute()
+    target = out_dir / "history" / version
+    if target.exists():
+        raise FileExistsError("Refusing to overwrite an existing history version: %s" % target)
+    usd = out_dir / "usd"
+    if not (usd / "fdpc4221as.usdc").is_file():
+        raise FileNotFoundError("No current USD bundle to archive under %s" % usd)
+    origins = []
+    for source_name, archived_name in (("usd", "assets"), ("images", "gallery"), ("validation", "validation"),
+                                       ("README.md", "README.md")):
+        source = out_dir / source_name
+        if not source.exists():
+            continue
+        copy_verified(source, target / archived_name)
+        origins.append({"original": str(source.relative_to(ROOT)),
+                        "archived": str((target / archived_name).relative_to(out_dir))})
+    validation = json.loads((usd / "geometry_validation.json").read_text()) if (usd / "geometry_validation.json").is_file() else {}
+    parameters = json.loads((usd / "parameters.json").read_text()) if (usd / "parameters.json").is_file() else {}
+    files = {str(p.relative_to(target)): digest(p) for p in sorted(target.rglob("*")) if p.is_file()}
+    manifest = {"version": version, "source": str(out_dir.relative_to(ROOT)),
+                "geometry_revisions": {name: component.get("geometry_revision")
+                                       for name, component in validation.get("components", {}).items()},
+                "body_positions_m": parameters.get("body_positions_m"),
+                "usdc_sha256": validation.get("sha256"),
+                "stale": "Every manifest, result, image and check recorded against these hashes describes this "
+                         "archived geometry only; none of it validates a later source revision.",
+                "stale_results": STALE_RESULTS_BY_VERSION.get(version, STALE_RESULTS),
+                "archive_copy_map": origins, "files": files,
+                "bytes": sum(p.stat().st_size for p in target.rglob("*") if p.is_file())}
+    (target / "archive_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (out_dir / "history/README.md").write_text(history_readme())
+    manifest_path = out_dir / "validation/collection_manifest.json"
+    if manifest_path.is_file():
+        data = json.loads(manifest_path.read_text())
+        data.setdefault("archive_copy_map", []).extend(origins)
+        data["stale_evidence"] = STALE_RESULTS_BY_VERSION.get(version, STALE_RESULTS)
+        manifest_path.write_text(json.dumps(data, indent=2) + "\n")
+    print("[RESULT] PASS: archived %s -> %s (%d files, %.1f MB)" % (
+        out_dir.relative_to(ROOT), target.relative_to(ROOT), len(files), manifest["bytes"] / 1e6))
+    return manifest
+
+
 def stage(out_dir, reference_dir=None):
     out_dir = Path(out_dir).absolute()
     output_path, installed_path = out_dir.resolve(), COLLECTION_DIR.resolve()
@@ -114,12 +199,7 @@ def stage(out_dir, reference_dir=None):
         target = out_dir / "history" / relative
         copy_verified(source, target)
         origins.append({"original": str(source.relative_to(ROOT)), "archived": str(target.relative_to(out_dir))})
-    (out_dir / "history/README.md").write_text(
-        "# Historical Frigidaire releases\n\n"
-        "v1 and v2 contain unchanged earlier USD bundles, galleries, reports and archives. "
-        "Their source paths and certification hashes describe their original release. "
-        "They do not validate the current 52/72-tine racks or corrected basket pose. "
-        "The copy map and checksums are in ../validation/collection_manifest.json.\n")
+    (out_dir / "history/README.md").write_text(history_readme())
     scripts = SOURCE_ROOT / "scripts/evaluation"
     for rack in ("upper", "lower"):
         subprocess.run([sys.executable, str(scripts / ("frigidaire_%s_rack_preview.py" % rack)),
@@ -153,7 +233,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", type=Path, default=ROOT / "build/frigidaire_collection")
     parser.add_argument("--reference-dir", type=Path)
+    parser.add_argument("--archive-current", metavar="VERSION",
+                        help="copy the current usd/images/validation into history/VERSION instead of staging")
     args = parser.parse_args()
+    if args.archive_current:
+        archive_current(args.out_dir, args.archive_current)
+        return
     stage(args.out_dir, args.reference_dir)
 
 

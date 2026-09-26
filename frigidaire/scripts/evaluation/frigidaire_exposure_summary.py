@@ -24,12 +24,16 @@ FAMILIES = ("packing", "organized")
 PAIRS = tuple(f"random_{i:02d}" for i in range(7))
 
 
-FORMULA = """# Exposure score (revision 4, 2026-09-17)
+FORMULA = """# Exposure score (revision 5, 2026-09-20)
 
-Objects o = 1..O with food-contact surface area A_o (bowl and mug interiors).
+Objects o = 1..O with food-contact surface area A_o: the inner lathe surface of bowls, mugs, tumblers,
+plates (top face) and spoon bowls; fork tines and the knife blade (both faces); handles never.
 Samples p_j, j = 1..N per object (N = 500, face centroids, each weighted A_o / N), outward normals n_j.
-Source points q_k with weights u_k for the object's rack: K = 64 points on the arm disc under the
-rack, u_k = (1 - w_c) / K; for the upper rack optionally the ceiling point with u = w_c (default w_c = 0).
+Source points q_k with weights u_k for the object's rack: K = 64 points on the arm disc under the rack
+(lower arm for the lower rack and the basket, middle arm for the upper rack), u_k = (1 - w_c) / K;
+for the upper rack optionally the ceiling point with u = w_c. Default w_c = 0 (arm discs only): the
+nozzle was never inspected, and the seven-pair ranking holds at every swept weight up to 0.5; it flips
+only at 1.0, which removes the middle arm.
 
     d_jk = (q_k - p_j) / |q_k - p_j|                                  ray direction
     v_jk = 1 if the segment p_j + eps n_j -> q_k hits nothing in the load, else 0
@@ -40,12 +44,12 @@ rack, u_k = (1 - w_c) / K; for the upper rack optionally the ceiling point with 
     S    = sum_o A_o E_o / sum_o A_o                                   arrangement score (primary)
     W    = min_o E_o                                                   worst object (secondary)
 
-Feasible iff no vessel pools: min z(interior vertices) >= min z(rim ring) - 2 mm at its pose.
-Arm discs: lower arm centre (0, 0.008, 0.185) radius 0.245 m for LowerRack and basket objects;
-middle arm centre (0, 0.008, 0.540) radius 0.205 m for UpperRack objects; ceiling point (0, 0.018, 0.817).
+Feasible iff no vessel or plate pools: min z(interior vertices) >= min z(rim ring) - 2 mm at its pose;
+cutlery never pools. Pooling is a hard gate for any search or planner, never a penalty.
+Arm discs: lower arm centre (0, 0.008, 0.185) radius 0.233 m for LowerRack and basket objects;
+middle arm centre (0, 0.008, 0.540) radius 0.191 m for UpperRack objects; ceiling point (0, 0.018, 0.817), off by default.
 These are assumptions from the asset dimensions, not measurements.
 """
-
 
 def state_path(family, pair):
     return STATES / f"{family}_20260911_seed20260911/states/{pair}.json"
@@ -58,7 +62,7 @@ def main():
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pairs", nargs="*", default=list(PAIRS))
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default=E.DEVICE)
     parser.add_argument("--convergence", default=None, help="pair name for the 3x3 stability check")
     parser.add_argument("--source", default=E.DEFAULTS["source"],
                         help="per-rack (default: arm discs), per-rack-directions, below, above, below+above, hemisphere")

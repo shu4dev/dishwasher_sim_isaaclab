@@ -1,5 +1,7 @@
 # Technical report: sampling dish poses in a dishwasher
 
+Stale (2026-09-22): the experiment analysed here ran on the v3 racks and basket, archived as `build/frigidaire_collection/history/v3`. The racks and basket were rebuilt to the user's tape measurements on 2026-09-22 ([geometry.md](geometry.md)); its counts and poses describe the archived geometry only.
+
 Experiment: `complete_20260910_seed0` · Frigidaire FDPC4221AS · Isaac Sim 4.5 · completed 10 September 2026
 
 **The experiment uses stratified Monte Carlo sampling of single-object release poses.** It evaluates every pairing of three object types and two racks, but only a finite random sample of positions and rotations within each pairing. It is neither a permutation enumeration nor an exhaustive search of all feasible placements.

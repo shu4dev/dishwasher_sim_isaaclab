@@ -1,21 +1,32 @@
 """Explicit rack-capacity claim layouts for the current Frigidaire geometry.
 
 Unlike ``loading.plan_full_load`` (greedy saturation of a finite pattern), a claim layout
-is a fixed statement of WHAT goes WHERE, derived from the tine grid:
+is a fixed statement of WHAT goes WHERE, derived from the tape-measured tine grid
+(``geometry.PARAMETERS``, 2026-09-21: 12 x 6 lower tines minus the 8 under the basket,
+4 x 13 upper tines minus the 4 absent centre positions):
 
-- Upper rack: 6 inverted tumblers per side in the outer channels, 2 saucers at the very
-  front of the centre gap, then as many tilted bowls as fit rearward (a measured count).
-- Lower rack, two sideways-plate rows of 11 gaps. Variant A: front row 6 dinner + 2 salad
-  + 2 bowls (front-right, ahead of the basket); rear row 6 dinner + 5 salad.
-  Variant B: both rows 6 dinner + 5 salad, no bowls.
-- Basket: 4 each of fork, knife, tablespoon, teaspoon (the cutlery poses that survived the
-  v2 physics campaign; basket geometry and frame are unchanged).
+- Upper rack: 5 inverted tumblers per side in the outer glass channels, 2 saucers at the
+  very front of the centre gap, then as many tilted bowls as fit rearward through the
+  remaining centre gaps, the wide one included (a measured count).
+- Lower rack, two sideways-plate banks: the front bank has 11 gaps, the rear bank 9 (the
+  basket bay omits columns 11-12). Variant A: front bank 6 dinner + 2 salad + 2 bowls
+  (front-right, ahead of the basket); rear bank 6 dinner + 2 salad. Variant B (both rows
+  6 dinner + 5 salad) was retired with this grid: no bank has 11 usable gaps any more.
+- Basket: 4 each of fork, knife, tablespoon, teaspoon, one kind per compartment of the
+  tape-measured 320 x 95 x 130 mm (L x W x H) basket (1x4). ``BASKET_KEYS`` names the first four poses
+  of each kind's greedy simultaneous pattern from the Kit-free FCL pose search
+  (frigidaire_cutlery_pose_search.py, 2026-09-23, v3-design basket basket_1x4_320x95_v4, 130 mm outside); no physics refinement yet.
 
 Every claimed item takes the first FCL-free pose among a short list of variants (v2-accepted
-variant first). An item with no free variant is recorded as ``unplaced``; the geometry verdict
-is PASS only when nothing is unplaced. Bowls are additionally kept from nesting: consecutive
-bowls must occupy disjoint depth slabs along the mouth axis. Output is the same schema-1
-manifest ``load_validation.validate_manifest`` and the full-load evidence script consume.
+variant first; plates carry a rearward-inset variant next, because a 260 mm dinner plate
+standing on the bank centreline cuts the rim wire). An item with no free variant is
+recorded as ``unplaced``; the geometry verdict is PASS only when nothing is unplaced. Bowls
+are additionally kept from nesting: consecutive bowls must occupy disjoint depth slabs along
+the mouth axis. Output is the same schema-1 manifest ``load_validation.validate_manifest``
+and the full-load evidence script consume.
+
+The recorded claim results (build/frigidaire_collection/validation/claims) were produced on
+the previous 52/72-tine geometry and are stale until regenerated.
 """
 from __future__ import annotations
 
@@ -28,39 +39,75 @@ from pathlib import Path
 import numpy as np
 
 from . import loading
+from .geometry import (PARAMETERS, lower_plate_gaps, lower_tine_positions, upper_tine_gaps,
+                       upper_tine_positions)
 from .loading import CUTLERY, CollisionWorld, _candidate, _sloped_candidate, geometry_hashes, rotation
 
-VARIANTS = ("A", "B")
-LOWER_FRONT = {"A": ("dinner_plate",) * 6 + ("salad_plate",) * 2,
-               "B": ("dinner_plate",) * 6 + ("salad_plate",) * 5}
-LOWER_REAR = ("dinner_plate",) * 6 + ("salad_plate",) * 5
-LOWER_BOWLS = {"A": 2, "B": 0}
-UPPER_TUMBLERS_PER_SIDE = 6
+VARIANTS = ("A",)            # B (6 dinner + 5 salad per bank) retired: the rear bank has 9 gaps
+LOWER_FRONT = {"A": ("dinner_plate",) * 6 + ("salad_plate",) * 2}
+LOWER_REAR = ("dinner_plate",) * 6 + ("salad_plate",) * 2
+LOWER_BOWLS = {"A": 2}
+UPPER_TUMBLERS_PER_SIDE = 5
 UPPER_SAUCERS = 2
+TUMBLER_LADDER_Y = tuple(-.170 + .085 * i for i in range(UPPER_TUMBLERS_PER_SIDE))
 BASKET_KEYS = (
-    "fork:cutlery_0_0_2:yaw90_X-4_shift0_0",
-    "knife:cutlery_1_0_2:yaw90_X-4_shift0_-0.002",
-    "tablespoon:cutlery_2_2_0:yaw90_Y4_shift0_0.002",
-    "teaspoon:cutlery_3_0_0:observed_ccd_closed_dx0_dy0_dz0.0005",
-    "fork:cutlery_0_1_2:yaw90_X-4_shift0_0",
-    "knife:cutlery_1_1_2:yaw90_X-4_shift0_-0.002",
-    "tablespoon:cutlery_2_0_0:yaw270_Y-8_shift0_0.002",
-    "teaspoon:cutlery_3_0_2:observed_ccd_closed_dx0_dy0.0005_dz0.0005",
-    "fork:cutlery_0_2_2:yaw90_X-4_shift-0.002_0",
-    "knife:cutlery_1_2_2:yaw90_X-4_shift0_-0.002",
-    "tablespoon:cutlery_2_1_2:yaw0_X-4_shift0_-0.002",
-    "teaspoon:cutlery_3_2_0:observed_ccd_closed_dx0.0005_dy0_dz0.0005",
-    "fork:cutlery_0_0_0:yaw90_X8_shift0_-0.002",
-    "knife:cutlery_1_0_0:yaw90_Y-4_shift-0.002_0",
-    "tablespoon:cutlery_2_1_1:yaw0_X-4_shift0_0.002",
-    "teaspoon:cutlery_3_2_2:observed_ccd_closed_dx-0.0015_dy0.0005_dz0.001",
+    "fork:cutlery_0_0_0:yaw90_X-4_shift0_0.002",
+    "knife:cutlery_1_0_2:yaw90_X-4_shift0_0.002",
+    "tablespoon:cutlery_2_0_0:yaw90_X-4_shift0.002_0",
+    "teaspoon:cutlery_3_0_0:yaw90_X8_shift0_0.002",
+    "fork:cutlery_0_1_0:yaw90_X-4_shift0_0.002",
+    "knife:cutlery_1_1_2:yaw90_X-4_shift0_0.002",
+    "tablespoon:cutlery_2_1_0:yaw90_X-4_shift0_0",
+    "teaspoon:cutlery_3_0_2:yaw90_X8_shift0_-0.002",
+    "fork:cutlery_0_2_0:yaw90_X-4_shift0_0.002",
+    "knife:cutlery_1_2_2:yaw90_X-4_shift0_0.002",
+    "tablespoon:cutlery_2_2_0:yaw90_X-4_shift0_0",
+    "teaspoon:cutlery_3_1_0:yaw90_X8_shift0_0.002",
+    "fork:cutlery_0_2_2:yaw90_Y4_shift-0.002_0",
+    "knife:cutlery_1_0_0:yaw90_X8_shift0_-0.002",
+    "tablespoon:cutlery_2_1_2:yaw270_X4_shift0.002_0",
+    "teaspoon:cutlery_3_1_2:yaw90_X8_shift0_-0.002",
 )
 LOWER_PLATE_FLOOR = .006
 LOWER_BOWL_FLOOR = .007
 UPPER_CENTRE_FLOOR = -.0081      # centre rib top (-10 mm) + 1.9 mm wire radius
-UPPER_GLASS_FLOOR = .001233
-REAR_VALLEY_Y = .1485            # mid-valley between lower floor cross-wires (v2 fix)
-BASKET_FRONT_Y = -.040           # lower bowls must stay ahead of the basket body
+UPPER_GLASS_FLOOR = -.002         # wire top at the tumbler mouth's higher (outer, wall-foot) contact; the inner rim point hovers over the ridge flank
+# Rearward inset per bank (m): a 260 mm dinner plate standing on the bank centreline would
+# cut the rim wire (rows 80 mm apart in a 563 mm rack), so plates try this seat before the valley.
+PLATE_INSET_Y = {"front": .025, "rear": -.015}
+
+
+def _rear_valley_y():
+    """Mid-valley between the two lower floor cross-wires just in front of the rear plate bank.
+
+    The cross-wire run mirrors geometry._lower_rack (21 U-ribs inset 18.43 mm from the rim
+    centreline), so the seat follows the tape-measured depth (v2 fix, re-derived).
+    """
+    p = PARAMETERS["lower_rack"]
+    hy = p["wire_depth"] / 2 - p["rim_diameter"] / 2
+    cross = np.linspace(-(hy - .01843), hy - .01843, p["floor_cross_ribs"])
+    _, rows = lower_tine_positions()
+    valleys = (cross[:-1] + cross[1:]) / 2
+    return float(valleys[valleys < (rows[-2] + rows[-1]) / 2].max())
+
+
+def _glass_channel_x():
+    """Centre of the outer sloped glass channel (geometry._upper_rack's *_glass_channel site): the
+    middle of the slope from the low ridge outside the outer tine column down to the trough at the wall."""
+    p = PARAMETERS["upper_rack"]
+    profile = p["channel_profile"]
+    crest = max(p["tine_bank_x"]) + profile["ridge_offset_from_column"]
+    trough = p["wire_width"] / 2 - p["rim_diameter"] / 2 - profile["trough_inset_from_rim"]
+    return (crest + trough) / 2
+
+
+REAR_VALLEY_Y = _rear_valley_y()
+GLASS_CHANNEL_X = _glass_channel_x()
+# (mouth x, lean deg, lift m): near-upright tumblers over the low ridge, mouth between the ridge
+# flank and the wall foot; the 125 mm rim wall caps a 160 mm tumbler's outward lean at a few degrees
+TUMBLER_VARIANTS = tuple((round(GLASS_CHANNEL_X - inset, 5), lean, lift) for inset, lean, lift
+                         in ((0., 0, .010), (.003, 4, .010), (-.003, 8, .012), (.005, 0, .012)))
+BASKET_FRONT_Y = PARAMETERS["lower_rack"]["basket_reserved_y"][0] - .004   # lower bowls stay ahead of the basket bay
 BOWL_SLAB_CLEARANCE = .003
 LOWER_BOWL_LIFTS = (0., .020, .040, .060)
 FORBIDDEN_SHORTCUTS = ["resizing props", "nested bowls", "stacked cups", "fixed dishes",
@@ -79,9 +126,9 @@ def _tilted(kind, rack, slot, x, y, orient, points, floor, variant):
 # ----------------------------------------------------------------------------- pose builders
 
 def lower_plate_variants(kind, bank, gap, x, y, points):
-    """Sideways plate in one tine gap; v2-accepted lean first, valley seating last (rear)."""
+    """Sideways plate in one tine gap; v2-accepted seat first, rearward inset next, valley last (rear)."""
     out = []
-    ys = [("", y)] + ([("_valley", REAR_VALLEY_Y)] if bank == "rear" else [])
+    ys = [("", y), ("_inset", y + PLATE_INSET_Y[bank])] + ([("_valley", REAR_VALLEY_Y)] if bank == "rear" else [])
     for suffix, yy in ys:
         for lean, offset in ((-4, .008 if kind == "dinner_plate" else .004), (-8, .010)):
             orient = rotation("Y", math.radians(90 - lean))
@@ -90,8 +137,8 @@ def lower_plate_variants(kind, bank, gap, x, y, points):
     return out
 
 
-def lower_bowl_variants(points, y_bank, slot):
-    """Bowls in the front-right zone ahead of the basket.
+def lower_bowl_variants(points, y_bank, slot, x_start=.060):
+    """Bowls in the front-right zone ahead of the basket, scanning x rightward from ``x_start``.
 
     Vertical tines cannot straddle a 140 mm bowl, so the bowl goes OVER them: mouth facing
     down and sideways (rotation about Y past 90 deg) or down and forward (about X), rim on
@@ -99,14 +146,15 @@ def lower_bowl_variants(points, y_bank, slot):
     is kept last as a fallback; it only fit the old 150 mm row pitch.
     """
     out = []
+    _, rows = lower_tine_positions()
     families = ([("Y", t) for t in (120, 135, 105, 150)] + [("X", t) for t in (120, 135, 105, 150)]
                 + [("Y", t) for t in (65, 55, 75)])
     for axis, tilt in families:
         orient = rotation(axis, math.radians(tilt))
-        for base_y in (y_bank, -.1125, -.186):
+        for base_y in (y_bank, float(rows[1]), float(rows[0])):   # bank centreline, second row, front row
             for dy in (0., .010, -.010):
                 y = base_y + dy
-                for x in np.arange(.060, .2251, .005):
+                for x in np.arange(x_start, .2251, .005):
                     base, _ = _tilted("bowl", "LowerRack", slot, x, y, orient, points,
                                       LOWER_BOWL_FLOOR, f"{axis}{tilt}_y{y:.4f}_x{x:.3f}")
                     world_pts = points @ orient.T + np.asarray(base["position"])
@@ -123,7 +171,7 @@ def lower_bowl_variants(points, y_bank, slot):
 
 def upper_tumbler_variants(side, index, y, points):
     out = []
-    for x, lean, lift in ((.190, 8, .010), (.180, 16, .010), (.190, 4, .012), (.160, 24, .014)):
+    for x, lean, lift in TUMBLER_VARIANTS:
         c = _sloped_candidate("tumbler", f"glass_{side}_{index}", side * x, y, lean, points,
                               UPPER_GLASS_FLOOR)
         c["position"][2] += lift
@@ -142,17 +190,19 @@ def upper_saucer_variants(gap, y, points):
 
 
 def upper_bowl_variants(gap, y, points):
-    """Bowl in the centre gap, mouth facing down and forward, tines inside the cavity.
+    """Bowl in one centre gap (index of its front tine, or "wide" for the gap at the absent
+    centre positions), mouth facing down and forward, tines inside the cavity.
 
     Rotation about X past 90 deg turns the mouth toward the front and the floor; the rim
     rests on the centre floor rib and the base leans on the tine row behind. Mouth-up
     poses (tilt < 90) cannot clear the inner tine columns and are kept only as a fallback.
     """
     out = []
+    slot = f"upper_bowl_{gap:02d}" if isinstance(gap, int) else f"upper_bowl_{gap}"
     for tilt in (120, 135, 110, 150, 100, 82, 70):
         orient = rotation("X", math.radians(tilt))
         for offset in (0., .010, -.010, .020, -.020):
-            out.append(_tilted("bowl", "UpperRack", f"upper_bowl_{gap:02d}", 0., y + offset, orient,
+            out.append(_tilted("bowl", "UpperRack", slot, 0., y + offset, orient,
                                points, UPPER_CENTRE_FLOOR, f"tilt{tilt}_offset{offset}"))
     return out
 
@@ -185,7 +235,6 @@ def generate(asset_dir, variant, world=None, banned=()):
     its next free variant instead (recorded as ``physics_rejected``), exactly like
     ``plan_full_load``'s ban file.
     """
-    from .geometry import lower_tine_positions, upper_tine_positions
     from .tableware import CATALOG
     from .asset import BODY_POSITIONS
     if variant not in VARIANTS:
@@ -247,13 +296,18 @@ def generate(asset_dir, variant, world=None, banned=()):
                "upper_tumblers": 2 * UPPER_TUMBLERS_PER_SIDE, "upper_saucers": UPPER_SAUCERS,
                "basket": {kind: 4 for kind in CUTLERY}}
     for bank, y, row in (("front", front_y, LOWER_FRONT[variant]), ("rear", rear_y, LOWER_REAR)):
-        for gap, kind in enumerate(row):
+        gaps = lower_plate_gaps(bank)        # gaps between tines present in both rows, left to right
+        if len(row) > len(gaps):
+            raise ValueError(f"{bank} bank claims {len(row)} plates but has {len(gaps)} gaps")
+        for gap, kind in zip(gaps, row):
             place(f"lower_{bank}_gap{gap}_{kind}",
                   lower_plate_variants(kind, bank, gap, float(mids[gap]), y, points[kind]))
+    # Bowls scan rightward from the first tine column right of the claimed front plates.
+    bowl_x_start = float(teeth[len(LOWER_FRONT[variant])])
     if LOWER_BOWLS[variant] == 2:
         # Joint search: the first bowl is only accepted if a non-nesting, collision-free
         # second bowl exists to its right with it in place.
-        first_options = lower_bowl_variants(points["bowl"], front_y, "bowl_front_0")
+        first_options = lower_bowl_variants(points["bowl"], front_y, "bowl_front_0", bowl_x_start)
         second_options = [(dict(c, slot="bowl_front_1"), o) for c, o in first_options]
         pair = None
         for c1, o1 in first_options:
@@ -281,24 +335,29 @@ def generate(asset_dir, variant, world=None, banned=()):
         else:
             unplaced.append({"item": "lower_bowl_pair", "kind": "bowl", "tried": len(first_options)})
     elif LOWER_BOWLS[variant]:
-        place("lower_bowl_1", lower_bowl_variants(points["bowl"], front_y, "bowl_front_0"))
+        place("lower_bowl_1", lower_bowl_variants(points["bowl"], front_y, "bowl_front_0", bowl_x_start))
 
     # 3. upper rack: tumblers, then the two front saucers, then bowls filling rearward
     for side in (-1, 1):
-        for index in range(UPPER_TUMBLERS_PER_SIDE):
-            y = -.210 + .085 * index
+        for index, y in enumerate(TUMBLER_LADDER_Y):
             place(f"upper_tumbler_{'left' if side < 0 else 'right'}_{index + 1}",
                   upper_tumbler_variants(side, index, y, points["tumbler"]))
+    # Centre column gaps between present tines: the first regular gaps take the saucers and
+    # every remaining gap, the wide one at the absent centre positions included, a bowl.
     _, upper_ys = upper_tine_positions()
-    gap_mids = (upper_ys[:-1] + upper_ys[1:]) / 2
-    for gap in range(UPPER_SAUCERS):
-        place(f"upper_saucer_{gap + 1}", upper_saucer_variants(gap, float(gap_mids[gap]), points["saucer"]))
+    saucer_gaps = upper_tine_gaps(1)[:UPPER_SAUCERS]
+    for a, b in saucer_gaps:
+        place(f"upper_saucer_{a + 1}",
+              upper_saucer_variants(a, float((upper_ys[a] + upper_ys[b]) / 2), points["saucer"]))
     upper_bowls = []
-    for gap in range(UPPER_SAUCERS, len(gap_mids)):
-        options = [(c, o) for c, o in upper_bowl_variants(gap, float(gap_mids[gap]), points["bowl"])
+    for a, b in upper_tine_gaps(1, regular_only=False):
+        if (a, b) in saucer_gaps:
+            continue
+        gap, item = (a, f"upper_bowl_gap{a}") if b - a == 1 else ("wide", "upper_bowl_wide")
+        options = [(c, o) for c, o in upper_bowl_variants(gap, float((upper_ys[a] + upper_ys[b]) / 2), points["bowl"])
                    if all(slabs_disjoint(points["bowl"], p, (c, o)) for p in upper_bowls)]
         # a gap without a free bowl pose is a measurement, not a claim failure
-        _, option = place(f"upper_bowl_gap{gap}", options, required=False)
+        _, option = place(item, options, required=False)
         if option:
             upper_bowls.append(option)
 

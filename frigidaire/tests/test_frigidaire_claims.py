@@ -89,8 +89,8 @@ def test_upper_and_basket_claims(asset_dir, world, variant):
     manifest = _generate(asset_dir, world, variant)
     upper = [o for o in manifest["objects"] if o["rack"] == "UpperRack"]
     tumblers = [o for o in upper if o["kind"] == "tumbler"]
-    assert len(tumblers) == 12
-    assert sum(o["position"][0] < 0 for o in tumblers) == 6
+    assert len(tumblers) == 10
+    assert sum(o["position"][0] < 0 for o in tumblers) == 5
     assert all(abs(o["position"][0]) > .150 for o in tumblers)       # outer channels
     saucers = sorted((o for o in upper if o["kind"] == "saucer"), key=lambda o: o["position"][1])
     assert [o["slot"] for o in saucers] == ["saucer_00", "saucer_01"]
@@ -109,20 +109,20 @@ def test_manifest_matches_the_simulation_input_contract(asset_dir, world):
     manifest = json.loads(json.dumps(manifest))                       # what the script writes
     result = validate_manifest(manifest, asset_dir / "fdpc4221as.usdc", CATALOG, BODY_POSITIONS)
     assert result["counts"] == manifest["counts"]
-    assert result["counts"]["dinner_plate"] == 12 and result["counts"]["salad_plate"] == 7
+    assert result["counts"]["dinner_plate"] == 12 and result["counts"]["salad_plate"] == 4
     assert result["counts"]["bowl"] == 2 + manifest["packing"]["upper_bowl_fill"]
     ids = [o["id"] for o in manifest["objects"]]
     assert len(ids) == len(set(ids))
 
 
 def test_collisions_become_unplaced_items_not_silent_replans(asset_dir, world):
-    blocked = {"lower_rear_10"}
+    blocked = {"lower_rear_07"}                      # the last CLAIMED gap of the rear bank (9 gaps, 8 claimed)
     world.collides = lambda objects: bool(objects)
     world.candidate_objects = lambda c: [c] if c["slot"] in blocked else []
-    manifest = _generate(asset_dir, world, "B")
+    manifest = _generate(asset_dir, world, "A")
     assert manifest["packing"]["geometry_result"] == "FAIL"
-    assert [u["item"] for u in manifest["packing"]["unplaced"]] == ["lower_rear_gap10_salad_plate"]
-    assert manifest["counts"]["salad_plate"] == 9
+    assert [u["item"] for u in manifest["packing"]["unplaced"]] == ["lower_rear_gap7_salad_plate"]
+    assert manifest["counts"]["salad_plate"] == 3
     assert _row(manifest, "rear") == list(claims.LOWER_REAR)[:-1]
 
 
@@ -139,4 +139,4 @@ def test_bowl_slabs_must_be_disjoint_along_the_mouth_axis():
 
 def test_unknown_variant_is_rejected(asset_dir, world):
     with pytest.raises(ValueError, match="Unknown claim variant"):
-        claims.generate(asset_dir, "C", world=world)
+        claims.generate(asset_dir, "B", world=world)       # retired with the tape-measured grid

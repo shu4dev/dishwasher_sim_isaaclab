@@ -136,6 +136,62 @@ class Instance:
         return next(it for it in self.items if it["item_id"] == item_id)
 
 
+def disturbed_items(pre: dict, poses: dict, moved_id: str) -> list:
+    """Items other than ``moved_id`` that left their pre-move pose beyond the DISTURB_* gates."""
+    return [k for k in poses if k != moved_id and (
+        float(np.linalg.norm(poses[k][:3, 3] - pre[k][:3, 3])) > DISTURB_POS_M
+        or rot_angle_deg(pre[k], poses[k]) > DISTURB_ROT_DEG)]
+
+
+def settle_move(move, teleport, step, poses_fn, measured_fn, *, steps: int = SETTLE_STEPS_MOVE,
+                window: int = DRIFT_WINDOW, dev_max_m: float = MOVE_DEV_MAX_M):
+    """One oracle move: teleport, settle ``steps`` physics steps, judge -> (poses, fault, info).
+
+    The verdict order of the Bosch Isaac oracle: ``disturbed`` (another item moved) is fatal and checked
+    first; a drifting or far-off settle is a NON-fatal ``failed-settle`` (the item is put back and
+    re-settled), unless the put-back disturbs a neighbour (``disturbed``) or does not reproduce
+    (``unstable-settle``). ``teleport(item_id, T)``, ``step(n)``, ``poses_fn() -> {id: T}`` and
+    ``measured_fn(item_id) -> T`` bind it to a scene; step counts and ``dev_max_m`` are the caller's.
+    """
+    pre = poses_fn()
+    teleport(move.item_id, move.T_base_obj)
+    hist = []
+    for s in range(steps):
+        step(1)
+        if s >= steps - window:
+            hist.append(measured_fn(move.item_id))
+    poses = poses_fn()
+    settled = poses[move.item_id]
+    drift_p = float(np.linalg.norm(hist[-1][:3, 3] - hist[0][:3, 3]))
+    drift_deg = rot_angle_deg(hist[0], hist[-1])
+    dev_p = float(np.linalg.norm(settled[:3, 3] - np.asarray(move.T_base_obj)[:3, 3]))
+    disturbed = disturbed_items(pre, poses, move.item_id)
+    info = {"settle_dev_mm": round(dev_p * 1e3, 1), "drift_mm": round(drift_p * 1e3, 1),
+            "disturbed": disturbed}
+    if disturbed:
+        # fatal FIRST: a put-back cannot restore a knocked neighbour
+        return poses, "disturbed", info
+    if drift_p > STABLE_POS_M or drift_deg > STABLE_ROT_DEG or dev_p > dev_max_m:
+        # NON-fatal failed settle: return the item to its pre-move settled pose, re-settle, and hand the
+        # episode back exactly the pre-move state. The put-back is a teleport-into-contact at a pose that
+        # was a settled equilibrium moments ago, so the INIT_MATCH_* reproduction gates judge it.
+        teleport(move.item_id, pre[move.item_id])
+        for _ in range(steps):
+            step(1)
+        poses = poses_fn()
+        back_dp = float(np.linalg.norm(poses[move.item_id][:3, 3] - pre[move.item_id][:3, 3]))
+        back_dr = rot_angle_deg(pre[move.item_id], poses[move.item_id])
+        info["teleport_back_mm"] = round(back_dp * 1e3, 1)
+        re_disturbed = disturbed_items(pre, poses, move.item_id)
+        if re_disturbed:
+            info["disturbed"] = re_disturbed
+            return poses, "disturbed", info      # the put-back knocked a neighbour
+        if back_dp > INIT_MATCH_POS_M or back_dr > INIT_MATCH_ROT_DEG:
+            return poses, "unstable-settle", info  # the put-back itself failed
+        return poses, "failed-settle", info
+    return poses, None, info
+
+
 def at_goal(item: dict, T_base_obj: np.ndarray) -> bool:
     """Is this item's SETTLED pose inside its placement mode's tolerances at its target slot?"""
     slot = placement.SlotFrame.from_json(item["target"]["slot"])
@@ -364,7 +420,9 @@ def run_episode(instance: Instance, algo, world, oracle, budget: int | None,
                 break
             obs = observe(moves_used)
             continue
-        if world.move_collides(move.item_id, move.T_base_obj):
+        # A world may keep a stricter planning predicate (e.g. a support rule) out of the harness
+        # check, so moving a supporting dish reaches the oracle's fatal verdict instead of a refusal.
+        if getattr(world, "harness_collides", world.move_collides)(move.item_id, move.T_base_obj):
             # refused, not fatal — see the docstring. The algorithm keeps its turn and its
             # clock; only the world is unchanged.
             infeasible_commands += 1

@@ -1,5 +1,7 @@
 # Random dish poses and rack closure
 
+Stale (2026-09-22): every trial and accepted pose under `results/random_poses/frigidaire/` was produced on the v3 racks and basket, archived as `build/frigidaire_collection/history/v3`. The racks and basket were rebuilt to the user's tape measurements on 2026-09-22 ([geometry.md](geometry.md)); the random-pose metadata has not been regenerated on the v4 geometry.
+
 This experiment tests a single dinner plate, bowl, or mug in each Frigidaire rack.
 The dish is released at a random position and full 3-D orientation, settles under
 gravity, and rides the selected rack inward. The other rack stays retracted and

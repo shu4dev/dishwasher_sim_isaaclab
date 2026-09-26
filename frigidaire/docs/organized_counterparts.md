@@ -1,5 +1,7 @@
 # Organized counterparts of the saved initial states
 
+Stale (2026-09-22): the organized states and the screened candidate pool were produced on the v3 racks and basket, archived as `build/frigidaire_collection/history/v3`. The racks and basket were rebuilt to the user's tape measurements on 2026-09-22 ([geometry.md](geometry.md)); they record v3 usdc hashes and the old basket seat and have not been regenerated on the v4 geometry.
+
 This experiment searches for an organized counterpart of each of the eleven
 saved states in `results/initial_states/frigidaire/packing_20260911_seed20260911`.
 It preserves each inventory, including every object ID, type, dimension and mass.

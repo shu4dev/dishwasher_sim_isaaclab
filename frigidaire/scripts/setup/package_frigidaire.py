@@ -126,7 +126,7 @@ def check_collection(collection_dir, source_root=REPO_ROOT):
         if not any(path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
                    for path in (collection / "references").rglob("*")):
             raise ValueError("Missing supplied reference photographs")
-        for version in ("v1", "v2"):
+        for version in ("v1", "v2", "v3"):
             if not any(path.is_file() for path in (collection / "history" / version).rglob("*")):
                 raise ValueError(f"Missing preserved history/{version} files")
         if any(usd.glob("full_load*")):

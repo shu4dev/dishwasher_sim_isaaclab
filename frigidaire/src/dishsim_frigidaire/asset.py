@@ -14,7 +14,7 @@ import tempfile
 
 import numpy as np
 
-from .geometry import PARAMETERS
+from .geometry import PARAMETERS, tine_counts
 
 from .paths import ASSET_DIR
 ROOT = "/FrigidaireFDPC4221AS"
@@ -184,7 +184,8 @@ def write_component(component, name, filename):
                                                        size[0]**2+size[2]**2,
                                                        size[0]**2+size[1]**2])
     mass.CreateDiagonalInertiaAttr(Gf.Vec3f(*map(float, inertia)))
-    geometry_key = {"UpperRack": "upper_rack", "LowerRack": "lower_rack"}.get(name)
+    geometry_key = {"UpperRack": "upper_rack", "LowerRack": "lower_rack",
+                    "SilverwareBasket": "silverware_basket"}.get(name)
     revision = PARAMETERS[geometry_key]["geometry_revision"] if geometry_key else "fdpc4221as_photo_v1"
     body.CreateAttribute("geometryRevision", Sdf.ValueTypeNames.String).Set(revision)
     body.CreateAttribute("dimensionStatus", Sdf.ValueTypeNames.String).Set("photo estimates; see parameters.json")
@@ -667,6 +668,9 @@ def build(output_dir=ASSET_DIR, component=None):
         "passive_forces_status":"approximate counterbalance/resistance, not measured appliance forces"},indent=2)+"\n")
     report["sha256"] = {str(p.relative_to(output_dir)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(output_dir.rglob("*.usdc"))}
     (output_dir/"geometry_validation.json").write_text(json.dumps(report,indent=2)+"\n")
+    counts, lower, basket = tine_counts(), PARAMETERS["lower_rack"], PARAMETERS["silverware_basket"]
+    omitted = lower["tine_banks"]*lower["tines_per_bank"]-counts["LowerRack"]
+    basket_mm = " x ".join(str(round(basket[k]*1000)) for k in ("length_y", "width_x", "body_height"))
     (output_dir/"README.md").write_text("# Frigidaire FDPC4221AS\n\n"
         "Open fdpc4221as.usdc for the appliance, or example_scene.usda for a lit scene. "
         "Copy this entire directory to preserve relative component references.\n\n"
@@ -679,8 +683,10 @@ def build(output_dir=ASSET_DIR, component=None):
         "Dimensions absent from the reference specification are estimates. See parameters.json. "
         "geometry_validation.json covers authoring only; physics validation is recorded separately "
         "in ../validation and rendered views and rack dimension layouts in ../images. "
-        "The empty example scene contains the complete appliance with the polished 52-tine upper "
-        "rack, 72-tine lower rack, and corrected basket position.\n\n"
+        f"The empty example scene contains the complete appliance with the tape-measured "
+        f"{counts['UpperRack']}-tine upper rack, {counts['LowerRack']}-tine lower rack "
+        f"({omitted} positions omitted under the basket) and {basket_mm} mm basket "
+        f"({basket['geometry_revision']}).\n\n"
         "The fixtures and tableware directories contain optional independent rigid-body prototypes. "
         "Dish placements and capacity are unvalidated for this rack revision. Historical loaded "
         "scenes and their evidence live separately in ../history.\n")

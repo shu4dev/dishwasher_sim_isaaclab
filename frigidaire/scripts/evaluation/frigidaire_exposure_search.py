@@ -69,7 +69,7 @@ def main():
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pair", default="random_06")
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default=E.DEVICE)
     parser.add_argument("--random-seeds", type=int, default=100)
     parser.add_argument("--milp-rounds", type=int, default=10)
     parser.add_argument("--milp-limit", type=float, default=20.)
@@ -113,21 +113,28 @@ def main():
     print(f"[OK] {len(samples)} distinct feasible proposals ({sum(s[0] == 'random' for s in samples)} random, "
           f"{sum(s[0] == 'milp' for s in samples)} milp)")
 
-    scored = []
+    scored, dropped = [], 0
     for method, seed, chosen in samples:
-        r = E.score_arrangement(arrangement_from(catalog, chosen, organized.basket, f"{method}_{seed}"), device=args.device)
+        r = E.score_arrangement(arrangement_from(catalog, chosen, organized.basket, f"{method}_{seed}"),
+                                device=args.device, baselines=False)
+        if not r["feasible"]:                       # pooling is a hard gate, not a penalty
+            dropped += 1
+            continue
         scored.append({"method": method, "seed": seed, "indices": chosen, "score": r["score"], "worst": r["worst"],
                        "feasible": r["feasible"], "pooling_count": r["pooling_count"]})
     scored.sort(key=lambda r: -r["score"])
+    print(f"[OK] {len(scored)} feasible proposals ranked; {dropped} dropped for pooling")
     scores = np.array([r["score"] for r in scored])
     (args.out / "samples.json").write_text(json.dumps({"pair": args.pair, "inventory": dict(inventory),
-        "reference": {f: E.strip_samples(reference[f]) for f in reference}, "samples": scored}, indent=1) + "\n")
+        "reference": {f: E.strip_samples(reference[f]) for f in reference}, "dropped_pooling": dropped,
+        "samples": scored}, indent=1) + "\n")
 
     org, pack = reference["organized"]["score"], reference["packing"]["score"]
     better = int((scores > org).sum())
     lines = [f"# Alternative arrangements for {args.pair} ({dict(inventory)})", "",
              f"{len(scored)} distinct FCL-feasible proposals from the organized candidate pool "
-             f"({RUN.name}, {len(allowed)} candidates), scored with the revision-4 exposure.", "",
+             f"({RUN.name}, {len(allowed)} candidates), scored with the revision-5 exposure; "
+             f"{dropped} pooling proposals dropped before ranking.", "",
              "| | score |", "|---|---|",
              f"| settled organized state | {org:.3f} |", f"| settled packing state (infeasible) | {pack:.3f} |",
              f"| proposals: min | {scores.min():.3f} |", f"| proposals: median | {np.median(scores):.3f} |",
@@ -148,7 +155,8 @@ def main():
     ax.set_title(f"{len(scored)} alternative arrangements of the same {sum(inventory.values())} objects", fontsize=10)
     fig.tight_layout(); fig.savefig(args.out / "hist.png", dpi=150); plt.close(fig)
 
-    best = E.score_arrangement(arrangement_from(catalog, scored[0]["indices"], organized.basket, "best"), device=args.device)
+    best = E.score_arrangement(arrangement_from(catalog, scored[0]["indices"], organized.basket, "best"),
+                               device=args.device, baselines=False)
     fig, axes = plt.subplots(1, 2, figsize=(11, 5.4))
     draw_top(axes[0], reference["organized"], f"settled organized {args.pair}: score {org:.3f}")
     sc = draw_top(axes[1], best, f"best proposal ({scored[0]['method']} seed {scored[0]['seed']}): score {best['score']:.3f}, unsettled")

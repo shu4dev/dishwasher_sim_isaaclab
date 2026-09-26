@@ -68,6 +68,11 @@ stack and every collision cache are version-independent and carried over unchang
   (same kwarg names, optional `env_ids`/`joint_ids`).
 - **`data.default_root_state`** (13-D) replaces 3.0's split `default_root_pose` /
   `default_root_vel` — slice `[:, :7]` / `[:, 7:]`.
+- **`pxr` is importable Kit-free** (2026-09-20): `scripts/run_py.sh` exports Kit's USD extension
+  (`/isaac-sim/extscache/omni.usd.libs-*`, its `bin/` on `LD_LIBRARY_PATH`) before starting the
+  interpreter, because the Frigidaire FCL checker reads colliders from USD (`loading.collision_parts`).
+  `/isaac-sim/python.sh` alone has no `pxr`; the loader reads `LD_LIBRARY_PATH` once, so a runtime
+  `sys.path` insert is not enough.
 - **`isaaclab.utils.mesh` does not exist** — `dishsim.geometry` carries its own pxr-based
   extractor (`extract_prim_mesh`), including the mesh→body relative transform with scale.
 - **2.1's `AppLauncher` pops `enable_cameras` off the args namespace** — scripts that read

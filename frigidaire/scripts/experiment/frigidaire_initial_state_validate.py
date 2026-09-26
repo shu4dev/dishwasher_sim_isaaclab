@@ -40,7 +40,9 @@ def main():
         candidates = manifest['objects']
         backend = IsaacInitialStateBackend(args.usd, args.out_dir, device=args.device,
             domains=source_geometry_domains(), deadline=started+args.max_wall_seconds,
-            app=app, candidates=candidates)
+            app=app, candidates=candidates,
+            extra_statics=[tuple(s) for s in manifest.get('extra_statics', [])],
+            tableware=manifest.get('tableware'))
         if args.manifest:
             order = ('UpperRack', 'LowerRack') if args.order == 'upper_first' else ('LowerRack', 'UpperRack')
             result.update(backend.evaluate(order=order, baseline=manifest.get('baseline')))

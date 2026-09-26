@@ -1,5 +1,7 @@
 # Joint initial-state packing experiment
 
+Stale (2026-09-22): the packing states under `results/initial_states/frigidaire/` were settled on the v3 racks and basket, archived as `build/frigidaire_collection/history/v3`. The racks and basket were rebuilt to the user's tape measurements on 2026-09-22 ([geometry.md](geometry.md)); no initial state has been regenerated on the v4 geometry.
+
 This experiment builds loaded initial states from the 176 accepted single-dish
 trials in `results/random_poses/frigidaire/complete_20260910_seed0`. Its output is
 a jointly measured load with both racks extended and the door open. Every accepted

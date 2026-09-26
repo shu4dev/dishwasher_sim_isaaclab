@@ -41,31 +41,70 @@ class SegmentDistanceTests(unittest.TestCase):
         second = [("basket", 0, np.array([0., .15, 0.]), np.array([1., .15, 0.]), .1)]
         self.assertAlmostEqual(clearance.minimum_clearance(first, second)["clearance_mm"], -50.)
 
+    def test_segment_rectangle_crossing(self):
+        cross = clearance._segment_crosses_rectangle
+        self.assertTrue(cross(np.array([0., 0., 0.]), np.array([1., 0., 0.]), (.5, 2.), (-.1, .1)))
+        self.assertFalse(cross(np.array([0., 0., 0.]), np.array([.4, 0., 0.]), (.5, 2.), (-.1, .1)))
+        self.assertFalse(cross(np.array([.6, 0., 0.]), np.array([.7, 0., 0.]), (.5, 2.), (.1, .2)))
+        self.assertTrue(cross(np.array([.6, .15, 0.]), np.array([.6, .15, 0.]), (.5, 2.), (.1, .2)))
+
 
 class BasketFitTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.lower, cls.basket = geometry._lower_rack(), geometry._basket()
+        cls.seat = (np.asarray(geometry.PARAMETERS["origins"]["SilverwareBasket"])
+                    - geometry.PARAMETERS["origins"]["LowerRack"])
 
     def test_approved_position_meets_measured_bay_clearances(self):
         report = clearance.basket_clearance_report(self.lower, self.basket)
         self.assertTrue(report["passed"], report["checks"])
-        self.assertAlmostEqual(report["basket_origin_in_rack_mm"][0], 213.5)
-        self.assertAlmostEqual(report["conservative_x_envelope_gap_mm"], 5.23, places=8)
-        self.assertGreater(report["minimum_capsule_clearances"]["right_wall"]["clearance_mm"], 3.)
+        self.assertAlmostEqual(report["basket_origin_in_rack_mm"][0], 184.0)
+        clearances = report["minimum_capsule_clearances"]
+        self.assertGreaterEqual(clearances["tines_and_base_rails"]["clearance_mm"], 5.)
+        self.assertGreaterEqual(clearances["right_wall"]["clearance_mm"], 3.)
+        self.assertTrue(report["checks"]["no_rails_under_basket"])
+        self.assertEqual(report["rails_under_basket"], [])
+        self.assertEqual(len(report["removed_tines"]), 8)
+
+    def test_tine_group_is_restricted_to_rows_beside_the_basket(self):
+        """The full front plate rows stay out of the tine audit; only rows 3-6 lie beside the basket."""
+        report = clearance.basket_clearance_report(self.lower, self.basket)
+        witness = report["minimum_capsule_clearances"]["tines_and_base_rails"]
+        self.assertIn(int(witness["rack_wire"][len("TineBank")]), (2, 3, 4, 5))
+        self.assertGreater(report["tine_x_envelope_gap_mm"], 5.)
+        window = report["basket_footprint_mm"]["tine_group_y_window"]
+        self.assertAlmostEqual(window[0], -70.)
+        self.assertAlmostEqual(window[1], 262.)
+        thresholds = report["group_thresholds_mm"]
+        self.assertAlmostEqual(thresholds["floor_x"], 225.18)
+        self.assertAlmostEqual(thresholds["long_turn_y"], 256.67)
+
+    def test_rail_reaching_under_the_footprint_fails_without_any_contact(self):
+        footprint = geometry.lower_basket_footprint()
+        x, y = np.mean(footprint["x"]), np.mean(footprint["y"])
+        rail = ("TineBank9_Base", np.array([[x-.05, y, -.060], [x+.01, y, -.060]]), .0021)
+        lower = {**self.lower, "wires": self.lower["wires"]+[rail]}
+        report = clearance.basket_clearance_report(lower, self.basket)
+        self.assertFalse(report["checks"]["no_rails_under_basket"])
+        self.assertEqual(report["rails_under_basket"][0]["rack_wire"], "TineBank9_Base")
 
     def test_excessive_right_translation_hits_sloping_wall(self):
-        report = clearance.basket_clearance_report(self.lower, self.basket, [.218, .120, .011])
+        """With the v3 taper the bottom rim starts 8 mm from the wall bend: a 15 mm shift breaks the 3 mm
+        gate, 17 mm already goes negative (-0.2 mm) and the probe uses 18 mm (-1.1 mm)."""
+        report = clearance.basket_clearance_report(self.lower, self.basket, self.seat+[.018, 0, 0])
         self.assertFalse(report["passed"])
         self.assertLess(report["minimum_capsule_clearances"]["right_wall"]["clearance_mm"], 0.)
 
-    def test_original_fixture_sites_have_concrete_penetration_witnesses(self):
+    def test_fixture_sites_are_audited_against_the_bay_geometry(self):
         reports, _ = clearance.fixture_audit(self.lower)
-        for kind in ("plate", "bowl"):
-            self.assertEqual(reports[kind]["status"], "CONFIRMED_INITIAL_COLLISION")
-            witness = reports[kind]["collision_witness"]
-            self.assertTrue(witness["rack_wire"].startswith("TineBank"))
-            self.assertGreater(witness["centerline_interior_depth_mm"], 1.)
+        self.assertEqual(reports["plate"]["status"], "NO_SAMPLED_CENTERLINE_PENETRATION_FOUND",
+                         reports["plate"]["collision_witness"])
+        self.assertIsNone(reports["plate"]["collision_witness"])
+        self.assertEqual(reports["bowl"]["status"], "CONFIRMED_INITIAL_COLLISION")
+        witness = reports["bowl"]["collision_witness"]
+        self.assertTrue(witness["rack_wire"].startswith("TineBank"))
+        self.assertGreater(witness["centerline_interior_depth_mm"], 1.)
 
 
 if __name__ == "__main__":

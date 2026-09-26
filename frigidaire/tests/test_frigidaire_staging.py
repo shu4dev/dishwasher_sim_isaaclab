@@ -1,6 +1,9 @@
-"""Historical copy preservation and staging guards, without USD or rendering."""
+"""Historical copy preservation, current-collection archiving and staging guards; no USD or rendering."""
+from contextlib import redirect_stdout
 import hashlib
 import importlib.util
+import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -86,6 +89,93 @@ class FrigidaireStagingTests(unittest.TestCase):
                 staging.stage(alias)
         self.assertEqual(_snapshot(canonical), before)
         self.assertEqual({path.name for path in canonical.iterdir()}, {"existing.usdc"})
+
+
+class ArchiveCurrentTests(unittest.TestCase):
+    """archive_current copies usd/images/validation/README into history/<version> and records what went stale."""
+
+    def setUp(self):
+        scratch = REPO_ROOT / "build/frigidaire_tests"
+        scratch.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(prefix="archive-", dir=scratch)
+        self.addCleanup(temporary.cleanup)
+        self.collection = Path(temporary.name)/"collection"
+        self.validation = {"result": "PASS (USD authoring only)",
+                           "components": {"LowerRack": {"geometry_revision": "lower_test_rev"},
+                                          "SilverwareBasket": {"geometry_revision": "basket_test_rev"}},
+                           "sha256": {"fdpc4221as.usdc": "0"*64}}
+        self.parameters = {"body_positions_m": {"LowerRack": [0, .008, .215], "SilverwareBasket": [.17, .104, .222]}}
+        self.manifest = {"status": "STAGED",
+                         "archive_copy_map": [{"original": "assets/models/x", "archived": "history/v1/assets"}]}
+        files = {
+            "usd/fdpc4221as.usdc": b"current usd bytes",
+            "usd/geometry_validation.json": json.dumps(self.validation).encode(),
+            "usd/parameters.json": json.dumps(self.parameters).encode(),
+            "images/x.png": b"\x89PNG current picture",
+            "validation/collection_manifest.json": json.dumps(self.manifest).encode(),
+            "README.md": b"# Collection\n",
+        }
+        for name, content in files.items():
+            path = self.collection/name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        self.before = _snapshot(self.collection)
+
+    def archive(self, version="v9"):
+        with redirect_stdout(io.StringIO()) as output:
+            manifest = staging.archive_current(self.collection, version)
+        return manifest, output.getvalue()
+
+    def test_archives_usd_images_validation_and_readme_into_history(self):
+        manifest, output = self.archive()
+        archived = _snapshot(self.collection/"history/v9")
+        copies = {"assets/fdpc4221as.usdc": "usd/fdpc4221as.usdc",
+                  "assets/geometry_validation.json": "usd/geometry_validation.json",
+                  "assets/parameters.json": "usd/parameters.json",
+                  "gallery/x.png": "images/x.png",
+                  "validation/collection_manifest.json": "validation/collection_manifest.json",
+                  "README.md": "README.md"}
+        self.assertEqual(set(archived), set(copies) | {"archive_manifest.json"})
+        for archived_name, original in copies.items():
+            self.assertEqual(archived[archived_name], self.before[original], archived_name)
+        written = json.loads(archived["archive_manifest.json"])
+        self.assertEqual(written["version"], "v9")
+        self.assertEqual(written["geometry_revisions"],
+                         {"LowerRack": "lower_test_rev", "SilverwareBasket": "basket_test_rev"})
+        self.assertEqual(written["body_positions_m"], self.parameters["body_positions_m"])
+        self.assertEqual(written["usdc_sha256"], self.validation["sha256"])
+        self.assertEqual(written["stale_results"], staging.STALE_RESULTS)
+        self.assertEqual([entry["archived"] for entry in written["archive_copy_map"]],
+                         ["history/v9/assets", "history/v9/gallery", "history/v9/validation", "history/v9/README.md"])
+        self.assertEqual(set(written["files"]), set(copies))
+        for name, digest in written["files"].items():
+            self.assertEqual(digest, hashlib.sha256(archived[name]).hexdigest())
+        self.assertEqual(manifest, written)
+        self.assertIn("[RESULT] PASS", output)
+        after = _snapshot(self.collection)
+        for name, content in self.before.items():
+            if name != "validation/collection_manifest.json":
+                self.assertEqual(after[name], content, name)
+        updated = json.loads(after["validation/collection_manifest.json"])
+        self.assertEqual(updated["status"], "STAGED")
+        self.assertEqual(updated["archive_copy_map"],
+                         self.manifest["archive_copy_map"] + written["archive_copy_map"])
+        self.assertEqual(updated["stale_evidence"], staging.STALE_RESULTS)
+        self.assertIn("v9", {p.name for p in (self.collection/"history").iterdir()})
+        self.assertTrue((self.collection/"history/README.md").is_file())
+
+    def test_existing_version_is_refused_without_changes(self):
+        self.archive("v9")
+        snapshot = _snapshot(self.collection)
+        with self.assertRaises(FileExistsError):
+            self.archive("v9")
+        self.assertEqual(_snapshot(self.collection), snapshot)
+
+    def test_missing_usd_bundle_is_refused_before_writing(self):
+        (self.collection/"usd/fdpc4221as.usdc").unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.archive("v9")
+        self.assertFalse((self.collection/"history").exists())
 
 
 if __name__ == "__main__":

@@ -27,7 +27,8 @@ def inspect_collection(collection):
     if not all(p.is_file() for p in required):
         raise FileNotFoundError("Build the current complete appliance into %s first" % directory)
     checks = {name: True for name in ("dependencies_resolve", "relative_references", "stage_conventions",
-              "components_present", "polished_racks", "basket_position", "relocated_dependencies_resolve")}
+              "components_present", "polished_racks", "basket_position", "basket_revision",
+              "relocated_dependencies_resolve")}
     details = {}
     for path in files:
         stage = Usd.Stage.Open(str(path))
@@ -44,12 +45,13 @@ def inspect_collection(collection):
         stage.GetPrimAtPath(asset.ROOT + "/" + name + "/Visuals")
         and stage.GetPrimAtPath(asset.ROOT + "/" + name + "/Collisions") for name in asset.COMPONENT_FILES)
     counts = {}
-    for name, prefix, expected in (("UpperRack", "BowlComb", 52), ("LowerRack", "TineBank", 72)):
+    expected_counts = geometry.tine_counts()      # tape-measured grid minus the basket bay / absent centre positions
+    for name, prefix in (("UpperRack", "BowlComb"), ("LowerRack", "TineBank")):
         collision = stage.GetPrimAtPath(asset.ROOT + "/" + name + "/Collisions")
         families = {p.GetAttribute("wireFamily").Get() for p in Usd.PrimRange(collision)
                     if p.GetAttribute("wireFamily")} if collision else set()
         counts[name] = len([f for f in families if f.startswith(prefix) and "_Tooth" in f])
-        checks["polished_racks"] &= counts[name] == expected
+        checks["polished_racks"] &= counts[name] == expected_counts[name]
         key = "upper_rack" if name == "UpperRack" else "lower_rack"
         checks["polished_racks"] &= (stage.GetPrimAtPath(asset.ROOT + "/" + name)
             .GetAttribute("geometryRevision").Get() == geometry.PARAMETERS[key]["geometry_revision"])
@@ -58,7 +60,11 @@ def inspect_collection(collection):
         checks["polished_racks"] &= parameters["geometry"][key]["geometry_revision"] == geometry.PARAMETERS[key]["geometry_revision"]
     basket = stage.GetPrimAtPath(asset.ROOT + "/SilverwareBasket")
     translation = basket.GetAttribute("xformOp:translate").Get() if basket else None
-    checks["basket_position"] = translation is not None and bool(np.allclose(translation, [.2135, .128, .226], atol=1e-9, rtol=0))
+    checks["basket_position"] = translation is not None and bool(np.allclose(
+        translation, geometry.PARAMETERS["origins"]["SilverwareBasket"], atol=1e-9, rtol=0))
+    basket_revision = geometry.PARAMETERS["silverware_basket"]["geometry_revision"]
+    checks["basket_revision"] = bool(basket) and basket.GetAttribute("geometryRevision").Get() == basket_revision
+    checks["basket_revision"] &= parameters["geometry"]["silverware_basket"]["geometry_revision"] == basket_revision
     with tempfile.TemporaryDirectory(prefix="frigidaire-relocated-", dir=collection.parent) as temporary:
         relocated = Path(temporary) / "usd"
         shutil.copytree(directory, relocated)

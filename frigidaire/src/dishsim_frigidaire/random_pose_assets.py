@@ -54,7 +54,8 @@ def validate_inputs(usd_path):
         raise ValueError("USD authoring report did not pass")
     if set(report.get("components", {})) != set(COMPONENT_FILES):
         raise ValueError("USD authoring report does not describe all appliance components")
-    for rack, parameter in (("LowerRack", "lower_rack"), ("UpperRack", "upper_rack")):
+    for rack, parameter in (("LowerRack", "lower_rack"), ("UpperRack", "upper_rack"),
+                            ("SilverwareBasket", "silverware_basket")):
         if report["components"][rack].get("geometry_revision") != PARAMETERS[parameter]["geometry_revision"]:
             raise ValueError(f"Stale {rack} geometry revision")
     source_hash = _digest(tableware.__file__)
@@ -82,7 +83,7 @@ def validate_inputs(usd_path):
             "catalog": {kind: catalog["items"][kind] for kind in KINDS},
             "body_positions_m": parameters["body_positions_m"],
             "geometry_revisions": {rack: report["components"][rack]["geometry_revision"]
-                                   for rack in ("LowerRack", "UpperRack")}}
+                                   for rack in ("LowerRack", "UpperRack", "SilverwareBasket")}}
 
 
 def _pose(pose):

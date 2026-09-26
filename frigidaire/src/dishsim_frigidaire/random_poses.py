@@ -16,6 +16,10 @@ import numpy as np
 
 KINDS = ("dinner_plate", "bowl", "mug")
 RACKS = ("LowerRack", "UpperRack")
+# Bodies the FCL checker and the Isaac backend may load / assign; RACKS alone drives rack motions.
+CUTLERY_KINDS = ("fork", "knife", "tablespoon", "teaspoon")
+OBJECT_KINDS = KINDS + CUTLERY_KINDS
+OBJECT_RACKS = RACKS + ("SilverwareBasket",)
 CELLS = tuple((kind, rack) for kind in KINDS for rack in RACKS)
 LIMITS = {
     "physics_dt_s": 1 / 120,

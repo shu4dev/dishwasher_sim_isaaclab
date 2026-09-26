@@ -5,17 +5,20 @@ tests and documentation. The finished collection belongs at
 `assets/models/frigidaire_fdpc4221as/`; supplied references and generated images
 belong with that collection.
 
-The current source combines the polished **52-tine upper rack**, **72-tine lower
-rack**, and basket shifted **27.5 mm right** with the complete dishwasher. See
-[geometry and dimensions](docs/geometry.md). Older loading results describe older
-geometry and are preserved in the collection's `history/` directories.
+The current source combines the tape-measured **48-tine upper rack**, **64-tine lower
+rack** and **1x4 basket** (320 x 95 x 130 mm body, 220 mm handle, seated rear-right)
+with the complete dishwasher (revisions `upper_tines_4x13_v4`, `lower_tines_6x12_v3`,
+`basket_1x4_320x95_v4`, 2026-09-23; heights measured outside, bottom to top). See [geometry and dimensions](docs/geometry.md).
+The photo-fitted build is archived as `build/frigidaire_collection/history/v3` and the first tape build as `history/v4`;
+older loading results describe older geometry and are preserved in the collection's
+`history/` directories.
 
 ## Current delivery status
 
 The organized collection is staged at
 [build/frigidaire_collection](../build/frigidaire_collection/README.md), with the
 supplied references, regenerated rack diagrams, manufacturer dimension image,
-and checksum-verified v1/v2 history. Source and host checks have run.
+and checksum-verified v1 to v4 history. Source and host checks have run.
 
 The current USD assembly and tableware are built in the stage's `usd/` directory,
 and the Isaac runtime is accessible. The single-dish random-pose experiment
@@ -27,6 +30,8 @@ and [protocol and results](docs/random_pose_experiment.md).
 Assembly-wide physics/render evidence, the release archive and final installation
 are separate delivery gates. The read-only package check reports the remaining
 requirements explicitly; the random-pose experiment does not certify a full release.
+Those random-pose numbers were measured on the v3 photo-fitted racks, archived on
+2026-09-22 under `history/v3`; they are stale for the tape-measured racks.
 
 ## Source layout and API
 
@@ -120,6 +125,9 @@ there is no separate current gallery product.
 
 ## Random dish pose experiment
 
+Stale (2026-09-22): this experiment ran on the v3 racks and basket; its records carry the
+v3 usdc hashes and have not been regenerated on the tape-measured v4 geometry.
+
 The [random dish pose experiment](docs/random_pose_experiment.md) independently
 samples a dinner plate, bowl and mug in both racks, allows settling, and measures
 physical rack retraction. On 2026-09-10 the seed-0 scan completed **100 raw
@@ -176,3 +184,5 @@ arrangements of the same objects by ray-cast exposure of food-contact surfaces t
 arms (Kit-free, Warp on the CPU). Reference: [docs/exposure.md](docs/exposure.md); quickstart:
 [docs/exposure_quickstart.md](docs/exposure_quickstart.md). Results under
 `results/exposure/frigidaire/`.
+
+Arrangement planner over the exposure objective (messy counter + unorganized racks -> best-exposure load): [docs/planner.md](docs/planner.md).

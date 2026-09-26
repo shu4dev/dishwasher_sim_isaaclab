@@ -63,7 +63,7 @@ def rack_counts(by_rack):
 
 
 lines = ["# Frigidaire FDPC4221AS rack-capacity claim test", "",
-         "Geometry under test: current source (52-tine upper, 72-tine lower, basket +27.5 mm), "
+         "Geometry under test: current source (48-tine upper, 64-tine lower, tape-measured basket), "
          "built into `build/frigidaire_collection/usd/`. Dishes: the ten tableware prototypes at "
          "their modeling sizes (dinner 260, salad 205, saucer 150, bowl 140x65, tumbler 80x160 mm, "
          "stated defaults, not measurements). Verdict per dish: collision-free pose (FCL), then "

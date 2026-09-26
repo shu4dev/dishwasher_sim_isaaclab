@@ -20,7 +20,7 @@ from dishsim.quats import wxyz_to_xyzw, xyzw_to_wxyz
 from .random_pose_experiment import check_deadline, BudgetExpired
 from .random_pose_runtime import (COMPONENTS, JOINTS, RACK_JOINT, EXTENSION,
                                   CONTACT_CAPACITY, CONTACT_PERSISTENCE_M, ContactTracker)
-from .random_poses import (KINDS, RACKS, LIMITS, compose_pose, relative_pose,
+from .random_poses import (KINDS, RACKS, OBJECT_KINDS, OBJECT_RACKS, LIMITS, compose_pose, relative_pose,
                            quaternion_matrix_xyzw, motion_is_settled,
                            transform_vertices, vertices_contained)
 
@@ -94,7 +94,7 @@ def retain_peak_event(previous, contact, poses, joints, *, phase, step, dt):
             "poses": deepcopy(poses), "joints": deepcopy(joints)}
 
 
-def normalize_candidates(candidates):
+def normalize_candidates(candidates, kinds=OBJECT_KINDS):
     """Check object identity without imposing catalog rack recommendations."""
     result, seen, candidate_ids = [], set(), set()
     for index, original in enumerate(candidates):
@@ -109,7 +109,7 @@ def normalize_candidates(candidates):
             if candidate_id in candidate_ids:
                 raise ValueError("An individual candidate may appear only once in a state")
             candidate_ids.add(candidate_id)
-        if entry.get("kind") not in KINDS or entry.get("rack") not in RACKS:
+        if entry.get("kind") not in kinds or entry.get("rack") not in OBJECT_RACKS:
             raise ValueError(f"Unsupported kind or assigned rack for {identity}")
         pose = entry.get("rack_local_pose", entry.get("pose_world"))
         if pose is None:
@@ -145,7 +145,8 @@ class MultiContactTracker(ContactTracker):
 class IsaacInitialStateBackend:
     """Fresh independent bodies, measured common frames, and loaded rack checks."""
     def __init__(self, usd_path, output_dir, *, device="cpu", domains,
-                 deadline=float("inf"), app, candidates=()):
+                 deadline=float("inf"), app, candidates=(), extra_statics=(), tableware=None,
+                 before_reset=None):
         import carb.settings
         import omni.usd
         import torch
@@ -159,7 +160,10 @@ class IsaacInitialStateBackend:
 
         if device != "cpu":
             raise ValueError("This experiment requires CPU physics")
-        self.entries = normalize_candidates(candidates)
+        # kind -> USD; the stock tableware by default, overridden per kind (e.g. the HOTEC set)
+        self.tableware = {kind: Path(usd_path).parent/"tableware"/(kind+".usdc") for kind in OBJECT_KINDS}
+        self.tableware.update({kind: Path(path) for kind, path in (tableware or {}).items()})
+        self.entries = normalize_candidates(candidates, kinds=set(self.tableware))
         self.assignments = {entry["object_id"]: entry["rack"] for entry in self.entries}
         self.directory = Path(output_dir)
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -185,16 +189,19 @@ class IsaacInitialStateBackend:
         ground = sim_utils.CuboidCfg(size=(200., 200., .05),
                                     collision_props=sim_utils.CollisionPropertiesCfg())
         ground.func("/World/Ground", ground, translation=(0., 0., -.025))
+        for path, size, translation in extra_statics:   # e.g. the planner's counter slab, authored before sim.reset()
+            static = sim_utils.CuboidCfg(size=tuple(size), collision_props=sim_utils.CollisionPropertiesCfg())
+            static.func(path, static, translation=tuple(translation))
         self.prim = "/World/InitialStateDishwasher"
         self.dishwasher, self.basket = spawn(self.prim, mode="scripted", usd_path=str(self.usd_path))
         self.objects = {}
-        self.points = {kind: visual_points(self.usd_path.parent/"tableware"/(kind+".usdc"))
+        self.points = {kind: visual_points(self.tableware[kind])
                        for kind in set(entry["kind"] for entry in self.entries)}
         for index, entry in enumerate(self.entries):
             identity = entry["object_id"]
             self.objects[identity] = RigidObject(RigidObjectCfg(
                 prim_path="/World/InitialStateDishes/"+identity,
-                spawn=sim_utils.UsdFileCfg(usd_path=str(self.usd_path.parent/"tableware"/(entry["kind"]+".usdc"))),
+                spawn=sim_utils.UsdFileCfg(usd_path=str(self.tableware[entry["kind"]])),
                 init_state=RigidObjectCfg.InitialStateCfg(pos=(3.+index*.4, 0., .3))))
         stage = omni.usd.get_context().get_stage()
         for identity, obj in self.objects.items():
@@ -213,6 +220,8 @@ class IsaacInitialStateBackend:
         self.contacts = RigidContactView(prim_paths_expr=paths,
             filter_paths_expr=[paths.copy() for _ in paths], name="initial_state_contacts",
             max_contact_count=CONTACT_CAPACITY, disable_stablization=False)
+        if before_reset is not None:   # e.g. authoring camera sensors, which must exist before sim.reset()
+            before_reset(self)
         self.sim.reset()
         apply_mode(self.dishwasher, "scripted")
         self.contacts.initialize()
@@ -523,7 +532,7 @@ class IsaacInitialStateBackend:
                 entry["pose_world"] = {"position_m": position.tolist(), "quaternion_xyzw": quaternion.tolist()}
         return result
 
-    def evaluate(self, *, order=("UpperRack", "LowerRack"), baseline=None):
+    def evaluate(self, *, order=("UpperRack", "LowerRack"), baseline=None, close=True):
         if tuple(sorted(order)) != tuple(sorted(RACKS)):
             raise ValueError("Retraction order must contain both racks once")
         if not self.entries:
@@ -536,7 +545,7 @@ class IsaacInitialStateBackend:
         with (self.directory/"trace.jsonl").open("w", buffering=1) as trace:
             self.trace = trace
             try:
-                self._evaluate(record, order, baseline)
+                self._evaluate(record, order, baseline, close)
             except BudgetExpired as exc:
                 record.update(outcome="timeout", reason=str(exc), last_hold=self.last_hold)
             except Exception as exc:
@@ -560,24 +569,36 @@ class IsaacInitialStateBackend:
         (self.directory/"physics.json").write_text(json.dumps(record, indent=2, allow_nan=False)+"\n")
         return record
 
-    def _evaluate(self, record, order, baseline):
+    def _evaluate(self, record, order, baseline, close=True):
+        prepared = self.settle_loaded(record, baseline)
+        if prepared is None:
+            return
+        if close:
+            self.close_and_contain(record, order, prepared)
+        else:
+            record.update(outcome="settled", reason="Joint loaded settle passed; racks left extended (no retraction)")
+
+    def settle_loaded(self, record, baseline):
+        """Baseline, preflight, load and settle with the racks extended; the prepared entries, or None on failure."""
         from .initial_state_candidates import InitialCollisionChecker
         if self.baseline is None or baseline is not None:
             baseline_record = self.prepare_baseline(baseline)
             record["baseline"] = baseline_record
             if baseline_record["result"] != "PASS":
                 record.update(outcome="baseline_failure", reason="Empty common baseline failed")
-                return
+                return None
         frames = self.poses()
         record["initialized_components"] = {name: frames[name] for name in COMPONENTS}
         prepared = self._prepare_objects(frames)
         record["proposed_objects"] = prepared
-        checker = InitialCollisionChecker(self.usd_path.parent, penetration_limit_m=.001)
+        checker = InitialCollisionChecker(self.usd_path.parent, penetration_limit_m=.001,
+                                          tableware={k: v for k, v in self.tableware.items()
+                                                     if k in {entry["kind"] for entry in self.entries}})
         geometry = checker.check_arrangement(prepared, record["initialized_components"])
         record["initial_geometry"] = geometry
         if not geometry["valid"]:
             record.update(outcome="initial_collision", reason="Actual initialized geometry failed preflight")
-            return
+            return None
         for entry in prepared:
             self.set_rigid_pose(self.objects[entry["object_id"]], entry["pose_world"])
         self.loaded = True
@@ -594,10 +615,10 @@ class IsaacInitialStateBackend:
         record["maximum_settle_penetration_event"] = self.peak_event
         if self.maximum_penetration_m >= LIMITS["peak_penetration_m"]:
             record.update(outcome="penetration_failure", reason="Excessive penetration during joint initial settling")
-            return
+            return None
         if not settled["passed"]:
             record.update(outcome="settle_failure", reason=settled.get("reason"))
-            return
+            return None
         record["initial_snapshot"] = self.snapshot()
         displacement = {}
         for entry in prepared:
@@ -610,6 +631,11 @@ class IsaacInitialStateBackend:
                 "translation_m": float(np.linalg.norm(np.asarray(measured["position_m"])-initial["position_m"])),
                 "rotation_deg": float(np.degrees(2*np.arccos(np.clip(cosine, 0., 1.))))}
         record["proposal_to_initial_displacement"] = displacement
+        return prepared
+
+    def close_and_contain(self, record, order, prepared):
+        """Retract the loaded racks in ``order``, hold, then check whole-mesh cabinet containment."""
+        record.setdefault("loaded_rack_motions", [])
         self.maximum_penetration_m = 0.
         self.peak_event = None
         extended = set(RACKS)

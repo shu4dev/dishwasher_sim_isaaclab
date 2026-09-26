@@ -20,6 +20,8 @@ import sys
 
 KINDS = ("dinner_plate", "bowl", "mug")
 RACKS = ("LowerRack", "UpperRack")
+OBJECT_KINDS = KINDS + ("fork", "knife", "tablespoon", "teaspoon")   # accepted per object; tables stay on KINDS
+OBJECT_RACKS = RACKS + ("SilverwareBasket",)
 COMPONENTS = ("Cabinet", "Door", "LowerRack", "UpperRack", "SilverwareBasket")
 CLASSIFIED_FAILURES = {"initial_collision", "settle_failure", "penetration_failure", "closure_failure", "outside_dishwasher"}
 
@@ -99,7 +101,7 @@ def validate_state(state):
         if not isinstance(identity, str) or not identity or identity in identities or identity in COMPONENTS:
             raise ValueError("State object IDs must be nonempty and unique")
         identities.add(identity)
-        if obj.get("kind") not in KINDS or obj.get("rack") not in RACKS:
+        if obj.get("kind") not in OBJECT_KINDS or obj.get("rack") not in OBJECT_RACKS:
             raise ValueError("Unknown dish kind or rack")
         validate_pose(obj.get("rack_local_pose"))
         error = pose_error(obj.get("pose_world"), poses.get(identity))

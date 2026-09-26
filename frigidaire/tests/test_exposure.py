@@ -20,7 +20,8 @@ STATES = ROOT / "results/initial_states/frigidaire"
 def test_food_contact_faces_are_the_inner_lathe_bands(kind):
     fc = E.food_contact(kind)
     n = E.SECTIONS[kind]
-    assert len(fc.areas) == (n - 2) * 2 * E.RING + E.RING   # inner bands + inner apex fan
+    ring = E.RING[kind]
+    assert len(fc.areas) == (n - 2) * 2 * ring + ring   # inner bands + inner apex fan
     centroid = fc.triangles.mean(axis=1)
     radial = np.einsum("ij,ij->i", centroid[:, :2], fc.normals[:, :2])
     if kind == "dinner_plate":
@@ -132,7 +133,11 @@ def test_pooling_is_a_draining_test():
     assert E.pools("bowl", z, _about_x(45))              # mouth 135 deg from down: holds ~12 mm
     assert not E.pools("mug", z, _about_x(90))           # mug on its side drains
     assert E.pools("mug", z, _about_x(60))               # mug tilted mouth-up holds water
-    assert not E.pools("dinner_plate", z, (0., 0., 0., 1.))
+    assert E.pools("dinner_plate", z, (0., 0., 0., 1.))       # flat plate holds water in its well
+    assert not E.pools("dinner_plate", z, _about_x(90))     # on edge: drains
+    assert not E.pools("dinner_plate", z, _about_x(94))     # the lower-rack lean
+    for kind in ("fork", "knife", "tablespoon"):
+        assert not E.pools(kind, z, (0., 0., 0., 1.))        # cutlery never pools
 
 
 def test_feasibility_follows_mouth_up():
@@ -146,3 +151,51 @@ def test_feasibility_follows_mouth_up():
     assert b["feasible"] is True and b["violations"] == []
     assert {o["ray_source"] for o in b["objects"] if o["rack"] == "UpperRack"} == {"middle_arm"}
     assert {o["ray_source"] for o in b["objects"] if o["rack"] == "LowerRack"} == {"lower_arm"}
+
+
+@pytest.mark.parametrize("kind", ["tablespoon", "teaspoon"])
+def test_spoon_bowl_is_a_conforming_lathe(kind):
+    fc = E.food_contact(kind)
+    assert E.RING[kind] == 80 and E.SECTIONS[kind] == 4
+    assert len(fc.areas) == 2 * 2 * 80 + 80 and fc.rim.shape == (80, 3)
+    assert np.all(fc.normals[:, 1] > 0)                       # the bowl opens local +Y; interior faces into the cavity
+    assert 0 < fc.area_m2 < .01
+
+
+def test_fork_food_contact_is_the_tines():
+    fc = E.food_contact("fork")
+    assert len(fc.areas) == 4 * 92 and fc.area_m2 > 0 and fc.rim.shape == (0, 3)
+    assert fc.triangles[:, :, 2].min() >= .0635 - 1e-9        # handle, shaft and neck excluded
+    assert (fc.normals[:, 1] > .5).any() and (fc.normals[:, 1] < -.5).any()   # both flat faces count
+
+
+def test_knife_food_contact_is_the_blade():
+    fc = E.food_contact("knife")
+    assert 0 < len(fc.areas) < len(E.dish_visuals("knife")[0]) and len(fc.areas) == 106
+    assert fc.triangles[:, :, 2].min() >= E.KNIFE_BOLSTER_Z - 1e-9   # handle excluded
+    assert (fc.normals[:, 1] > .5).any() and (fc.normals[:, 1] < -.5).any()
+
+
+def test_cutlery_exposure_alone_follows_the_head():
+    p, src = np.array([.2, .1, .33]), E.rack_sources("SilverwareBasket")[:2]
+    assert E.isolated_baseline("fork", p, (0., 0., 0., 1.), sources=src) > .3     # tines up, both faces see the disc
+    assert E.isolated_baseline("knife", p, (0., 0., 0., 1.), sources=src) > .5
+    assert E.isolated_baseline("tablespoon", p, _about_x(-90), sources=src) > .7  # bowl faces the arm (its rim shades some)
+    assert E.isolated_baseline("tablespoon", p, _about_x(90), sources=src) == 0.  # bowl faces the ceiling
+
+
+def test_baselines_opt_in():
+    bowl = {"id": "b", "kind": "bowl", "rack": "LowerRack", "position_m": np.array([0., .008, .30]),
+            "quaternion_xyzw": (1., 0., 0., 0.)}
+    arr = E.Arrangement("one", "", "", [bowl], (np.zeros(3), E.IDENTITY))
+    a = E.score_arrangement(arr, samples=50, directions=16, appliance=False)
+    b = E.score_arrangement(arr, samples=50, directions=16, appliance=False, baselines=False)
+    assert a["score"] == b["score"] and "baseline" in a["objects"][0] and "baseline" not in b["objects"][0]
+    assert a["parameters"]["baselines"] and not b["parameters"]["baselines"]
+
+
+def test_ring_per_kind_and_default_sources():
+    assert E.RING["bowl"] == 96 and E.RING["tablespoon"] == 80 and E.food_contact("bowl").rim.shape == (96, 3)
+    q, u, arm = E.rack_sources("UpperRack")
+    assert arm == "middle_arm" and len(q) == 64 and abs(u.sum() - 1) < 1e-9     # no ceiling point by default
+    assert E.DEFAULTS["ceiling_weight"] == 0 and E.DEFAULTS["schema_version"] == 5

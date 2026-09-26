@@ -49,6 +49,7 @@ class CollectionPackageTests(unittest.TestCase):
             "history/v2/bundle/full_load.usda": "Old measured loaded scene",
             "history/v2/gallery/contact_sheet.png": "Old gallery",
             "history/v2/original.zip": "Original archive bytes",
+            "history/v3/assets/fdpc4221as.usdc": "Old v3 geometry",
         }
         for component in ("fdpc4221as", "cabinet", "door", "upper_rack", "lower_rack", "silverware_basket"):
             self.files[f"usd/{component}.usdc"] = f"Current {component}"

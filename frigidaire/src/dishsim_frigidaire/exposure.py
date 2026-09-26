@@ -1,20 +1,25 @@
 # Copyright (c) 2026, dishsim project.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Minimal ambient-occlusion (AO) exposure scorer for Frigidaire arrangements.
+"""Exposure scorer for Frigidaire arrangements (revision 5, Kit-free).
 
-Definition (settled 2026-09-17, revision 2): for every sample on a FOOD-CONTACT
-surface (the lathed inner wall of a bowl / mug, the top face of a plate) cast a
-fixed Fibonacci set of 64 rays toward the LOWER half-space of the world frame,
-where the spray arms sit; exposure = share of rays that hit NOTHING in the
-load-only occluder set (every dish including the object itself, both racks, the
-silverware basket). Tub, door and cabinet never occlude. Per object:
-area-weighted mean exposure. Arrangement: area-weighted mean over objects
-(primary) and the worst object (secondary). No threshold.
+For every sample on a FOOD-CONTACT surface, rays run to the source points of the object's
+rack: a 64-point disc under the rack where its spray arm sweeps (lower arm for the lower rack
+and the basket, middle arm for the upper rack) and, only when ``ceiling_weight`` > 0, one
+point at the tub ceiling for upper-rack objects. Each ray is weighted by the source weight
+times the impingement cosine; a sample's exposure is the weighted share of rays that hit
+nothing in the load (every dish including the object itself, both racks, the basket; tub,
+door and cabinet never occlude). Per object: mean over samples. Arrangement: area-weighted
+mean over objects (primary) and the worst object (secondary).
 
-``source="hemisphere"`` keeps revision 1 (uniform hemisphere around the surface
-normal), which prefers mouth-up vessels; the mouth-up count from the organized
-policy is reported beside every score either way. No water model. Kit-free:
-numpy at import, warp for the ray queries.
+Food contact per kind: the inner lathe surface of bowls, mugs, tumblers, plates (top face)
+and spoon bowls; fork tines and the knife blade, both faces; handles never. Feasible iff no
+vessel or plate pools (interior below the rim by more than 2 mm); cutlery never pools.
+
+The ceiling weight defaults to 0 because the nozzle was never inspected; the seven-pair
+ranking holds at every swept weight up to 0.5. ``baselines`` (per-object isolated exposure)
+is a diagnostic and opt-in; the objective path skips it. Rays run on CUDA when Warp sees a
+GPU. Legacy ``source`` modes (hemisphere, below, per-rack-directions) are kept for
+comparison. No water model; not measured cleaning.
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -35,28 +40,35 @@ try:
     wp.config.quiet = True
 except ImportError:  # pragma: no cover - warp ships with Isaac's python
     wp = None
+DEVICE = "cuda" if wp is not None and wp.is_cuda_available() else "cpu"
 
-DEFAULTS = {"schema_version": 4, "directions": 64, "samples_per_object": 500,
+DEFAULTS = {"schema_version": 5, "directions": 64, "samples_per_object": 500,
             "max_distance_m": 2.0, "origin_offset_m": 1e-4, "source": "per-rack", "ceiling_weight": 0.,
             "occluders": "load only: every dish (self included), LowerRack, UpperRack, SilverwareBasket",
             "definition": "load-induced occlusion of food-contact surfaces for water from source points: "
                           "a disc under each rack (the spray arm's sweep) and an optional ceiling point "
                           "above the upper rack; rays weighted by impingement cosine; no water model; "
                           "not measured cleaning"}
-# Spray-arm sweeps as source discs (world frame, metres). Heights and radii come from the
-# asset (tub floor 0.152, lower rack floor wires 0.215, upper rack floor wires ~0.572) and
-# the rack widths; they are ASSUMPTIONS recorded in every score, not measurements.
-ARM_SOURCES = {"lower_arm": {"center": (0., .008, .185), "radius": .245, "racks": ("LowerRack", "SilverwareBasket")},
-               "middle_arm": {"center": (0., .008, .540), "radius": .205, "racks": ("UpperRack",)}}
-CEILING_POINT = (0., .018, .817)     # upper spray nozzle, assumed at the tub ceiling centre
+# Spray-arm sweeps as source discs (world frame, metres). Heights come from the asset (tub
+# floor 0.152, lower rack floor wires 0.215, upper rack floor wires ~0.572); each radius is
+# the tape-measured rack half-width (0.2625 lower, 0.240 upper) minus the margin the first
+# revision kept inside the photo-fitted rims (29 mm / 49 mm). They are ASSUMPTIONS recorded
+# in every score, not measurements. Scores under results/exposure/frigidaire/ were computed
+# with the earlier 0.245 / 0.205 discs on the 52/72-tine racks and are stale until re-scored.
+ARM_SOURCES = {"lower_arm": {"center": (0., .008, .185), "radius": .233, "racks": ("LowerRack", "SilverwareBasket")},
+               "middle_arm": {"center": (0., .008, .540), "radius": .191, "racks": ("UpperRack",)}}
+CEILING_POINT = (0., .018, .817)     # upper spray nozzle, assumed at the tub ceiling centre; off by default
 POOL_TOLERANCE_M = .002
 # Direction-set source per rack under the legacy source="per-rack-directions" (revision 3).
 RACK_SOURCE = {"UpperRack": "below+above"}
-RING = 96  # tableware._SECTORS (24) * 4 vertices per lathe ring
 # Lathe section counts per kind (tableware.tableware_geometry); the first section
 # of every supported kind sits on the axis, so the mesh is apex, n-1 outer rings,
 # n-1 inner rings, inner apex. Inner = food contact (vessel interior, plate top).
-SECTIONS = {"bowl": 6, "mug": 5, "tumbler": 5, "dinner_plate": 5, "salad_plate": 5, "saucer": 5}
+SECTIONS = {"bowl": 6, "mug": 5, "tumbler": 5, "dinner_plate": 5, "salad_plate": 5, "saucer": 5,
+            "tablespoon": 4, "teaspoon": 4}
+RING = {k: 80 if k in ("tablespoon", "teaspoon") else 96 for k in SECTIONS}  # 4 * lathe sectors (24; spoons 20)
+KNIFE_BOLSTER_Z = .004   # knife local z of the bolster ring: the blade is everything above it
+POOLING_KINDS = ("bowl", "mug", "tumbler", "dinner_plate", "salad_plate", "saucer")
 IDENTITY = (0., 0., 0., 1.)
 
 
@@ -67,8 +79,8 @@ class FoodContact:
     normals: np.ndarray     # (T, 3) outward (into the cavity / above the plate)
     areas: np.ndarray       # (T,)
     area_m2: float
-    rim: np.ndarray         # (96, 3) the mouth ring (first inner lathe ring), object frame
-    inner_points: np.ndarray  # every inner-surface vertex, object frame
+    rim: np.ndarray         # (RING[kind], 3) the mouth ring (first inner lathe ring); empty for cutlery
+    inner_points: np.ndarray  # every inner-surface vertex, object frame; empty for cutlery
 
 
 @dataclass
@@ -92,25 +104,32 @@ def dish_visuals(kind):
 
 
 def food_contact(kind):
+    """Food-contact triangles of a kind: lathe interiors, fork tines or the knife blade."""
     if kind in _FOOD_CONTACT:
         return _FOOD_CONTACT[kind]
-    if kind not in SECTIONS:
-        raise NotImplementedError(f"No food-contact rule for {kind!r} in this minimal version")
-    from .tableware import tableware_geometry
-    points, _, faces = tableware_geometry(kind)["visuals"][0]
-    points, faces = np.asarray(points), np.asarray(faces)
-    n = SECTIONS[kind]
-    expected = 2 + 2 * (n - 1) * RING
-    if len(points) != expected:
-        raise ValueError(f"{kind}: {len(points)} vertices, expected the lathe layout with {expected}")
-    start = 1 + (n - 1) * RING           # first inner-ring vertex
-    inner = np.all(faces >= start, axis=1)  # rim band (mixed rings) excluded
-    tri = points[faces[inner]]
+    empty = np.zeros((0, 3))
+    if kind == "fork":                          # the four tines (visuals 1..4), every face
+        tri, rim, inner = np.concatenate(dish_visuals(kind)[1:]), empty, empty
+    elif kind == "knife":                       # the blade: faces wholly above the bolster ring
+        v = dish_visuals(kind)[0]
+        tri, rim, inner = v[np.all(v[:, :, 2] >= KNIFE_BOLSTER_Z - 1e-9, axis=1)], empty, empty
+    elif kind in SECTIONS:                      # vessel interior, plate top, spoon bowl
+        from .tableware import tableware_geometry
+        points, _, faces = tableware_geometry(kind)["visuals"][0]
+        points, faces = np.asarray(points), np.asarray(faces)
+        n, ring = SECTIONS[kind], RING[kind]
+        expected = 2 + 2 * (n - 1) * ring
+        if len(points) != expected:
+            raise ValueError(f"{kind}: {len(points)} vertices, expected the lathe layout with {expected}")
+        start = 1 + (n - 1) * ring           # first inner-ring vertex
+        tri = points[faces[np.all(faces >= start, axis=1)]]  # rim band (mixed rings) excluded
+        rim, inner = points[start:start + ring].copy(), points[start:].copy()
+    else:
+        raise NotImplementedError(f"No food-contact rule for {kind!r}")
     cross = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
     areas = 0.5 * np.linalg.norm(cross, axis=1)
     normals = cross / (2. * areas[:, None])
-    _FOOD_CONTACT[kind] = FoodContact(kind, tri, normals, areas, float(areas.sum()),
-                                      points[start:start + RING].copy(), points[start:].copy())
+    _FOOD_CONTACT[kind] = FoodContact(kind, tri, normals, areas, float(areas.sum()), rim, inner)
     return _FOOD_CONTACT[kind]
 
 
@@ -169,8 +188,8 @@ def rack_sources(rack, k=DEFAULTS["directions"], ceiling_weight=DEFAULTS["ceilin
 
 
 def pools(kind, position_m, quaternion_xyzw, tolerance=POOL_TOLERANCE_M):
-    """True when the vessel cannot drain: some interior point sits below the rim's lowest point."""
-    if kind not in ("bowl", "mug", "tumbler"):
+    """True when a vessel or plate cannot drain: an interior point sits below the rim's lowest point."""
+    if kind not in POOLING_KINDS:
         return False
     fc = food_contact(kind)
     rot = quaternion_matrix_xyzw(quaternion_xyzw)
@@ -230,6 +249,9 @@ def load_state(path):
     raw = path.read_bytes()
     data = json.loads(raw)
     snap = data["initial_snapshot"]["poses"]
+    lower, basket = snap["LowerRack"], snap["SilverwareBasket"]
+    bp, bq = relative_pose(basket["position_m"], basket["quaternion_xyzw"], lower["position_m"], lower["quaternion_xyzw"])
+    basket_in = compose_pose(BODY_POSITIONS["LowerRack"], IDENTITY, bp, bq)
     objects = []
     for o in data["objects"]:
         rack, local, world, frame = o["rack"], o["rack_local_pose"], o["pose_world"], snap[o["rack"]]
@@ -237,13 +259,11 @@ def load_state(path):
                                  frame["position_m"], frame["quaternion_xyzw"])
         if np.linalg.norm(check - np.asarray(local["position_m"])) > 1e-5:
             raise ValueError(f"{path.name}: rack_local_pose of {o['object_id']} disagrees with pose_world")
-        p, q = compose_pose(BODY_POSITIONS[rack], IDENTITY, local["position_m"], local["quaternion_xyzw"])
+        frame = basket_in if rack == "SilverwareBasket" else (BODY_POSITIONS[rack], IDENTITY)
+        p, q = compose_pose(frame[0], frame[1], local["position_m"], local["quaternion_xyzw"])
         objects.append({"id": o["object_id"], "kind": o["kind"], "rack": rack,
                         "position_m": p, "quaternion_xyzw": q})
-    lower, basket = snap["LowerRack"], snap["SilverwareBasket"]
-    bp, bq = relative_pose(basket["position_m"], basket["quaternion_xyzw"], lower["position_m"], lower["quaternion_xyzw"])
-    return Arrangement(path.stem, str(path), hashlib.sha256(raw).hexdigest(), objects,
-                       compose_pose(BODY_POSITIONS["LowerRack"], IDENTITY, bp, bq))
+    return Arrangement(path.stem, str(path), hashlib.sha256(raw).hexdigest(), objects, basket_in)
 
 
 _COMPONENTS = None
@@ -293,7 +313,7 @@ if wp is not None:
             t_hit[i] = max_t[i]
 
 
-def cast(soup, origins, dirs, device="cpu", max_t=DEFAULTS["max_distance_m"]):
+def cast(soup, origins, dirs, device=DEVICE, max_t=DEFAULTS["max_distance_m"]):
     """(hit, t): hit is True where the ray hits any soup triangle within max_t (scalar or per ray);
     t is the hit distance, or max_t when nothing was hit."""
     if wp is None:
@@ -313,7 +333,7 @@ def cast(soup, origins, dirs, device="cpu", max_t=DEFAULTS["max_distance_m"]):
         return hit.numpy().astype(bool), t.numpy()
 
 
-def exposure_of(points, normals, soup, device="cpu", directions=DEFAULTS["directions"],
+def exposure_of(points, normals, soup, device=DEVICE, directions=DEFAULTS["directions"],
                 offset=DEFAULTS["origin_offset_m"], source="below", sources=None):
     """Per-sample exposure in [0, 1].
 
@@ -341,7 +361,7 @@ def exposure_of(points, normals, soup, device="cpu", directions=DEFAULTS["direct
     return np.where(denom > 0, (w * open_).sum(axis=1) / np.where(denom > 0, denom, 1.), 0.)
 
 
-def isolated_baseline(kind, position_m, quaternion_xyzw, device="cpu",
+def isolated_baseline(kind, position_m, quaternion_xyzw, device=DEVICE,
                       samples=DEFAULTS["samples_per_object"], directions=DEFAULTS["directions"],
                       source="below", sources=None):
     """Mean exposure of the object alone at its pose (self-occlusion only)."""
@@ -361,9 +381,10 @@ def mouth_up(kind, rack, quaternion_xyzw):
     return not orientation_metrics(kind, rack, {"quaternion_xyzw": list(map(float, quaternion_xyzw))})["valid"]
 
 
-def score_arrangement(arrangement, device="cpu", samples=DEFAULTS["samples_per_object"],
+def score_arrangement(arrangement, device=DEVICE, samples=DEFAULTS["samples_per_object"],
                       directions=DEFAULTS["directions"], appliance=True, source=DEFAULTS["source"],
-                      ceiling_weight=DEFAULTS["ceiling_weight"]):
+                      ceiling_weight=DEFAULTS["ceiling_weight"], baselines=True):
+    """Score one arrangement; ``baselines=False`` skips the per-object isolated diagnostic (objective path)."""
     soup = occluder_soup(arrangement, appliance)
     points, normals, owner, records = [], [], [], []
     for i, obj in enumerate(arrangement.objects):
@@ -393,10 +414,11 @@ def score_arrangement(arrangement, device="cpu", samples=DEFAULTS["samples_per_o
             per_sample[mask] = exposure_of(points[mask], normals[mask], soup, device, directions, source=src)
     for i, rec in enumerate(records):
         rec["exposure"] = float(per_sample[owner == i].mean())
-        rec["baseline"] = isolated_baseline(rec["kind"], rec["position_m"], rec["quaternion_xyzw"],
-                                            device, samples, directions, rec["ray_source"],
-                                            point_sources.get(rec["ray_source"]))
-        rec["relative"] = rec["exposure"] / rec["baseline"] if rec["baseline"] > 0 else None
+        if baselines:
+            rec["baseline"] = isolated_baseline(rec["kind"], rec["position_m"], rec["quaternion_xyzw"],
+                                                device, samples, directions, rec["ray_source"],
+                                                point_sources.get(rec["ray_source"]))
+            rec["relative"] = rec["exposure"] / rec["baseline"] if rec["baseline"] > 0 else None
     areas = np.array([r["area_m2"] for r in records])
     exposures = np.array([r["exposure"] for r in records])
     violations = [r["id"] for r in records if r["pools"]]
@@ -409,7 +431,7 @@ def score_arrangement(arrangement, device="cpu", samples=DEFAULTS["samples_per_o
                            "arm_sources": ARM_SOURCES if source == "per-rack" else None,
                            "ceiling_point": CEILING_POINT if source == "per-rack" else None,
                            "rack_direction_sets": {**RACK_SOURCE, "other": "below"} if source == "per-rack-directions" else None,
-                           "pool_tolerance_m": POOL_TOLERANCE_M,
+                           "pool_tolerance_m": POOL_TOLERANCE_M, "baselines": baselines,
                            "device": device, "appliance_occluders": appliance},
             "objects": records,
             "samples": {"points": points, "normals": normals, "owner": owner, "exposure": per_sample},
@@ -420,7 +442,7 @@ def score_state(path, **kwargs):
     return score_arrangement(load_state(path), **kwargs)
 
 
-def sanity_pair(device="cpu", samples=DEFAULTS["samples_per_object"], directions=DEFAULTS["directions"],
+def sanity_pair(device=DEVICE, samples=DEFAULTS["samples_per_object"], directions=DEFAULTS["directions"],
                 gap_m=.015, source=DEFAULTS["source"]):
     """A bowl mouth-DOWN on the lower rack floor, alone versus with a dinner plate below its rim.
 

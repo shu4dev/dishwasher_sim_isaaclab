@@ -59,8 +59,8 @@ def test_all_components_compose_with_local_dependencies(inspected_asset):
     assert report["root"] == _ROOT
     assert report["relocated_body_count"] == len(_BODIES)
     from dishsim_frigidaire.geometry import PARAMETERS
-    for rack in ("upper_rack", "lower_rack"):
-        assert report["files"][rack]["geometry_revision"] == PARAMETERS[rack]["geometry_revision"]
+    for component in ("upper_rack", "lower_rack", "silverware_basket"):
+        assert report["files"][component]["geometry_revision"] == PARAMETERS[component]["geometry_revision"], component
 
 
 def test_meshes_and_mass_properties_are_physically_valid(inspected_asset):
@@ -139,59 +139,85 @@ def _wire_family_bounds(component, prefix):
 
 
 def test_revised_rim_envelopes_match_user_dimensions(reconstructed_components):
-    """The dimensions apply to the actual wire rim, excluding wheel/grip projections."""
-    for body, rim, width, length in [
-        ("LowerRack", "UpperRim", .54864, .58166),
-        ("UpperRack", "TopRim", .50800, .54864),
-    ]:
+    """The tape dimensions apply to the actual wire rim, excluding wheel/grip projections."""
+    from dishsim_frigidaire.geometry import PARAMETERS
+
+    for body, rim, key in [("LowerRack", "UpperRim", "lower_rack"), ("UpperRack", "TopRim", "upper_rack")]:
+        p = PARAMETERS[key]
         lo, hi = _wire_family_bounds(reconstructed_components[body], rim)
-        assert np.allclose((hi-lo)[:2], [width, length], atol=0.0001), body
+        assert np.allclose((hi-lo)[:2], [p["wire_width"], p["wire_depth"]], atol=0.0001), body
+    assert np.allclose([PARAMETERS["lower_rack"]["wire_width"], PARAMETERS["lower_rack"]["wire_depth"]], [.525, .563])
+    assert np.allclose([PARAMETERS["upper_rack"]["wire_width"], PARAMETERS["upper_rack"]["wire_depth"]], [.480, .515])
 
 
 def test_lower_tines_match_measured_grid_and_basket_clearance(reconstructed_components):
-    """All 72 tines fit the agreed margins beside the translated, full-size basket."""
-    from dishsim_frigidaire.geometry import PARAMETERS
+    """The 6 x 12 tape grid minus the basket bay fits the derived margins beside the tape-measured basket."""
+    from dishsim_frigidaire.geometry import (PARAMETERS, lower_basket_footprint, lower_tine_heights,
+                                             lower_tine_mask, lower_tine_positions)
 
+    p = PARAMETERS["lower_rack"]
     rack = reconstructed_components["LowerRack"]
     rows = {}
     for name, path, radius in rack["wires"]:
         if not name.startswith("TineBank") or "_Tooth" not in name:
             continue
         rows.setdefault(round(float(path[0, 1]), 6), []).append((path, radius))
-    assert len(rows) == 6
+    assert len(rows) == p["tine_banks"] == 6
     ys = np.array(sorted(rows))
-    assert np.allclose(ys, [-.18583, -.112498, -.039166, .034166, .107498, .18083], atol=1e-9)
-    assert np.allclose(np.diff(ys), .073332, atol=1e-9)
+    grid_x, grid_y = lower_tine_positions()
+    mask, heights = lower_tine_mask(), lower_tine_heights()
+    assert np.allclose(ys, grid_y, atol=1e-9)
+    assert np.allclose(np.diff(ys), .080, atol=1e-9)
     lo, hi = _wire_family_bounds(rack, "UpperRim")
-    assert np.allclose([ys[0]-lo[1], hi[1]-ys[-1]], [.105, .110], atol=1e-7)
-    for y in ys:
+    margins = p["tine_margins"]
+    assert np.allclose([ys[0]-lo[1], hi[1]-ys[-1]], [margins["front"], margins["rear"]], atol=1e-7)
+    assert mask.sum(axis=1).tolist() == [12, 12, 10, 10, 10, 10]
+    assert np.allclose(heights, [.095, .095, .045, .045, .095, .095])
+    for row, y in enumerate(ys):
         teeth = sorted(rows[y], key=lambda t: t[0][0, 0])
-        assert len(teeth) == 12
+        assert len(teeth) == mask[row].sum()
         xs = np.asarray([path[0, 0] for path, _ in teeth])
-        assert np.allclose(np.diff(xs), .03169454545454545, atol=1e-9)
-        assert np.allclose([xs[0]-lo[0], hi[0]-xs[-1]], [.080, .120], atol=1e-7)
-        assert all(np.allclose(path[-1]-path[0], [.008, 0, .105], atol=1e-9)
+        assert np.allclose(xs, grid_x[mask[row]], atol=1e-9)
+        assert np.allclose(np.diff(xs), .036, atol=1e-9)
+        if mask[row].all():
+            assert np.allclose([xs[0]-lo[0], hi[0]-xs[-1]], [margins["left"], margins["right"]], atol=1e-7)
+        assert all(np.allclose(path[-1]-path[0], [.008, 0, heights[row]], atol=1e-9)
                    and abs(radius-.00195) < 1e-9 for path, radius in teeth)
     basket = reconstructed_components["SilverwareBasket"]
     basket_lo, basket_hi = _wire_family_bounds(basket, "")
     seat = np.asarray(PARAMETERS["origins"]["SilverwareBasket"])-PARAMETERS["origins"]["LowerRack"]
-    assert np.allclose(seat, [.2135, .120, .011], atol=1e-9)
+    assert np.allclose(seat, PARAMETERS["silverware_basket"]["seat"]["origin_in_rack_m"], atol=1e-9)
+    assert np.allclose(seat, [.184, .096, .009], atol=1e-9)
     assert np.allclose(rack["sites"]["basket_seat"], seat, atol=1e-9)
-    assert np.allclose((basket_hi-basket_lo)[:2], [.088, .312], atol=1e-7)
-    tine_right = max(path[:, 0].max()+radius for row in rows.values() for path, radius in row)
-    assert basket_lo[0]+seat[0]-tine_right >= .00523-1e-9
+    assert np.allclose((basket_hi-basket_lo)[:2], [.095, .320], atol=1e-7)
+    footprint = lower_basket_footprint()
+    basket_y = (basket_lo[1]+seat[1], basket_hi[1]+seat[1])
+    assert np.allclose(footprint["x"], [basket_lo[0]+seat[0], basket_hi[0]+seat[0]], atol=1e-9)
+    assert np.allclose(footprint["y"], basket_y, atol=1e-9)
+    # Only rows beside the basket can reach it; the full front plate rows lie
+    # ahead of its footprint, so their rightmost tines do not enter the X audit.
+    tine_right = max(path[:, 0].max()+radius for y, row in rows.items()
+                     if basket_y[0]-.006 <= y <= basket_y[1]+.006 for path, radius in row)
+    assert basket_lo[0]+seat[0]-tine_right >= .005
     reserved = PARAMETERS["lower_rack"]["basket_reserved_x"]
     assert reserved[0] <= basket_lo[0]+seat[0]
     assert reserved[1] >= basket_hi[0]+seat[0]
 
 
 def test_lower_tine_rails_remain_attached_to_floor(reconstructed_components):
+    """Every row keeps a floor-attached rail that ends at its last remaining tine."""
+    from dishsim_frigidaire.geometry import lower_tine_mask, lower_tine_positions
+
     rack = reconstructed_components["LowerRack"]
+    grid_x, _ = lower_tine_positions()
+    mask = lower_tine_mask()
     floor = [w for w in rack["wires"] if w[0].startswith("FloorLongU")]
     rails = [w for w in rack["wires"] if w[0].startswith("TineBank") and w[0].endswith("_Base")]
     assert len(rails) == 6
     for name, rail, radius in rails:
         assert np.allclose(rail[:, 2], .006, atol=1e-9)
+        present = np.flatnonzero(mask[int(name[len("TineBank"):-len("_Base")])])
+        assert np.allclose([rail[0, 0], rail[-1, 0]], [grid_x[present[0]], grid_x[present[-1]]], atol=1e-9)
         crossings = 0
         for _, path, floor_radius in floor:
             if not rail[0, 0] <= path[0, 0] <= rail[-1, 0]:
@@ -205,46 +231,74 @@ def test_lower_tine_rails_remain_attached_to_floor(reconstructed_components):
                 assert np.allclose(tooth[0, [1, 2]], rail[0, [1, 2]], atol=1e-9)
 
 
-def test_upper_floor_preserves_five_loading_channels(reconstructed_components):
-    """Both outer slopes, both mug valleys and the central valley must remain distinct."""
+def test_upper_floor_restores_the_sloped_glass_channel(reconstructed_components):
+    """The photo-fitted five channels survive inside the tape rim: a mug valley beside the outer
+    column, a LOW ridge, a glass slope descending outward to the trough against the wall, and
+    the central shoulders above the cup channel and the centre."""
+    from dishsim_frigidaire.geometry import PARAMETERS
+
+    p = PARAMETERS["upper_rack"]
     rack = reconstructed_components["UpperRack"]
     _, section, _ = next(w for w in rack["wires"] if w[0].startswith("ContouredCrossU"))
     height = lambda x: float(np.interp(x, section[:, 0], section[:, 2]))
-    # Ridge-to-valley differences survive rounded bends and are large enough
-    # to change how a glass/mug rests, rather than a decorative corrugation.
+    hx, column, profile = p["wire_width"]/2-p["rim_diameter"]/2, max(p["tine_bank_x"]), p["channel_profile"]
+    valley, ridge = column+profile["mug_valley_offset_from_column"], column+profile["ridge_offset_from_column"]
+    trough = hx-profile["trough_inset_from_rim"]
+    assert np.allclose([valley, ridge, trough, hx], [.1455, .1555, .220, .2378], atol=1e-9)
     for sign in [-1, 1]:
-        assert height(sign*.153)-height(sign*.234) > .020
-        assert height(sign*.153)-height(sign*.130) > .020
-        assert height(sign*.065)-height(sign*.109) > .010
-        assert height(sign*.065)-height(0) > .010
-    assert .126 < .112-section[:, 2].min() < .132
+        assert height(sign*trough)-section[:, 2].min() < .003            # the trough shares the floor minimum (fillets differ by ~2 mm) ...
+        assert hx-trough < .020 and height(sign*(hx-.0028)) > .050        # ... and sits against the rim wall
+        assert height(sign*ridge)-height(sign*valley) > .010             # a real ridge above the mug valley ...
+        assert height(sign*ridge) < .006                                 # ... but low: the v3 crest stood at +18 mm
+        slope = [height(sign*x) for x in np.linspace(ridge+.004, trough-.004, 25)]
+        assert np.all(np.diff(slope) < 1e-6)                             # the glass slope descends outward
+        assert height(sign*.062)-height(sign*.10875) > .010
+        assert height(sign*.062)-height(0) > .010
+    assert .119 < p["rim_height"]-section[:, 2].min() < .125
+    hy = p["wire_depth"]/2-p["rim_diameter"]/2
+    assert abs(hy-.2553) < 1e-9 and p["rim_height"] == .1041
     front_ends = [path[0] for name, path, _ in rack["wires"]
                   if name.startswith("LongitudinalCradle")]
     assert len(front_ends) == 9
-    assert all(abs(point[1]+.27212) < 1e-7 and abs(point[2]-.112) < 1e-7
+    assert all(abs(point[1]+hy) < 1e-7 and abs(point[2]-p["rim_height"]) < 1e-7
                for point in front_ends)
 
 
 def test_upper_tines_match_measured_grid_and_edge_datums(reconstructed_components):
-    """52 base centers meet the agreed spacings without changing the wire rim."""
+    """48 base centers (13 + 11 + 11 + 13) meet the tape spacings inside the derived margins."""
+    from dishsim_frigidaire.geometry import PARAMETERS, upper_tine_mask, upper_tine_positions
+
+    p = PARAMETERS["upper_rack"]
     rack = reconstructed_components["UpperRack"]
     teeth = [(name, path, radius) for name, path, radius in rack["wires"]
              if name.startswith("BowlComb") and "_Tooth" in name]
-    assert len(teeth) == 52
+    mask = upper_tine_mask()
+    assert len(teeth) == mask.sum() == 48
+    assert mask.sum(axis=0).tolist() == [13, 11, 11, 13]
+    grid_x, grid_y = upper_tine_positions()
     xs = np.unique([path[0, 0] for _, path, _ in teeth])
-    assert np.allclose(xs, [-.1325, -.0375, .0375, .1325], atol=1e-9)
-    assert np.allclose(np.diff(xs), [.095, .075, .095], atol=1e-9)
+    assert np.allclose(xs, grid_x, atol=1e-9)
+    assert np.allclose(xs, [-.135, -.045, .045, .135], atol=1e-9)
+    assert np.allclose(np.diff(xs), .090, atol=1e-9)
     lo, hi = _wire_family_bounds(rack, "TopRim")
-    assert np.allclose([xs[0]-lo[0], hi[0]-xs[-1]], .1215, atol=1e-7)
-    for x in xs:
-        column = [path for _, path, _ in teeth if abs(path[0, 0]-x) < 1e-9]
-        ys = np.sort([path[0, 1] for path in column])
-        assert len(column) == 13
-        assert np.allclose(np.diff(ys), .033, atol=1e-9)
-        assert abs(hi[1]-ys[-1]-.0515) < 1e-7
-        assert abs(ys[0]-lo[1]-.10114) < 1e-7
+    assert abs(p["tine_side_margin"]-.105) < 1e-9
+    assert np.allclose([xs[0]-lo[0], hi[0]-xs[-1]], p["tine_side_margin"], atol=1e-7)
+    absent_columns = p["tine_absent"]["columns"]
+    for column, x in enumerate(xs):
+        paths = [path for _, path, _ in teeth if abs(path[0, 0]-x) < 1e-9]
+        ys = np.sort([path[0, 1] for path in paths])
+        assert len(paths) == mask[:, column].sum()
+        assert np.allclose(ys, grid_y[mask[:, column]], atol=1e-9)
+        pitches = np.diff(ys)
+        jumps = pitches[~np.isclose(pitches, .037, atol=1e-9)]
+        if column in absent_columns:
+            assert len(jumps) == 1 and abs(jumps[0]-3*.037) < 1e-9
+        else:
+            assert len(jumps) == 0
+        assert abs(hi[1]-ys[-1]-p["tine_rear_margin"]) < 1e-7
+        assert abs(ys[0]-lo[1]-p["tine_front_margin"]) < 1e-7
         assert all(np.allclose(path[-1]-path[0], [0., .008, .091], atol=1e-9)
-                   for path in column)
+                   for path in paths)
     assert all(abs(radius-.0018) < 1e-9 for _, _, radius in teeth)
 
 
@@ -649,3 +703,51 @@ def _inspect(directory):
 
 if __name__ == "__main__":
     _inspect(Path(sys.argv[1]))
+
+
+def test_basket_keeps_the_v3_design_at_the_tape_size(reconstructed_components):
+    """Tapered lattice body, double rims, three equal cross partitions and the v3 loop handle over the
+    +X wall, all inside the tape-measured 95 x 320 mm top rim (130 mm body) with the handle top at 220 mm."""
+    from dishsim_frigidaire.geometry import PARAMETERS
+
+    p = PARAMETERS["silverware_basket"]
+    basket = reconstructed_components["SilverwareBasket"]
+    wires = {name: (np.asarray(path), radius) for name, path, radius in basket["wires"]}
+    lo, hi = _wire_family_bounds(basket, "TopRim")
+    assert np.allclose((hi-lo)[:2], [.095, .320], atol=1e-7)
+    lo, hi = _wire_family_bounds(basket, "BottomRim")
+    assert np.allclose((hi-lo)[:2], [.095*.848, .320*.952], atol=1e-4)      # the v3 taper
+    for family in ("BottomReinforcement", "TopLip"):
+        assert any(name.startswith(family) for name in wires)
+    upper, r_upper = wires["HandleUpper"]
+    assert abs(upper[:, 2].max()+r_upper-p["handle_top_z"]) < 1e-9          # top surface at the tape height
+    assert np.allclose(upper[:, 0], .0475-.003-p["handle"]["plane_inset_from_rim_x"])   # over the +X wall
+    assert abs(abs(upper[0, 1])-p["handle"]["foot_y_abs"]) < 1e-9 and upper[0, 2] == .130-.003
+    lower, _ = wires["HandleLower"]
+    assert lower[:, 2].max() < upper[:, 2].max()-.020                        # an open aperture
+    assert len([n for n, _, _ in basket["wires"] if n == "HandleSupportStraps"]) == 2
+    partitions = sorted({round(float(path[0, 1]), 6) for name, (path, _) in wires.items() if name.startswith("Partition") and name.endswith("_TopEdge")})
+    assert np.allclose(partitions, [-.080, 0., .080], atol=1e-9)
+    cross = sorted(float(path[0, 1]) for name, (path, _) in wires.items() if name.startswith("BottomCrossRib"))
+    pitch = np.diff(cross).mean()
+    assert .0065 < pitch < .0075 and pitch-2*p["wire_radii"]["lattice"] < .006   # lattice apertures under 6 mm
+    assert (hi-lo)[2] < .010 and basket["sites"]["handle_center"][2] == p["handle_top_z"]-p["wire_radii"]["handle_upper"]
+
+
+def test_outer_heights_match_the_tape(reconstructed_components):
+    """The user measured outside, bottom to top: each rack from its lowest floor wire to the rim top,
+    the basket from its lowest wire to the top rim and to the handle top (2026-09-22)."""
+    from dishsim_frigidaire.geometry import PARAMETERS
+
+    for rack, floor in (("UpperRack", ("ContouredCrossU", "LongitudinalCradle")), ("LowerRack", ("FloorCrossU", "FloorLongU"))):
+        p = PARAMETERS["upper_rack" if rack == "UpperRack" else "lower_rack"]
+        comp = reconstructed_components[rack]
+        low = min(_wire_family_bounds(comp, prefix)[0][2] for prefix in floor)
+        top = _wire_family_bounds(comp, "TopRim" if rack == "UpperRack" else "UpperRim")[1][2]
+        assert abs(top-low-p["outer_height_tape"]) < .0005, (rack, top-low)
+    p = PARAMETERS["silverware_basket"]
+    basket = reconstructed_components["SilverwareBasket"]
+    low = _wire_family_bounds(basket, "")[0][2]
+    assert abs(low) < 1e-9                                                   # origin = the bottom face
+    assert abs(_wire_family_bounds(basket, "TopRim")[1][2]-low-p["body_height"]) < 1e-9
+    assert abs(_wire_family_bounds(basket, "HandleUpper")[1][2]-low-p["handle_top_z"]) < 1e-9

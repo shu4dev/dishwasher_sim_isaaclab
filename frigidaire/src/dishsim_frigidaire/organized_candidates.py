@@ -13,8 +13,11 @@ import math
 import time
 import numpy as np
 from .random_poses import compose_pose
+from .geometry import PARAMETERS
 from .organization import OrganizationGeometry, _bounds_distance, orientation_metrics, default_policy, ray_blocked
 from .initial_state_candidates import InitialCollisionChecker, _frames, _pose, _graph
+
+_RACK_KEY={"UpperRack":"upper_rack","LowerRack":"lower_rack"}
 
 
 def _patterns(refinement_level=0):
@@ -39,8 +42,10 @@ def _patterns(refinement_level=0):
     # Mouth placement grids match channel widths and authored support-wire pitch.
     # The 0/15/30 degree mug families and four yaw families preserve handle grouping.
     for rack in ("UpperRack","LowerRack"):
-        xs=([- .198,-.105,0.,.105,.198] if rack=="UpperRack" else [-.195,-.097,0.,.097,.195])
-        ys=np.asarray([-.207,-.103,.001,.105,.209])
+        # Upper: glass channels (+-.18775) and cup channels (+-.10875) of the 480 mm rim; lower:
+        # channels of the 525 mm rim. Row ys stay inside the 515 / 563 mm tape-measured depths.
+        xs=([-.18775,-.10875,0.,.10875,.18775] if rack=="UpperRack" else [-.187,-.093,0.,.093,.187])
+        ys=np.asarray([-.194,-.097,.001,.099,.196] if rack=="UpperRack" else [-.200,-.100,.001,.102,.202])
         for ix,x in enumerate(xs):
             for iy,y in enumerate(ys):
                 for tilt,yaw in ((0,90),(0,270),(15,90),(15,270),(30,90),(30,270)):
@@ -48,7 +53,7 @@ def _patterns(refinement_level=0):
                     add("mug",rack,f"channel{ix}",y,x,y,orient,variant=f"tilt{tilt}_yaw{yaw}")
         # Bowls align along actual tine gaps; steep tilts use slots spaced by 3 teeth.
         if rack=="UpperRack":
-            bowlxs=[-.173,-.058,.058,.173]
+            bowlxs=[-.163,-.055,.055,.163]
             bowlys=(upper_y[:-1]+upper_y[1:])/2
         else:
             bowlxs=(lower_x[:-1]+lower_x[1:])/2
@@ -102,7 +107,7 @@ def _support_pose(checker, geometry, pattern, frames, max_steps=80):
     rack_rot=quaternion_matrix_xyzw(frames[rack]["quaternion_xyzw"])
     if not np.allclose(rack_rot,np.eye(3),atol=1e-5):
         raise ValueError("Support search currently requires the measured rack frame to be upright")
-    z=.118-float(vertices[:,2].min())+.008
+    z=PARAMETERS[_RACK_KEY[rack]]["rim_height"]+.008-float(vertices[:,2].min())   # start just above the rim
     lower_z=-.027-float(vertices[:,2].min())
     for iteration in range(max_steps):
         local=[*pattern["position_xy_m"],z]
@@ -174,7 +179,8 @@ def generate_catalog(asset_dir, baseline_components, seed=20260911, deadline=Non
             from .random_poses import quaternion_matrix_xyzw
             localpoints=points@quaternion_matrix_xyzw(local["quaternion_xyzw"]).T+local["position_m"]
             # Full visual footprint must fit inside the rim; cabinet closure is still physical.
-            hx,hy=(.2518,.27212) if pattern["rack"]=="UpperRack" else (.27192,.28843)
+            rim=PARAMETERS[_RACK_KEY[pattern["rack"]]]
+            hx,hy=rim["wire_width"]/2-rim["rim_diameter"]/2,rim["wire_depth"]/2-rim["rim_diameter"]/2
             if np.any(localpoints[:,:2].min(0)<[-hx-.001,-hy-.001]) or np.any(localpoints[:,:2].max(0)>[hx+.001,hy+.001]):
                 rejected["rack_footprint"]+=1;continue
             index=len(candidates);cid=f"organized_{pattern['kind']}_{pattern['rack']}_{ordinal:05d}"

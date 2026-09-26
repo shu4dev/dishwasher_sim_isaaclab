@@ -27,7 +27,7 @@ CMAP, VMIN, VMAX = "viridis", 0., 1.
 def parse():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--pair", default="random_06")
-    p.add_argument("--device", default="cpu")
+    p.add_argument("--device", default=E.DEVICE)
     p.add_argument("--samples", type=int, default=E.DEFAULTS["samples_per_object"])
     p.add_argument("--directions", type=int, default=E.DEFAULTS["directions"])
     p.add_argument("--frames", type=int, default=72)
@@ -94,7 +94,7 @@ def draw_top(ax, result, segments, title):
     return sc
 
 
-def rays_gif(result, arrangement, segments, out, frames=72, device="cpu"):
+def rays_gif(result, arrangement, segments, out, frames=72, device=E.DEVICE):
     """Animate one spray arm under one bowl; rays green when open, red up to the hit point."""
     import matplotlib.pyplot as plt
     from matplotlib.animation import FuncAnimation, PillowWriter

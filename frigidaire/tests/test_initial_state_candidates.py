@@ -219,3 +219,23 @@ def test_milp_prefers_known_objects_at_equal_cardinality_and_keeps_exact_nogoods
     proposal = milp_proposal(problem, preferred_indices=[0, 2], excluded_sets=[[0, 2]], time_limit_s=2)
     assert proposal['count'] == 2 and proposal['selected_preferred_count'] == 1
     assert proposal['geometric_cardinality_upper_bound'] == 2
+
+
+def test_tableware_map_replaces_stock_dishes_and_admits_new_kinds():
+    pytest.importorskip("fcl")
+    from dishsim_frigidaire.paths import ASSET_DIR, REPO_ROOT
+    hotec = REPO_ROOT / "assets/models/hotec_wheatstraw/v2"
+    if not (Path(ASSET_DIR).is_dir() and hotec.is_dir()):
+        pytest.skip("collection build or HOTEC assets not present")
+    tableware = {kind: hotec / f"{kind}.usda" for kind in ("plate", "bowl", "cup")}
+    checker = InitialCollisionChecker(ASSET_DIR, tableware=tableware)
+    stock = InitialCollisionChecker(ASSET_DIR)
+    assert "cup" in checker.parts and "cup" not in stock.parts                  # a new kind is admitted
+    assert any("hotec_wheatstraw" in key for key in checker.asset_sha256)       # and hashed by its own file
+    assert len(checker.parts["bowl"]) != len(stock.parts["bowl"]) or not np.allclose(
+        checker.bounds["bowl"][1], stock.bounds["bowl"][1])                      # the stock bowl was replaced
+    cup = checker.candidate_body({"object_id": "cup_01", "kind": "cup", "pose_world": pose([5., 5., 5.])})
+    other = checker.candidate_body({"object_id": "cup_02", "kind": "cup", "pose_world": pose([5.2, 5., 5.])})
+    assert checker.pair(cup, other)["valid"]
+    with pytest.raises(ValueError, match="Unsupported"):
+        stock.candidate_body({"kind": "cup", "pose_world": pose()})

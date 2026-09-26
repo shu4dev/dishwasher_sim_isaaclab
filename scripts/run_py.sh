@@ -19,7 +19,15 @@ if [ ! -d /isaac-sim ]; then
     # it stays a process env var - never written to disk or the compose file.
     exec docker exec -w "/workspace/dishsim/$REL" -e PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
         ${HF_TOKEN:+-e HF_TOKEN} \
-        dishsim-isaac /workspace/dishsim/scripts/run_py.sh "$@"
+        "${DISHSIM_NAME:-dishsim-isaac}" /workspace/dishsim/scripts/run_py.sh "$@"
 fi
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+# Kit-free `pxr` (USD python) for the Frigidaire FCL collision helpers (loading.collision_parts):
+# Kit's own USD extension carries the modules and their .so files; both paths must be set
+# before the interpreter starts (the loader reads LD_LIBRARY_PATH once).
+USD_LIBS="$(ls -d /isaac-sim/extscache/omni.usd.libs-* 2>/dev/null | head -n 1)"
+if [ -n "$USD_LIBS" ]; then
+    export PYTHONPATH="${USD_LIBS}${PYTHONPATH:+:$PYTHONPATH}"
+    export LD_LIBRARY_PATH="${USD_LIBS}/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 exec /isaac-sim/python.sh "$@"

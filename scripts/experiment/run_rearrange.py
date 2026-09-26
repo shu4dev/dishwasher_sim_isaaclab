@@ -158,55 +158,8 @@ class IsaacOracle:
     def at_goal(self, item, T):
         return rearrange.at_goal(item, T)
 
-    def _disturbed(self, pre, poses, moved_id):
-        return [
-            it["item_id"] for it in self.roster if it["item_id"] != moved_id and (
-                float(np.linalg.norm(poses[it["item_id"]][:3, 3] - pre[it["item_id"]][:3, 3]))
-                > rearrange.DISTURB_POS_M
-                or rearrange.rot_angle_deg(pre[it["item_id"]], poses[it["item_id"]])
-                > rearrange.DISTURB_ROT_DEG)]
-
     def execute(self, move):
-        pre = self.poses()
-        self.teleport(move.item_id, move.T_base_obj)
-        hist = []
-        for s in range(rearrange.SETTLE_STEPS_MOVE):
-            self.step(1)
-            if s >= rearrange.SETTLE_STEPS_MOVE - rearrange.DRIFT_WINDOW:
-                hist.append(self.measured(move.item_id))
-        poses = self.poses()
-        settled = poses[move.item_id]
-        drift_p = float(np.linalg.norm(hist[-1][:3, 3] - hist[0][:3, 3]))
-        drift_deg = rearrange.rot_angle_deg(hist[0], hist[-1])
-        dev_p = float(np.linalg.norm(settled[:3, 3] - np.asarray(move.T_base_obj)[:3, 3]))
-        disturbed = self._disturbed(pre, poses, move.item_id)
-        info = {"settle_dev_mm": round(dev_p * 1e3, 1), "drift_mm": round(drift_p * 1e3, 1),
-                "disturbed": disturbed}
-        if disturbed:
-            # fatal FIRST: a put-back cannot restore a knocked neighbour
-            return poses, "disturbed", info
-        if drift_p > rearrange.STABLE_POS_M or drift_deg > rearrange.STABLE_ROT_DEG \
-                or dev_p > rearrange.MOVE_DEV_MAX_M:
-            # NON-fatal failed settle: return the item to its pre-move settled pose,
-            # re-settle, and hand the episode back exactly the pre-move state. The put-back
-            # is a teleport-into-contact at a pose that was a settled equilibrium moments
-            # ago, so the INIT_MATCH_* reproduction gates are the right judge of it.
-            self.teleport(move.item_id, pre[move.item_id])
-            for _ in range(rearrange.SETTLE_STEPS_MOVE):
-                self.step(1)
-            poses = self.poses()
-            back_dp = float(np.linalg.norm(
-                poses[move.item_id][:3, 3] - pre[move.item_id][:3, 3]))
-            back_dr = rearrange.rot_angle_deg(pre[move.item_id], poses[move.item_id])
-            info["teleport_back_mm"] = round(back_dp * 1e3, 1)
-            re_disturbed = self._disturbed(pre, poses, move.item_id)
-            if re_disturbed:
-                info["disturbed"] = re_disturbed
-                return poses, "disturbed", info      # the put-back knocked a neighbour
-            if back_dp > rearrange.INIT_MATCH_POS_M or back_dr > rearrange.INIT_MATCH_ROT_DEG:
-                return poses, "unstable-settle", info  # the put-back itself failed
-            return poses, "failed-settle", info
-        return poses, None, info
+        return rearrange.settle_move(move, self.teleport, self.step, self.poses, self.measured)
 
 
 def main() -> int:

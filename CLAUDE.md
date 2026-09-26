@@ -179,6 +179,44 @@ Two traps: Warp kernels must live in a file (never `python -c`), and settling a 
 proposal must go through `frigidaire_organized_validate.py`, because the claims evidence
 script rejects lower-rack mugs.
 
+## Frigidaire arrangement planner (2026-09-20)
+
+Kit-free planner over the revision-5 exposure objective: a messy counter pile (new runtime worktop
+slab, top at 0.914 m) plus unorganized racks -> every object inside, maximise `S`. Reuses the Bosch
+driver `rearrange.run_episode` with a Frigidaire FCL world and a geometric oracle (support-order
+fault), goals from the screened candidate pool plus keep-in-place, greedy sequencer with the counter
+cap, first-fit baseline, one Isaac settle of the final arrangement as the gate. Lives in
+`frigidaire/src/dishsim_frigidaire/planner.py`; scripts `frigidaire_planner_{instances,generate,run,video}.py`;
+reference `frigidaire/docs/planner.md`; outputs under `results/planner/frigidaire/`. Two traps: the
+backend's rack-speed gate flakes (the generator retries the other rack order), and `scripts/run_py.sh`
+now exports Kit's USD extension so `pxr` imports Kit-free (the FCL checker needs it).
+Geometry (2026-09-22): the twin's racks and basket are now tape-measured (48/64 tines, 1x4 basket 320 x 95 x 130 with a 220 mm handle; revisions `upper_tines_4x13_v4` / `lower_tines_6x12_v3` / `basket_1x4_320x95_v4` since 2026-09-23, when the rim and basket heights were fixed to the tape's outside heights), claims variant B retired, the v3 and v4 builds archived under `build/frigidaire_collection/history/`; reference `frigidaire/docs/geometry.md`.
+
+## HOTEC wheat-straw dinnerware assets (2026-09-21)
+
+Parametric plate/bowl/cup USDs of the user's real set, built Kit-free by `src/dishsim/hotec_gen.py`
+into `assets/models/hotec_wheatstraw/v1/` (metres, Z-up, base-centred origin, 192/192/168 convex
+pieces, four colour variants; v1 has no MassAPI, `v2/` adds the user's measured masses as `physics:mass` on the
+default prim only: plate 0.094625 / bowl 0.067375 / cup 0.0595 kg, 8-piece averages). Every non-listing
+value is an `estimated` parameter in the module table; further measurements go into the next folder
+(`v3/`) with `--set kind.name=value`, never overwriting an earlier one. Brimful capacities are computed to the lowest rim
+point (bowl 764 vs 769 mL advertised; cup 283 vs 355 mL — the envelope cannot hold 12 oz, documented,
+not tuned). Report: `docs/hotec_wheatstraw_asset.md`; tests: `tests/test_hotec_gen.py`; the Frigidaire
+load/settle/orbit script is `frigidaire/scripts/evaluation/frigidaire_hotec_load.py` (`--layout-only`
+first, then Kit). Landmine: the loading helpers assume centre-origin pieces — place by centroid.
+
+## HOTEC rearrangement benchmark (2026-09-23)
+
+Frigidaire twin + HOTEC v2 set: 7 bowls (easy, counter allowance n+3), + 8 plates (medium, n+1), + 8 cups
+(hard, n+0); n dishes start in messy counter stacks, the rest dropped into the racks. No hand-given goal: the
+highest-exposure load found by coordinate ascent (track A reaches it; track B is open, scored by S). Teleport
+moves, Isaac settle per move, end check = retract both racks + containment. Kit-free library/CLI/scheduler
+`frigidaire/scripts/experiment/frigidaire_bench.py`, Kit side `frigidaire_bench_kit.py`, results page
+`frigidaire/scripts/evaluation/frigidaire_bench_page.py`; reference, decisions and landmines:
+`frigidaire/docs/hotec_bench.md`; outputs under `results/benchmark/frigidaire_hotec/`. Two traps: pass host
+paths into the container only through `rel()` (a `/home/...` path lands in the container's writable layer),
+and stop jobs by PID, never broad `pkill -f` in the shared container.
+
 ## Ground rules
 
 - `assets/`, `media/`, `results/`, `logs/`, `outputs/` are gitignored; never commit them.

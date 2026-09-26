@@ -35,7 +35,8 @@ PAPER = "#fbfcfd"
 
 
 def measurements(component):
-    """Measure paths actually generated, and check their parameter alignment."""
+    """Measure paths actually generated, and check their alignment with the masked parameter grid."""
+    p = geometry.PARAMETERS["upper_rack"]
     teeth = [(name, np.asarray(path) * 1000, radius * 1000)
              for name, path, radius in component["wires"]
              if name.startswith("BowlComb") and "_Tooth" in name]
@@ -43,12 +44,21 @@ def measurements(component):
         raise ValueError("Generated upper rack has no tine paths")
     bases = np.asarray([path[0] for _, path, _ in teeth])
     tips = np.asarray([path[-1] for _, path, _ in teeth])
-    xs, ys = np.unique(bases[:, 0]), np.unique(bases[:, 1])
     expected_x, expected_y = geometry.upper_tine_positions()
-    if (len(teeth) != len(xs) * len(ys)
-            or not np.allclose(xs, np.asarray(expected_x) * 1000)
-            or not np.allclose(ys, np.asarray(expected_y) * 1000)):
+    expected_x, expected_y = np.asarray(expected_x) * 1000, np.asarray(expected_y) * 1000
+    mask = geometry.upper_tine_mask()
+    xs = np.unique(bases[:, 0])
+    on_grid = np.isclose(bases[:, 1][:, None], expected_y[None, :]).any(axis=1).all()
+    if len(teeth) != int(mask.sum()) or not np.allclose(xs, expected_x) or not on_grid:
         raise ValueError("Generated tine paths do not match the parameter grid")
+    for column, x in enumerate(xs):
+        present = np.sort(bases[np.isclose(bases[:, 0], x), 1])
+        wanted = expected_y[mask[:, column]]
+        if len(present) != len(wanted) or not np.allclose(present, wanted):
+            raise ValueError("Column %d tine positions do not match the parameter mask" % column)
+    absent = [{"column": int(column), "index": int(index), "y": float(expected_y[index])}
+              for index, column in zip(*np.nonzero(~mask))]
+    ys = expected_y
     rim = [(np.asarray(path) * 1000, radius * 1000)
            for name, path, radius in component["wires"] if name.startswith("TopRim")]
     rim_min = np.min([path.min(axis=0) - radius for path, radius in rim], axis=0)
@@ -56,6 +66,7 @@ def measurements(component):
     report = {
         "model": geometry.PARAMETERS["model"],
         "component": "UpperRack",
+        "geometry_revision": p["geometry_revision"],
         "status": "SOURCE_GEOMETRY_PREVIEW; not installed-USD or Isaac validation",
         "source_sha256": hashlib.sha256(Path(geometry.__file__).read_bytes()).hexdigest(),
         "units": "mm",
@@ -64,16 +75,24 @@ def measurements(component):
         "columns_left_to_right": len(xs),
         "positions_front_to_back": len(ys),
         "tine_count": len(teeth),
+        "absent_positions": absent,
         "wire_rim_width": float(rim_max[0] - rim_min[0]),
         "wire_rim_depth": float(rim_max[1] - rim_min[1]),
         "column_x": xs.tolist(),
         "row_y_front_to_back": ys.tolist(),
+        "tines_per_column": mask.sum(axis=0).tolist(),
         "column_gaps_left_to_right": np.diff(xs).tolist(),
         "row_pitches_front_to_back": np.diff(ys).tolist(),
         "margins": {"left": float(xs[0] - rim_min[0]),
                     "right": float(rim_max[0] - xs[-1]),
                     "rear": float(rim_max[1] - ys[-1]),
                     "front": float(ys[0] - rim_min[1])},
+        "margin_status": "derived from the outer rim, column pitch, tine count and pitch; not tape-measured",
+        "derived_margins_mm": {"side": p["tine_side_margin"] * 1000,
+                               "front": p["tine_front_margin"] * 1000,
+                               "rear": p["tine_rear_margin"] * 1000},
+        "user_margins_tape_mm": {key: value * 1000 for key, value in p["tine_margins_tape_m"].items()},
+        "margin_derivation": p["tine_margin_derivation"],
         "tine_diameters": sorted(set(2 * r for _, _, r in teeth)),
         "tine_vertical_rises": np.unique(np.round(tips[:, 2] - bases[:, 2], 8)).tolist(),
         "tine_rearward_leans": np.unique(np.round(tips[:, 1] - bases[:, 1], 8)).tolist(),
@@ -153,6 +172,9 @@ def overhead(component, report, bases, rim_min, rim_max, out_dir):
                linewidths=.5, zorder=5)
     xs = report["column_x"]
     ys = report["row_y_front_to_back"]
+    for absent in report["absent_positions"]:
+        ax.scatter(xs[absent["column"]], absent["y"], s=26, facecolors="none",
+                   edgecolors=ACCENT, linewidths=.9, zorder=5)
     for i, x in enumerate(xs):
         ax.plot([x, x], [rim_max[1] + 10, 350], color=PALE, lw=.7)
         ax.text(x, 303, "C%d" % (i + 1), ha="center", color=ACCENT,
@@ -171,28 +193,30 @@ def overhead(component, report, bases, rim_min, rim_max, out_dir):
               "%g mm outer rim" % report["wire_rim_depth"], rotation=90)
     for y in [rim_min[1], rim_max[1]]:
         ax.plot([-336, rim_min[0] - 8], [y, y], color=PALE, lw=.7)
+    tape = report["user_margins_tape_mm"]
     for a, b in [(rim_min[0], xs[0]), (xs[-1], rim_max[0])]:
-        dimension(ax, (a, -214), (b, -214), "%g mm" % (b - a))
+        dimension(ax, (a, -214), (b, -214), "%.2f mm\n(derived; tape %g)" % (b - a, tape["side"]))
     for y in [rim_min[1], ys[0], ys[-1], rim_max[1]]:
         ax.plot([rim_max[0] + 8, 303], [y, y], color=PALE, lw=.7)
     dimension(ax, (291, rim_min[1]), (291, ys[0]),
-              "%.2f mm" % report["margins"]["front"], rotation=90)
+              "%.2f mm front (derived; tape %g)" % (report["margins"]["front"], tape["front"]), rotation=90)
     dimension(ax, (291, ys[-1]), (291, rim_max[1]),
-              "%g mm" % report["margins"]["rear"], (22, 0), rotation=90)
+              "%.2f mm rear (derived; tape %g)" % (report["margins"]["rear"], tape["rear"]), (22, 0), rotation=90)
     pitch_i = len(ys) // 2
     dimension(ax, (200, ys[pitch_i - 1]), (200, ys[pitch_i]),
               "%g mm pitch" % (ys[pitch_i] - ys[pitch_i - 1]), (54, 0))
     ax.text(0, -312, "FRONT  /  −Y", ha="center", color=INK,
             fontsize=11, weight="bold")
-    ax.text(280, 279, "REAR / +Y", ha="center", color=MUTED, fontsize=8)
-    ax.text(0, -343, "●  Tine base center     |     Rows numbered front to back",
+    ax.text(232, 279, "REAR / +Y", ha="center", color=MUTED, fontsize=8)
+    ax.text(0, -343, "●  Tine base center     ○  Absent position     |     Rows numbered front to back",
             ha="center", color=ACCENT, fontsize=10)
     fig.text(.065, .963, "UPPER RACK · TINE LAYOUT", fontsize=19, color=INK,
              weight="bold", va="top")
-    fig.text(.065, .931, "%d columns across × %d positions deep = %d tines" % (
+    fig.text(.065, .931, "%d columns across × %d positions deep = %d tines (%d absent)" % (
         report["columns_left_to_right"], report["positions_front_to_back"],
-        report["tine_count"]), fontsize=12, color=MUTED, va="top")
-    fig.text(.065, .063, "All dimensions: mm. Margins: tine base center to outer wire-rim edge.",
+        report["tine_count"], len(report["absent_positions"])), fontsize=12, color=MUTED, va="top")
+    fig.text(.065, .063, "All dimensions: mm. Margins: tine base center to outer wire-rim edge, "
+             "derived from the tape outer size, counts and pitch (tape margins in brackets).",
              fontsize=9, color=INK)
     fig.text(.065, .042, "Generated wire paths and authored wheel solids · source geometry preview · no Isaac validation",
              fontsize=8, color=MUTED)

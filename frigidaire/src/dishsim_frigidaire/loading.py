@@ -202,56 +202,77 @@ def _sloped_candidate(kind, slot, mouth_x, y, lean, points, floor, yaw=0):
 
 def candidates(world):
     """Finite photo-based loading patterns; sizes never change during packing."""
-    from .geometry import lower_tine_positions, upper_tine_positions
+    from .geometry import (PARAMETERS, lower_basket_footprint, lower_plate_gaps, lower_tine_positions,
+                           upper_tine_gaps, upper_tine_positions)
 
     result = {kind: [] for kind in ORDER}
-    # Use the outer pairs of rows as front/rear plate supports. The middle
-    # combs remain part of the collision geometry for every candidate.
+    # Use the outer pairs of rows as front/rear plate supports: the gaps between tines
+    # present in both rows (the basket bay shortens the rear bank). The middle combs
+    # remain part of the collision geometry for every candidate.
     teeth, rows = lower_tine_positions()
     mids = (teeth[:-1] + teeth[1:]) / 2
     lower_banks = (("front", float((rows[0]+rows[1])/2)),
                    ("rear", float((rows[-2]+rows[-1])/2)))
+    # Reserve the photographed front-right bowl area: front gaps centred within 20 mm of
+    # the basket's left face, or right of it, are left to the bowls.
+    bowl_zone_x = lower_basket_footprint()["x"][0] - .020
+    # A 260 mm dinner plate standing on the bank centreline cuts the rim wire (rows 80 mm
+    # apart in a 563 mm rack); the inset variant seats it further from the rim.
+    inset_y = {"front": .025, "rear": -.015}
     for kind in ("dinner_plate", "salad_plate"):
         for bank, y in lower_banks:
-            for index, x in enumerate(mids):
-                # Reserve the photographed front-right bowl area.
-                if bank == "front" and x > .105:
+            for index in lower_plate_gaps(bank):
+                x = mids[index]
+                if bank == "front" and x > bowl_zone_x:
                     continue
-                for lean, offset in ((-4, .008 if kind == "dinner_plate" else .004), (-8, .010)):
+                offset_4 = .008 if kind == "dinner_plate" else .004
+                for lean, offset, suffix, seat_y in ((-4, offset_4, "", y), (-8, .010, "", y),
+                                                     (-4, offset_4, "_inset", y + inset_y[bank])):
                     orient = rotation("Y", math.radians(90 - lean))
                     result[kind].append(_candidate(kind, "LowerRack", f"lower_{bank}_{index:02d}",
-                        x + offset, y, orient, world.points[kind], .006, f"lean{lean}_offset{offset}"))
+                        x + offset, seat_y, orient, world.points[kind], .006,
+                        f"lean{lean}_offset{offset}{suffix}"))
+    # Saucers in the regular gaps of a centre tine column (the wide gap at the absent
+    # positions is left to bowls); slots are named by the gap's front tine index.
     _, upper_ys = upper_tine_positions()
-    for index, y in enumerate((upper_ys[:-1] + upper_ys[1:])/2):
+    for a, b in upper_tine_gaps(1):
+        y = (upper_ys[a] + upper_ys[b]) / 2
         for lean, offset in ((8, .010), (4, .008)):
             orient = rotation("X", math.radians(90 - lean))
-            result["saucer"].append(_candidate("saucer", "UpperRack", f"saucer_{index:02d}",
+            result["saucer"].append(_candidate("saucer", "UpperRack", f"saucer_{a:02d}",
                 0, y + offset, orient, world.points["saucer"], -.0081, f"lean{lean}_offset{offset}"))
+    # Five inverted tumblers per outer glass channel (the claims ladder, near-upright over
+    # the low ridge) and four mugs per intermediate cup channel (x = 0.10875), all inside
+    # the 515 mm tape-measured depth.
+    up = PARAMETERS["upper_rack"]
+    glass = (max(up["tine_bank_x"]) + up["channel_profile"]["ridge_offset_from_column"]
+             + up["wire_width"] / 2 - up["rim_diameter"] / 2 - up["channel_profile"]["trough_inset_from_rim"]) / 2
     for side in (-1, 1):
-        for index, y in enumerate(np.arange(-.210, .2151, .085)):
-            for x, lean, lift in ((.190, 8, .010), (.180, 16, .010), (.190, 4, .012), (.160, 24, .014)):
+        for index, y in enumerate(-.170 + .085 * i for i in range(5)):
+            for x, lean, lift in ((round(glass, 5), 0, .010), (round(glass - .003, 5), 4, .010),
+                                  (round(glass + .003, 5), 8, .012), (round(glass - .005, 5), 0, .012)):
                 c = _sloped_candidate("tumbler", f"glass_{side}_{index}",
-                    side * x, y, lean, world.points["tumbler"], .001233)
+                    side * x, y, lean, world.points["tumbler"], -.002)
                 c["position"][2] += lift
                 c["variant"] += f"_x{x}_lift{lift}"
                 result["tumbler"].append(c)
     for side in (-1, 1):
-        for index, y in enumerate(np.arange(-.205, .2051, .125)):
+        for index, y in enumerate(np.arange(-.1875, .1876, .125)):
             for yaw in (90, 270, 0, 180):
-                for x, lean, lift in ((.100, 11, .006), (.090, 15, .006)):
+                for x, lean, lift in ((.094, 11, .006), (.085, 15, .006)):
                     c = _sloped_candidate("mug", f"mug_{side}_{index}",
                         side * x, y, lean, world.points["mug"], -.0096, yaw)
                     c["position"][2] += lift
                     c["variant"] += f"_x{x}_lift{lift}"
                     result["mug"].append(c)
-    # Bowls only in the visible front-right zone; back is occupied by the basket.
-    # Base origins are left of their tilted mouths. This pair has separated
-    # depth slabs along its common normal, so neither bowl nests in the other.
+    # Bowls only in the visible front-right zone; the grid stays at y < -.074, ahead of
+    # the basket bay. Base origins are left of their tilted mouths. This pair has
+    # separated depth slabs along its common normal, so neither bowl nests in the other.
     for index, x in enumerate((.075, .155)):
         result["bowl"].append(_candidate("bowl", "LowerRack", f"bowl_pair_{index}",
             x, -.140, rotation("Y", math.radians(65)), world.points["bowl"], .007, "tilt65"))
     for ix, x in enumerate(np.arange(.125, .226, .020)):
-        for iy, y in enumerate(np.arange(-.205, -.084, .020)):
+        for iy, y in enumerate(np.arange(-.205, -.124, .020)):
             for tilt in (55, 65, 75):
                 orient = rotation("Y", math.radians(tilt))
                 result["bowl"].append(_candidate("bowl", "LowerRack", f"bowl_{ix}_{iy}",

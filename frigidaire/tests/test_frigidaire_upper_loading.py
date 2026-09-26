@@ -6,7 +6,7 @@ from unittest.mock import patch
 import numpy as np
 
 from dishsim_frigidaire import loading
-from dishsim_frigidaire.geometry import PARAMETERS, upper_tine_positions
+from dishsim_frigidaire.geometry import PARAMETERS, upper_tine_gaps, upper_tine_positions
 
 
 class UpperLoadingTests(unittest.TestCase):
@@ -21,19 +21,22 @@ class UpperLoadingTests(unittest.TestCase):
         with patch.object(loading, "quaternion_xyzw", return_value=[0., 0., 0., 1.]):
             return loading.candidates(self.world)
 
-    def test_twelve_saucer_slots_follow_actual_base_gaps(self):
+    def test_nine_saucer_slots_follow_actual_base_gaps(self):
         patterns = self.candidate_patterns()["saucer"]
-        self.assertEqual(len(patterns), 24)  # two existing lean variants per gap
-        self.assertEqual(len({c["slot"] for c in patterns}), 12)
+        # 13 positions minus the two absent centre ones leave 9 one-pitch gaps in a
+        # centre column; the wide gap is left to bowls. Slots carry the front tine index.
+        gaps = upper_tine_gaps(1)
+        self.assertEqual(len(gaps), 9)
+        self.assertEqual(len(patterns), 18)  # two existing lean variants per gap
+        self.assertEqual(len({c["slot"] for c in patterns}), 9)
         _, ys = upper_tine_positions()
-        for index in range(12):
-            pair = patterns[2*index:2*index+2]
+        for n, (a, b) in enumerate(gaps):
+            pair = patterns[2*n:2*n+2]
             for entry, offset in zip(pair, [.010, .008]):
                 self.assertEqual(entry["rack"], "UpperRack")
-                self.assertEqual(entry["slot"], "saucer_%02d" % index)
+                self.assertEqual(entry["slot"], "saucer_%02d" % a)
                 self.assertEqual(entry["position"][0], 0.)
-                self.assertAlmostEqual(entry["position"][1]-offset,
-                                       (ys[index]+ys[index+1])/2, places=10)
+                self.assertAlmostEqual(entry["position"][1]-offset, (ys[a]+ys[b])/2, places=10)
 
     def test_rear_margin_adjustment_only_moves_upper_saucer_slots(self):
         before = self.candidate_patterns()

@@ -19,8 +19,11 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "frigidaire/src"))
-from dishsim_frigidaire.paths import VALIDATION_DIR
 from dishsim_frigidaire import geometry
+
+# Source-geometry evidence for the staged (current-source) collection, never the
+# installed v1 bundle under assets/models.
+DEFAULT_OUT = ROOT / "build/frigidaire_collection/validation/lower_rack_clearance.json"
 
 
 def segment_pairs(p0, p1, q0, q1):
@@ -95,6 +98,44 @@ def envelope(entries):
             np.max([np.maximum(s[2], s[3])+s[4] for s in entries], axis=0))
 
 
+def lower_rack_insets():
+    """Rim-relative floor insets of the generated profile (the same offsets geometry._lower_rack applies).
+
+    floor_x ends the horizontal central floor; long_turn_y is where the
+    longitudinal floor wires turn up into the front/rear walls.
+    """
+    p = geometry.PARAMETERS["lower_rack"]
+    hx, hy = p["wire_width"]/2-p["rim_diameter"]/2, p["wire_depth"]/2-p["rim_diameter"]/2
+    return {"floor_x": hx-.03492, "long_turn_y": hy-.02243}
+
+
+def removed_tines():
+    """Grid positions the basket bay omits, as (column, row, x, y) in mm."""
+    xs, ys = geometry.lower_tine_positions()
+    mask = geometry.lower_tine_mask()
+    return [{"column": int(c), "row": int(r), "x_mm": float(xs[c]*1000), "y_mm": float(ys[r]*1000)}
+            for r, c in zip(*np.nonzero(~mask))]
+
+
+def _segment_crosses_rectangle(a, b, x_range, y_range):
+    """True when any point of the XY-projected segment lies inside the closed rectangle."""
+    t0, t1 = 0., 1.
+    for axis, (low, high) in ((0, x_range), (1, y_range)):
+        delta = b[axis]-a[axis]
+        if abs(delta) < 1e-15:
+            if not low <= a[axis] <= high:
+                return False
+            continue
+        enter, leave = sorted(((low-a[axis])/delta, (high-a[axis])/delta))
+        t0, t1 = max(t0, enter), min(t1, leave)
+    return t0 <= t1
+
+
+def _at_least(entry, threshold):
+    """A group with no member segments imposes no constraint."""
+    return entry is None or entry["clearance_mm"] >= threshold-1e-8
+
+
 def basket_clearance_report(lower=None, basket=None, basket_translation=None):
     lower = geometry._lower_rack() if lower is None else lower
     basket = geometry._basket() if basket is None else basket
@@ -103,32 +144,43 @@ def basket_clearance_report(lower=None, basket=None, basket_translation=None):
                               - geometry.PARAMETERS["origins"]["LowerRack"])
     rack_segments = segments(lower["wires"])
     basket_segments = segments(basket["wires"], basket_translation)
+    basket_low, basket_high = envelope(basket_segments)
+    insets = lower_rack_insets()
+    floor_x, long_turn_y = insets["floor_x"]+1e-8, insets["long_turn_y"]+1e-8
+    footprint = geometry.lower_basket_footprint()
+    # Only tine rows beside the basket can touch it; the front plate rows keep
+    # their full-width combs, which would otherwise dominate an X envelope.
+    y_window = (float(basket_low[1]-.006), float(basket_high[1]+.006))
     groups = {name: [] for name in ("tines_and_base_rails", "right_wall", "floor", "remaining_rack")}
+    rails_under_basket = []
     for entry in rack_segments:
-        name, _, a, b, _ = entry
+        name, index, a, b, _ = entry
         if name.startswith("TineBank"):
-            group = "tines_and_base_rails"
+            overlaps = max(a[1], b[1]) >= y_window[0] and min(a[1], b[1]) <= y_window[1]
+            group = "tines_and_base_rails" if overlaps else "remaining_rack"
+            if name.endswith("_Base") and _segment_crosses_rectangle(a, b, footprint["x"], footprint["y"]):
+                rails_under_basket.append({"rack_wire": name, "rack_segment": index,
+                                           "start_mm": (a*1000).tolist(), "end_mm": (b*1000).tolist()})
         elif name.startswith("FloorCrossU"):
-            # The horizontal central floor ends at X +/-237 mm; its rounded
+            # The horizontal central floor ends at +/-floor_x; its rounded
             # transitions and sloping uprights belong to the wall audit.
-            group = ("right_wall" if max(a[0], b[0]) > .23700001 else
-                     "remaining_rack" if min(a[0], b[0]) < -.23700001 else "floor")
+            group = ("right_wall" if max(a[0], b[0]) > floor_x else
+                     "remaining_rack" if min(a[0], b[0]) < -floor_x else "floor")
         elif name.startswith("FloorLongU"):
-            group = "remaining_rack" if max(abs(a[1]), abs(b[1])) > .26600001 else "floor"
+            group = "remaining_rack" if max(abs(a[1]), abs(b[1])) > long_turn_y else "floor"
         else:
             group = "remaining_rack"
         groups[group].append(entry)
-    clearances = {name: minimum_clearance(entries, basket_segments)
+    clearances = {name: minimum_clearance(entries, basket_segments) if entries else None
                   for name, entries in groups.items()}
-    basket_low, basket_high = envelope(basket_segments)
-    _, tines_high = envelope(groups["tines_and_base_rails"])
-    gap = float((basket_low[0]-tines_high[0])*1000)
+    tines = groups["tines_and_base_rails"]
+    gap = float((basket_low[0]-envelope(tines)[1][0])*1000) if tines else None
     checks = {
-        "tine_clearance_at_least_5_mm": clearances["tines_and_base_rails"]["clearance_mm"] >= 5.-1e-8,
-        "right_wall_clearance_at_least_3_mm": clearances["right_wall"]["clearance_mm"] >= 3.-1e-8,
-        "remaining_rack_clearance_positive": clearances["remaining_rack"]["clearance_mm"] > 0,
-        "floor_not_interpenetrating": clearances["floor"]["clearance_mm"] >= -1e-8,
-        "conservative_x_envelope_gap_at_least_5_mm": gap >= 5.-1e-8,
+        "tine_clearance_at_least_5_mm": _at_least(clearances["tines_and_base_rails"], 5.),
+        "right_wall_clearance_at_least_3_mm": _at_least(clearances["right_wall"], 3.),
+        "remaining_rack_clearance_positive": _at_least(clearances["remaining_rack"], 1e-8),
+        "floor_not_interpenetrating": _at_least(clearances["floor"], 0.),
+        "no_rails_under_basket": not rails_under_basket,
     }
     # Wheels/hubs are independent solids; a positive Z gap proves their
     # separation without approximating cylinders as capsule paths.
@@ -150,7 +202,14 @@ def basket_clearance_report(lower=None, basket=None, basket_translation=None):
         "passed": all(checks.values()), "checks": checks,
         "basket_origin_in_rack_mm": (np.asarray(basket_translation)*1000).tolist(),
         "basket_capsule_bounds_mm": [(basket_low*1000).tolist(), (basket_high*1000).tolist()],
-        "conservative_x_envelope_gap_mm": gap, "minimum_capsule_clearances": clearances,
+        "basket_footprint_mm": {"x": [v*1000 for v in footprint["x"]], "y": [v*1000 for v in footprint["y"]],
+                                "tine_omission_clearance": footprint["clearance"]*1000,
+                                "tine_group_y_window": [v*1000 for v in y_window]},
+        "removed_tines": removed_tines(),
+        "rails_under_basket": rails_under_basket,
+        "group_thresholds_mm": {name: value*1000 for name, value in insets.items()},
+        "tine_group_rule": "TineBank tine/rail segments whose y-span overlaps the basket capsule y-span +-6 mm; other rows count as remaining rack",
+        "tine_x_envelope_gap_mm": gap, "minimum_capsule_clearances": clearances,
         "minimum_solid_z_gap_mm": solid_gap, "closest_solid_by_z": solid_name,
         "visible_bracket_z_gap_mm": bracket_gap,
         "floor_interpretation": "Floor clearance is reported separately; a positive initial gap does not demonstrate settled support.",
@@ -278,7 +337,7 @@ def fixture_audit(lower):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", type=Path, default=VALIDATION_DIR / "lower_rack_clearance.json")
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
     lower = geometry._lower_rack()
     report = basket_clearance_report(lower=lower)

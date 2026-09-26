@@ -37,7 +37,8 @@ class InputTests(unittest.TestCase):
         self.report = {"result": "PASS (USD authoring only)",
                        "components": {name: {} for name in COMPONENT_FILES},
                        "sha256": {name: digest(self.root / name) for name in names}}
-        for rack, key in (("LowerRack", "lower_rack"), ("UpperRack", "upper_rack")):
+        for rack, key in (("LowerRack", "lower_rack"), ("UpperRack", "upper_rack"),
+                          ("SilverwareBasket", "silverware_basket")):
             self.report["components"][rack]["geometry_revision"] = PARAMETERS[key]["geometry_revision"]
         self.catalog = {"source_sha256": digest(Path(tableware.__file__)),
                         "items": {kind: {**tableware.CATALOG[kind],

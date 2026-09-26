@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "frigidaire/src"))
 from dishsim_frigidaire.paths import REPO_ROOT  # noqa: E402
-from dishsim_frigidaire.random_poses import relative_pose  # noqa: E402
+from dishsim_frigidaire.random_poses import relative_pose, compose_pose  # noqa: E402
 from dishsim_frigidaire import exposure as E  # noqa: E402
 
 folder = Path(sys.argv[1] if len(sys.argv) > 1 else REPO_ROOT / "results/exposure/frigidaire/search/settle_best")
@@ -31,10 +31,21 @@ state = dict(manifest, objects=objects, accepted=True, status="settled_once_no_r
              initial_snapshot=result["initial_snapshot"], validation=result, state_id="random_06_best")
 (folder / "state.json").write_text(json.dumps(state, indent=1) + "\n")
 settled = E.score_state(folder / "state.json")
-organized = E.score_state(REPO_ROOT / "results/initial_states/frigidaire/organized_20260911_seed20260911/states/random_06.json")
+organized_path = REPO_ROOT / "results/initial_states/frigidaire/organized_20260911_seed20260911/states/random_06.json"
+organized = E.score_state(organized_path)
+# The proposal is re-scored here at the CURRENT parameters; the manifest's stored score was written by the
+# search run under whatever defaults held then, so it is kept only as an audit value.
+proposal_objects = []
+for o in manifest["objects"]:
+    p, q = compose_pose(E.BODY_POSITIONS[o["rack"]], E.IDENTITY,
+                        o["rack_local_pose"]["position_m"], o["rack_local_pose"]["quaternion_xyzw"])
+    proposal_objects.append({"id": o["object_id"], "kind": o["kind"], "rack": o["rack"], "position_m": p, "quaternion_xyzw": q})
+proposal = E.score_arrangement(E.Arrangement("proposal", "", "", proposal_objects, E.load_state(organized_path).basket))
 moved = max(float(abs(__import__("numpy").asarray(o["pose_world"]["position_m"]) -
                       __import__("numpy").asarray(o["candidate_pose_world"]["position_m"])).max()) for o in objects)
-summary = {"proposal_unsettled": manifest["exposure_score_unsettled"], "proposal_settled": settled["score"],
+summary = {"proposal_unsettled": proposal["score"], "proposal_unsettled_manifest": manifest["exposure_score_unsettled"],
+           "schema_version": E.DEFAULTS["schema_version"], "ceiling_weight": E.DEFAULTS["ceiling_weight"],
+           "proposal_settled": settled["score"],
            "settled_worst": settled["worst"], "settled_feasible": settled["feasible"],
            "settled_pooling": settled["pooling_count"], "organized_settled": organized["score"],
            "max_settle_displacement_m": moved}
@@ -62,7 +73,7 @@ def draw_top(ax, r, title):
 fig, axes = plt.subplots(1, 2, figsize=(11, 5.4))
 draw_top(axes[0], organized, f"settled organized random_06: score {organized['score']:.3f}")
 sc = draw_top(axes[1], settled, f"best proposal, SETTLED in Isaac: score {settled['score']:.3f} "
-                                f"(was {manifest['exposure_score_unsettled']:.3f} unsettled)")
+                                f"(was {proposal['score']:.3f} unsettled, same parameters)")
 fig.colorbar(sc, ax=axes, shrink=.8, label="exposure")
 fig.suptitle("Same 18 objects; both arrangements physically settled", fontsize=10)
 fig.savefig(folder / "settled_best.png", dpi=150); plt.close(fig)

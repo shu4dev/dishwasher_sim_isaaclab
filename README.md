@@ -81,7 +81,7 @@ Frigidaire FDPC4221AS, independently authored twin under `frigidaire/` ([source 
 | Single-dish random drops: 600 proposals, 176 accepted (29.3%), 168 with zero-tolerance containment | [report](results/random_poses/frigidaire/complete_20260910_seed0/experiment_report.md), [pose explorer](outputs/random_pose_viewer/index.html), [sampling report](outputs/sampling_technical_report/index.html), [protocol](frigidaire/docs/random_pose_experiment.md) |
 | Multi-dish randomized states: 10 validated (3 × 9, 4 × 18, 3 × 27 dishes); highest load 35 dishes, both racks retract | [report](results/initial_states/frigidaire/packing_20260911_seed20260911/index.html), [PDF](results/initial_states/frigidaire/packing_20260911_seed20260911/technical_report.pdf), [protocol](frigidaire/docs/initial_state_experiment.md) |
 | Organized counterparts: 7 of 11 inventories passed (all 9- and 18-dish), each with rack retraction, door cycle and independent replay; 35- and 27-dish inventories unresolved | [viewer](results/initial_states/frigidaire/organized_20260911_seed20260911/index.html), [PDF](results/initial_states/frigidaire/organized_20260911_seed20260911/technical_report.pdf), [protocol](frigidaire/docs/organized_counterparts.md) |
-| Exposure scorer: organized beats random packing in 7 of 7 same-object pairs; search found and settled an arrangement scoring 0.274 vs 0.242 | [quickstart](frigidaire/docs/exposure_quickstart.md), `results/exposure/frigidaire/` |
+| Exposure scorer (revision 5, arm discs only, plates and cutlery scored): organized beats random packing in 7 of 7 same-object pairs at every ceiling weight up to 0.5; search found and settled an arrangement scoring 0.274 vs 0.242 | [quickstart](frigidaire/docs/exposure_quickstart.md), `results/exposure/frigidaire/` |
 
 These are finite-catalog results, not global capacity claims.
 
@@ -116,6 +116,7 @@ These are finite-catalog results, not global capacity claims.
 | [docs/extending.md](docs/extending.md) | Add an object class, placement mode or machine state |
 | [docs/bosch800_source_data.md](docs/bosch800_source_data.md), [docs/joint_report.md](docs/joint_report.md) | Every Bosch 800 number with provenance |
 | [docs/bosch800_asset.md](docs/bosch800_asset.md) | The standalone Bosch 800 USD asset |
+| [docs/hotec_wheatstraw_asset.md](docs/hotec_wheatstraw_asset.md) | The HOTEC wheat-straw plate/bowl/cup USD assets: parameters, capacities, Frigidaire load render |
 | [frigidaire/docs/exposure.md](frigidaire/docs/exposure.md) | Exposure scorer reference for agents |
 
 ## Assets and licenses

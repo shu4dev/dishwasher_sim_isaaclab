@@ -10,12 +10,13 @@ from copy import deepcopy
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import time
 
 import numpy as np
 
-from .random_poses import (KINDS, RACKS, compose_pose, relative_pose,
+from .random_poses import (KINDS, RACKS, OBJECT_KINDS, compose_pose, relative_pose,
                            quaternion_matrix_xyzw)
 
 
@@ -179,7 +180,7 @@ class InitialCollisionChecker:
     examined. An empty/overflowing contact result or nonfinite depth fails
     closed. The allowance is contact penetration, never object inflation.
     """
-    def __init__(self, asset_dir, penetration_limit_m=.001):
+    def __init__(self, asset_dir, penetration_limit_m=.001, tableware=None):
         import fcl
         from .asset import COMPONENT_FILES
         from .loading import collision_parts
@@ -191,10 +192,11 @@ class InitialCollisionChecker:
         self.request = fcl.CollisionRequest(enable_contact=True, num_max_contacts=self.max_contacts_per_pair)
         directory = Path(asset_dir)
         filenames = {**{name: directory / filename for name, filename in COMPONENT_FILES.items()},
-                     **{kind: directory / "tableware" / f"{kind}.usdc" for kind in KINDS}}
+                     **{kind: directory / "tableware" / f"{kind}.usdc" for kind in OBJECT_KINDS}}
+        filenames.update({kind: Path(path) for kind, path in (tableware or {}).items()})   # e.g. the HOTEC set
         self.parts = {name: collision_parts(path) for name, path in filenames.items()}
         self.bounds = {name: authored_collision_bounds(path) for name, path in filenames.items()}
-        self.asset_sha256 = {str(path.relative_to(directory)): hashlib.sha256(path.read_bytes()).hexdigest()
+        self.asset_sha256 = {os.path.relpath(path, directory): hashlib.sha256(path.read_bytes()).hexdigest()
                              for path in filenames.values()}
         self.components = None
 
@@ -216,7 +218,7 @@ class InitialCollisionChecker:
                            for name in COMPONENT_NAMES}
 
     def candidate_body(self, candidate):
-        if candidate["kind"] not in KINDS:
+        if candidate["kind"] not in self.parts or candidate["kind"] in COMPONENT_NAMES:
             raise ValueError("Unsupported candidate dish kind")
         return self._body(candidate["kind"], candidate["pose_world"],
                           candidate.get("object_id", candidate.get("candidate_id", "dish")))
