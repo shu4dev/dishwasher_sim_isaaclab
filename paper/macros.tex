@@ -1,0 +1,28 @@
+% Packages and notation shared by every section. Keep symbols here so a rename is one edit.
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{cite}
+\usepackage{url}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta}
+
+\newtheorem{proposition}{Proposition}
+\newtheorem{remark}{Remark}
+
+% vectors
+\newcommand{\vect}[1]{\mathbf{#1}}
+\newcommand{\vp}{\vect{p}}   % sample point
+\newcommand{\vn}{\vect{n}}   % unit normal
+\newcommand{\vq}{\vect{q}}   % source point
+\newcommand{\vs}{\vect{s}}   % lifted segment start
+\newcommand{\vd}{\vect{d}}   % unit segment direction
+\newcommand{\vc}{\vect{c}}   % centroid / disc centre
+\newcommand{\vt}{\vect{t}}   % translation
+\newcommand{\vx}{\vect{x}}
+\newcommand{\vy}{\vect{y}}
+% sets and operators
+\newcommand{\SE}{\mathrm{SE}(3)}
+\newcommand{\Occ}{\mathcal{G}}          % occluder geometry of an arrangement
+\newcommand{\ind}{\mathbb{I}}           % indicator
+\DeclareMathOperator{\pool}{pool}

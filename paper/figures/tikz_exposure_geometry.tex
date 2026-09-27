@@ -1,0 +1,28 @@
+% Fig. scoring (a): one sample, its tangent plane, eight source points on the edge-on disc.
+% Coordinates in cm, hand-computed: normal at -20 deg, so points with x > -0.6 are in front;
+% the occluder (x = 1.4..1.6) blocks the segments to x = 1.9 and 2.6 at heights 0.647 and 1.1.
+\begin{tikzpicture}[x=1cm,y=1cm,>={Stealth[length=4pt]},font=\footnotesize]
+  % tangent plane of the sample
+  \draw[gray,dashed] (-0.6,0) -- (0.542,3.14);
+  % occluder: a neighboring dish seen edge-on
+  \draw[fill=orange!25,draw=orange!60!black,rounded corners=1pt] (1.4,0.6) rectangle (1.6,3.0);
+  \node[anchor=west,align=left] at (1.65,2.6) {neighboring\\dish};
+  % segments behind the tangent plane (ignored)
+  \foreach \x in {-2.6,-1.8,-1.0} \draw[gray!70,densely dotted,thick] (0.2,2.2) -- (\x,0);
+  % open segments
+  \foreach \x in {-0.3,0.4,1.1} \draw[blue!60!black,thick] (0.2,2.2) -- (\x,0);
+  % blocked segments, drawn up to the hit
+  \draw[red!70!black,thick,dashed] (0.2,2.2) -- (1.4,0.647);
+  \draw[red!70!black,thick,dashed] (0.2,2.2) -- (1.4,1.1);
+  \fill[red!70!black] (1.4,0.647) circle (1.3pt);
+  \fill[red!70!black] (1.4,1.1) circle (1.3pt);
+  % disc (edge-on) and its source points
+  \draw[line width=1.6pt,blue!60!black] (-2.9,0) -- (2.9,0);
+  \foreach \x in {-2.6,-1.8,-1.0,-0.3,0.4,1.1,1.9,2.6} \fill[blue!60!black] (\x,0) circle (1.6pt);
+  \node[anchor=north] at (0,-0.08) {disc $\mathcal{D}_a$ (edge-on) with source points $\vq_k$};
+  % surface patch, normal, sample
+  \draw[line width=2.4pt,brown!70!black] (-0.074,1.448) -- (0.474,2.952);
+  \draw[->,thick] (0.2,2.2) -- (1.046,1.892) node[anchor=south west,inner sep=1pt] {$\vn_j$};
+  \fill (0.2,2.2) circle (1.5pt);
+  \node[anchor=east] at (0.05,2.3) {$\vp_j$};
+\end{tikzpicture}

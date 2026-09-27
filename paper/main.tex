@@ -1,0 +1,30 @@
+% Main file. Build: `make` (latexmk) or upload the folder to Overleaf.
+% IEEEtran ships with TeX Live and Overleaf. For the official ICRA/IROS PaperCept
+% template, drop ieeeconf.cls next to this file and replace the \documentclass line below with:
+%   \documentclass[letterpaper, 10 pt, conference]{ieeeconf}
+%   \IEEEoverridecommandlockouts \overrideIEEEmargins
+% (the plain \author{} below compiles under both classes)
+\documentclass[conference,letterpaper]{IEEEtran}
+
+\input{macros}
+
+\title{Spray-Exposure Objectives for Physics-Validated Dishwasher Loading}  % TODO working title
+\author{Author names withheld}  % TODO
+
+\begin{document}
+\maketitle
+
+% Planned order (write one at a time; see README.md):
+% \input{sections/abstract}
+% \input{sections/introduction}
+% \input{sections/related_work}
+% \input{sections/problem}
+\input{sections/scoring}
+% \input{sections/benchmark}
+% \input{sections/experiments}
+% \input{sections/conclusion}
+
+\bibliographystyle{IEEEtran}
+\bibliography{bib/references}
+
+\end{document}
