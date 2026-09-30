@@ -14,7 +14,7 @@ handle, and fold-down cup shelves + RackMatic lever blocks on the upper rack.
 Kit-free by design (numpy + trimesh only, no ``pxr``): the same builder feeds three consumers —
 :mod:`dishsim.usd_prep` authors the merged per-group meshes into the derived v0 USD (PhysX/SDF
 side), ``scripts/setup/decompose_meshes.py`` writes the exact convex parts as FCL pieces (no CoACD
-for the racks), and the Kit-free tests/preview validate the shape before any Kit run.
+for the racks), and the Kit-free tests validate the shape before any Kit run.
 
 Design space is the world-metric rack BODY frame: X = width, Y = depth with y=0 the front edge
 (the end that extends toward the robot), Z up with 0 at the lowest wire surface. Geometry spans
@@ -50,26 +50,6 @@ import numpy as np
 import trimesh
 
 from . import config
-
-#: preview colors per zone (hex, matplotlib-compatible)
-ZONE_COLORS = {
-    "perimeter": "#4d4d4d",
-    "guard": "#1a80bb",
-    "floor_open": "#8a8a8a",
-    "floor_dense": "#b8642d",
-    "channel": "#2ca089",
-    "slope": "#7b52ab",
-    "plate_tines": "#c23b22",
-    "divider_tines": "#c23b22",
-    "ribs": "#5c8a3a",
-    "tie": "#96694a",
-    "insert": "#33343a",
-    "wheels": "#2b2b2b",
-    "handle": "#1a80bb",
-    "cup_shelf": "#7b52ab",
-    "rackmatic": "#33343a",
-    "basket": "#9aa0a6",
-}
 
 
 @dataclass(frozen=True)
@@ -829,17 +809,6 @@ def _tray_z_levels(p: dict) -> dict:
     }
 
 
-def tray_floor_z(params: dict) -> float:
-    """Wing (main) floor plane of the tray [m] — what a flat-laid object rests on."""
-    return _tray_z_levels(params)["floor_top"]
-
-
-def tray_channel_floor_z(params: dict) -> float:
-    """Floor plane of the dropped center channel [m] (``channel.drop`` below the wings)."""
-    zl = _tray_z_levels(params)
-    return zl["floor_top"] - zl["drop"]
-
-
 def tray_zones(params: dict) -> list[tuple[str, tuple[float, float, float, float], float]]:
     """Usable flat-lay areas as ``(name, (x0, x1, y0, y1), floor_z)``, left wing to right wing.
 
@@ -1052,53 +1021,3 @@ def plate_tine_negative_probe(params: dict) -> tuple[tuple[float, float, float],
     shear = math.tan(math.radians(params["plate_tine_lean_deg"]))
     y_c = params["plate_rows_y"][0] + shear * (z_c - _z_levels(params)["tine_base"])
     return ext, (float(xs[len(xs) // 2]), float(y_c), z_c)
-
-
-# ---------------------------------------------------------------------------------------------
-# preview (venv-side evidence; matplotlib imported lazily)
-# ---------------------------------------------------------------------------------------------
-
-
-def preview_png(parts: list[RackPart], out_png: str, title: str) -> None:
-    """Zone-colored 3-view render (iso/top/side), same style as the Phase-D overlays."""
-    import os  # noqa: PLC0415
-
-    import matplotlib  # noqa: PLC0415
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt  # noqa: PLC0415
-    from matplotlib.patches import Patch  # noqa: PLC0415
-    from mpl_toolkits.mplot3d.art3d import Poly3DCollection  # noqa: PLC0415
-
-    merged = merged_mesh(parts)
-    mn, mx = merged.bounds
-    zones_present = sorted({p.zone for p in parts})
-    fig = plt.figure(figsize=(17, 5.8))
-    for k, (elev, azim, label) in enumerate([(24, -55, "iso"), (88, -90, "top"), (4, -90, "side")]):
-        ax = fig.add_subplot(1, 3, k + 1, projection="3d")
-        for part in parts:
-            ax.add_collection3d(
-                Poly3DCollection(
-                    part.mesh.vertices[part.mesh.faces],
-                    facecolor=ZONE_COLORS.get(part.zone, "#999999"),
-                    edgecolor="none",
-                    alpha=0.9,
-                )
-            )
-        ax.set_xlim(mn[0], mx[0])
-        ax.set_ylim(mn[1], mx[1])
-        ax.set_zlim(mn[2], mx[2])
-        ax.set_box_aspect(tuple(mx - mn))
-        ax.view_init(elev=elev, azim=azim)
-        ax.set_title(f"{title} — {label} ({len(parts)} parts)")
-        ax.set_axis_off()
-    fig.legend(
-        handles=[Patch(facecolor=ZONE_COLORS.get(z, "#999999"), label=z) for z in zones_present],
-        loc="lower center",
-        ncol=min(len(zones_present), 10),
-        frameon=False,
-    )
-    fig.tight_layout(rect=(0, 0.05, 1, 1))
-    os.makedirs(os.path.dirname(out_png), exist_ok=True)
-    fig.savefig(out_png, dpi=110)
-    plt.close(fig)

@@ -15,8 +15,8 @@ Two stages, one file:
 Rack poses are rack-local metres with XYZW quaternions (the claims/loading convention) and are
 composed with the MEASURED extended-rack frames in Isaac; counter poses are world. Every slot is
 derived from the tape-measured rack geometry in ``dishsim_frigidaire.geometry`` (lower rack 6 x 12
-tines at 36 x 80 mm pitch in a 525 x 563 mm rim, the basket bay removing columns 11-12 of rows 3-6
-so the rear bank keeps 9 gaps; upper rack 4 x 13 at 37 mm with the wide centre gap; cup mouths on
+tines at 31.8 mm columns and 81 / 73 / 67 / 73 / 81 mm rows in a 525 x 561 mm rim, the basket bay removing
+columns 11-12 of rows 3-6 so the rear bank keeps 9 gaps; upper rack 4 x 13 at 33 mm with the wide centre gap; cup mouths on
 the upper glass channel site), never from hard-coded gap indices. Mass: a massless asset (v1) must
 carry no MassAPI and PhysX's derived masses are logged; a measured asset (v2+, catalog ``mass_kg``)
 must carry exactly that physics:mass on its root and PhysX must report it back. This script adds none. Judge

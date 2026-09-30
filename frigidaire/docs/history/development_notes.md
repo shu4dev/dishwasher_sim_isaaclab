@@ -1,5 +1,15 @@
 # Frigidaire FDPC4221AS dishwasher asset
 
+> **HISTORY: dated development log of the Frigidaire twin (v1 to v8, up to the 2026-09-23
+> outside-heights rebuild); paths and scripts named here may no longer exist.** The current
+> geometry is [geometry.md](../geometry.md) (tape re-measured 2026-09-28). Retired or moved on
+> 2026-09-29: the v3-era experiment scripts, tests and docs (in git history at HEAD 4455813); the
+> Frigidaire result folders for initial states, random poses and the planner, the HOTEC runs v2
+> to v5 and most exposure results (in the hold folder
+> `/media/corallab-s1/2tbhdd/brianshu/dishsim/_trash_20260929/results/` until 2026-10-29); and the
+> unpacked v1 and v2 media galleries (full copies remain in
+> `build/frigidaire_collection/history/{v1,v2}/gallery`).
+
 This independently authored USD reconstructs the 24-inch Frigidaire FDPC4221AS from
 the photographs and specification in `frigidaire/`. Its detailed coated-wire racks,
 open basket lattice, dish-support surfaces, door hinge and rack slides are intended
@@ -36,8 +46,8 @@ scripts/run_kit.sh scripts/experiment/frigidaire_demo.py --headless --mode scrip
 scripts/run_kit.sh scripts/experiment/frigidaire_demo.py --headless --mode passive --device cpu
 ```
 
-Open `media/frigidaire_fdpc4221as_v2/index.html` for the revised labeled full-resolution image
-gallery. Each component has front, right, front-left and overhead views. Additional
+Open `build/frigidaire_collection/history/v2/gallery/index.html` for the revised labeled
+full-resolution image gallery. Each component has front, right, front-left and overhead views. Additional
 images expose rack bends, the basket underside, the exploded appliance, closed/open
 states, independently extended racks, and a representative full-size dish load.
 The basket photograph convention differs from the appliance: its front is the long
@@ -192,7 +202,7 @@ X = 169.5…257.5 mm, Y = −36…276 mm, and approximately Z = 12.819…214 mm 
 lower-rack frame. These envelope coordinates are geometry measurements, not
 simulation clearance or load-retention certification.
 
-The [source clearance audit](../build/frigidaire_lower_rack_polish/source_clearance.json)
+The source clearance audit (`source_clearance.json`, removed)
 measures a 5.23 mm conservative X-envelope gap, 9.50 mm minimum basket-to-tine/base-rail
 capsule clearance, 3.63 mm to the right wall, and 4.44 mm to the closest remaining
 rear-wall wire. These are static source-geometry measurements; they do not establish
@@ -408,8 +418,8 @@ physics step. If sleeping bodies stop reporting contacts, a previously measured
 contact connection is retained only while both bodies' surface-motion bounds
 remain within 1 µm of their last observed contact poses at every later step.
 
-The [full-load gallery](../media/frigidaire_fdpc4221as_v2/full_load/index.html)
-is saved under `media/frigidaire_fdpc4221as_v2/full_load/`.
+The [full-load gallery](../../../build/frigidaire_collection/history/v2/gallery/full_load/index.html)
+is saved under `build/frigidaire_collection/history/v2/gallery/full_load/`.
 It contains assembly views, isolated loaded-rack overhead and oblique views, and
 an inventory contact sheet labeled with actual validated counts. Rendering requires
 a complete passing physics report with matching asset, source, and manifest
@@ -530,8 +540,8 @@ basket. Executable-source hash checks against the
 new source must report the old evidence as stale; do not refresh old report hashes
 to make them appear current.
 
-The preserved [component and assembly gallery](../media/frigidaire_fdpc4221as_v2/index.html)
-and its [combined evidence report](../media/frigidaire_fdpc4221as_v2/evidence.json)
+The preserved [component and assembly gallery](../../../build/frigidaire_collection/history/v2/gallery/index.html)
+and its [combined evidence report](../../../build/frigidaire_collection/history/v2/gallery/evidence.json)
 passed with the release's asset and executable-source hashes. All 36 base physics checks,
 six contact inspections, and 31 rendered-image checks passed. The largest measured
 door endpoint error was 0.1411°; the largest slide endpoint error was 0.0509 mm.
@@ -539,7 +549,7 @@ The component contact inspections recorded at most 0.00199 mm penetration and
 488 contacts out of an 8192-contact buffer. These simulator separation values do
 not imply comparable manufacturing accuracy.
 
-The [full-load physics report](../media/frigidaire_fdpc4221as_v2/full_load/physics.json)
+The [full-load physics report](../../../build/frigidaire_collection/history/v2/gallery/full_load/physics.json)
 passed all 37 checks with the release's matching asset, manifest, and executable-source hashes.
 Its accepted counts are:
 
@@ -568,17 +578,17 @@ buffer overflow occurred. Maximum final-second object position span was
 0.0759 mm, mesh-point speed was 13.0 mm/s, and orientation span was 0.246°.
 The authoritative physics log is `logs/frigidaire_v2_full_physics_ready.log`.
 
-All 20 [full-load images](../media/frigidaire_fdpc4221as_v2/full_load/index.html)
+All 20 [full-load images](../../../build/frigidaire_collection/history/v2/gallery/full_load/index.html)
 passed, bringing the revised evidence to **51 rendered views**: 31 component and
 fixture views plus 20 loaded-assembly and inventory views. The
-[combined full-load evidence](../media/frigidaire_fdpc4221as_v2/full_load/evidence.json)
-and [rendering provenance](../media/frigidaire_fdpc4221as_v2/full_load/render_settings.json)
+[combined full-load evidence](../../../build/frigidaire_collection/history/v2/gallery/full_load/evidence.json)
+and [rendering provenance](../../../build/frigidaire_collection/history/v2/gallery/full_load/render_settings.json)
 verified the release's physics, asset, manifest, executable sources, and image hashes.
 The images show the accepted physical states; inventory views use the recorded
 charcoal studio backdrop to make the translucent tumbler's rim and shell clear.
 The final render log is `logs/frigidaire_v2_full_renders_studio.log`.
 
-The [standalone scene smoke check](../media/frigidaire_fdpc4221as_v2/full_load/standalone_smoke.json)
+The [standalone scene smoke check](../../../build/frigidaire_collection/history/v2/gallery/full_load/standalone_smoke.json)
 passed with 360 actual PhysX events at 120 Hz, covering three seconds of the
 authored closed hold. All 67 objects maintained contact paths to their intended
 supports; maximum per-axis displacement from the exported poses was 2.175 mm.
@@ -589,7 +599,7 @@ contact reports were empty, so those retained connections are identified
 separately in the report. Authored physics, drives, and sleep attributes remained
 unchanged.
 
-The [measured bowl non-nesting audit](../media/frigidaire_fdpc4221as_v2/full_load/non_nesting.json)
+The [measured bowl non-nesting audit](../../../build/frigidaire_collection/history/v2/gallery/full_load/non_nesting.json)
 also passed in all six recorded load states. It uses the bowls' actual visual
 meshes: neither bowl's foot center enters the other's inner cavity, and shallow
 rim/base intrusion remains within the existing 2 mm contact tolerance.
@@ -610,8 +620,8 @@ rotation about a stationary actor origin. The preserved test log is
 
 ## Previous release measurements
 
-The preserved first-release reports in `media/frigidaire_fdpc4221as/` record a combined `PASS` with
-matching asset and executable-source hashes:
+The preserved first-release reports in `build/frigidaire_collection/history/v1/gallery/` record a
+combined `PASS` with matching asset and executable-source hashes:
 
 - All 36 physics gates passed. The largest measured endpoint errors were 0.281°
   for the door and 0.079 mm for a rack. Maximum fixture drift relative to its rack
@@ -770,7 +780,7 @@ scripts/run_kit.sh frigidaire/scripts/evaluation/frigidaire_asset_evidence.py --
 | assembly physics | `[RESULT] PASS`, all `[OK]` gates including basket lift and replacement (tracking error < 0.03 mm, rack disturbance < 4 um); combined certification INCOMPLETE until the render pass below | `logs/frigidaire_v4_assembly_physics.log` |
 | assembly render | `[RESULT] PASS`, all `[OK]` image and settled-contact gates (peak penetration about 1.3 um); combined certification PASS, `evidence.json.result == "PASS"` (scope assembly) | `logs/frigidaire_v4_assembly_render.log`, `images/assembly/evidence.json` |
 | HOTEC v2 layout (Kit-free) | `[RESULT] PASS`: plates 8/8, bowls 6/8 (lower 2, upper 4), cups 8/8, counter 2 bowls (v1 on the old racks: bowls 4/8, counter 4); cups near-upright like the tumblers | `results/hotec/frigidaire/v2/layout.json`, `logs/hotec_v2_layout.log` |
-| HOTEC v2 settle and orbit (Kit) | `[RESULT] PASS`: settle passed after 6.25 s simulated (no restarts), max placed-to-settled displacement 23 mm / 13 deg (a lower plate), all 24 pieces contained, assets unchanged, 288-frame orbit; wall time 109 s | `results/hotec/frigidaire/v2/hotec_v2_{settle,evidence}.json`, `logs/hotec_v2_load.log`; host copies `media/hotec_wheatstraw/v2/`; `docs/figures/hotec_loaded_fdpc4221as.png` regenerated |
+| HOTEC v2 settle and orbit (Kit) | `[RESULT] PASS`: settle passed after 6.25 s simulated (no restarts), max placed-to-settled displacement 23 mm / 13 deg (a lower plate), all 24 pieces contained, assets unchanged, 288-frame orbit; wall time 109 s | `results/hotec/frigidaire/v2/hotec_v2_{settle,evidence}.json`, `logs/hotec_v2_load.log`; `docs/figures/hotec_loaded_fdpc4221as.png` regenerated |
 | package check | `[RESULT] PASS: Frigidaire collection check` (history v1, v2, v3 listed) | `python3 frigidaire/scripts/setup/package_frigidaire.py --collection-dir build/frigidaire_collection --check` |
 | history README | regenerated from `stage_frigidaire_collection.history_readme()` so it names the v2 / v2 / basket_1x4 revisions as current | `build/frigidaire_collection/history/README.md` |
 
@@ -843,9 +853,9 @@ mirror, `organized_candidates` xs +-.18775 / +-.10875, HOTEC `CUP_VARIANTS`.
 | assembly physics | `[RESULT] PASS`, all 14 `[OK]` gates including basket lift and replacement; combined certification INCOMPLETE until the render pass below | `logs/frigidaire_v5_assembly_physics.log` |
 | assembly render | `[RESULT] PASS`, combined certification PASS, `evidence.json.result == "PASS"` (scope assembly) | `logs/frigidaire_v5_assembly_render.log`, `images/assembly/evidence.json` |
 | package check | `[RESULT] PASS: Frigidaire collection check` | `python3 frigidaire/scripts/setup/package_frigidaire.py --collection-dir build/frigidaire_collection --check` |
-| HOTEC v3 settle and orbit (Kit) | `[RESULT] PASS`: settle 6.24 s (no restarts), max displacement 25 mm / 14 deg (cups sliding down the restored glass slope), all 24 pieces contained, assets unchanged, 288-frame orbit; wall time 114 s | `results/hotec/frigidaire/v3/hotec_v3_{settle,evidence}.json`, `logs/hotec_v3_load.log`; host copies `media/hotec_wheatstraw/v3/`; `docs/figures/hotec_loaded_fdpc4221as.png` regenerated |
+| HOTEC v3 settle and orbit (Kit) | `[RESULT] PASS`: settle 6.24 s (no restarts), max displacement 25 mm / 14 deg (cups sliding down the restored glass slope), all 24 pieces contained, assets unchanged, 288-frame orbit; wall time 114 s | `results/hotec/frigidaire/v3/hotec_v3_{settle,evidence}.json`, `logs/hotec_v3_load.log`; `docs/figures/hotec_loaded_fdpc4221as.png` regenerated |
 
-Run v2 (`results/hotec/frigidaire/v2`, `media/hotec_wheatstraw/v2`) and the v4 assembly evidence
+Run v2 (`results/hotec/frigidaire/v2`) and the v4 assembly evidence
 are superseded by the above; the v4 usd was overwritten in place (no archive, per the user).
 
 ## 2026-09-22 (later still): the v3 basket design at the tape dimensions (`basket_1x4_320x130_v2`)
@@ -897,7 +907,7 @@ the tapered bottom rim clears the right wall and the rear floor bend by about 8 
 | assembly physics | `[RESULT] PASS`, all 14 `[OK]` gates including basket lift and replacement with the loop handle; combined certification INCOMPLETE until the render pass below | `logs/frigidaire_v6_assembly_physics.log` |
 | assembly render | `[RESULT] PASS`, combined certification PASS, `evidence.json.result == "PASS"` (scope assembly) | `logs/frigidaire_v6_assembly_render.log`, `images/assembly/evidence.json` |
 | package check | first `[RESULT] FAIL` (`Stale upper_rack source geometry measurements`: the upper preview's recorded source hash predated the basket edit of the shared generator), `[RESULT] PASS` after regenerating `images/upper_rack/` | `python3 frigidaire/scripts/setup/package_frigidaire.py --collection-dir build/frigidaire_collection --check` |
-| HOTEC v4 settle and orbit (Kit) | `[RESULT] PASS`: settle 6.23 s (no restarts), max displacement 25 mm / 15 deg (cups down the glass slope), all 24 pieces contained, assets unchanged, 288-frame orbit; wall time 122 s | `results/hotec/frigidaire/v4/hotec_v4_{settle,evidence}.json`, `logs/hotec_v4_load.log`; host copies `media/hotec_wheatstraw/v4/`; `docs/figures/hotec_loaded_fdpc4221as.png` regenerated |
+| HOTEC v4 settle and orbit (Kit) | `[RESULT] PASS`: settle 6.23 s (no restarts), max displacement 25 mm / 15 deg (cups down the glass slope), all 24 pieces contained, assets unchanged, 288-frame orbit; wall time 122 s | `results/hotec/frigidaire/v4/hotec_v4_{settle,evidence}.json`, `logs/hotec_v4_load.log`; `docs/figures/hotec_loaded_fdpc4221as.png` regenerated |
 | history README | regenerated via `history_readme()` (names `basket_1x4_320x130_v2` as current) | `build/frigidaire_collection/history/README.md` |
 
 Runs v2 and v3 of the HOTEC load and the earlier same-day assembly evidence are superseded; the box-basket usd was overwritten in place (no archive, per the user).
@@ -977,7 +987,7 @@ wall lattice pitch, 9.2 mm course pitch; counts derived in `_derive_parameters`)
 | claims A dry run | `[RESULT] PASS`, 49 objects: lower 12 dinner + 4 salad + 2 bowls, upper 10 tumblers + 2 saucers + 3 bowls, basket 16 cutlery | `build/frigidaire_diagnostics/claims_v7/claim_A_geometry.json`, `logs/frigidaire_v7_claims_dry_run.log` |
 | tests | `frigidaire/tests` 422 passed, 6 skipped (planner pool stale); re-run after the docstring fixes below with the same result | `logs/frigidaire_v7_pytest.log` |
 | HOTEC v5 layout (Kit-free) | `[RESULT] PASS`: plates 8/8, bowls 6/8, cups 8/8, counter 2 (same as v2-v4: no HOTEC piece touches the basket) | `results/hotec/frigidaire/v5/layout.json`, `logs/hotec_v5_layout.log` |
-| HOTEC v5 settle and orbit (Kit) | `[RESULT] PASS`: settle 6.23 s (no restarts), max displacement 25 mm / 14 deg, all 24 pieces contained, assets unchanged, 288-frame orbit; wall time 120 s | `results/hotec/frigidaire/v5/hotec_v5_{settle,evidence}.json`, `logs/hotec_v5_load.log`; host copies `media/hotec_wheatstraw/v5/`; `docs/figures/hotec_loaded_fdpc4221as.png` regenerated |
+| HOTEC v5 settle and orbit (Kit) | `[RESULT] PASS`: settle 6.23 s (no restarts), max displacement 25 mm / 14 deg, all 24 pieces contained, assets unchanged, 288-frame orbit; wall time 120 s | `results/hotec/frigidaire/v5/hotec_v5_{settle,evidence}.json`, `logs/hotec_v5_load.log`; `docs/figures/hotec_loaded_fdpc4221as.png` regenerated |
 | history README, staged README | regenerated via `history_readme()`; `build/frigidaire_collection/README.md` refreshed from `docs/collection_readme.md` (the staged copy still described the v3 racks) | `build/frigidaire_collection/{history/README.md,README.md}` |
 | docs verification (workflow) | a read-only verifier re-derived every number (consistent) and found stale comment text in `geometry.py` (130 x 320 envelope), `claims.py` (12 tines, 320 x 130 x 95), `frigidaire_claim_report.py` (60-tine) and two test comments; all fixed, which changed the hashed source, so inspect and the assembly evidence were re-run (rows below) | `logs/frigidaire_v7_inspect.log` |
 | inspect (after the docstring fixes) | `[RESULT] PASS` | `logs/frigidaire_v7_inspect.log` |
@@ -986,8 +996,8 @@ wall lattice pitch, 9.2 mm course pitch; counts derived in `_derive_parameters`)
 | package check | `[RESULT] PASS: Frigidaire collection check` (after regenerating both previews for the current source hash; the check had first flagged the stale upper preview and then the edited sources) | `python3 frigidaire/scripts/setup/package_frigidaire.py --collection-dir build/frigidaire_collection --check` |
 
 The same-day builds with the 130 mm-wide baskets (v1 box, v2 v3-design) and their evidence are
-superseded; the usd was overwritten in place (no archive, per the user). HOTEC runs v2 to v4 are kept
-on disk but superseded by v5.
+superseded; the usd was overwritten in place (no archive, per the user). HOTEC runs v2 to v4 were kept
+on disk (moved to the hold folder on 2026-09-29) but superseded by v5.
 
 The two earlier same-day baskets (v1 box 130 x 320 x 95 with a centred arch, v2 = the v3 design
 at 130 x 320 x 95) are superseded; the builds were overwritten in place, no archive.

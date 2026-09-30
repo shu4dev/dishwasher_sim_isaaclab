@@ -40,7 +40,7 @@ PARAMETERS = {
                    "source": ["https://frigidaire.bynder.com/transform/XL-1400/2f590bac-50b2-4e85-9db5-5bffc5692cbc/FDPC4221AS-CP-psd",
                               "https://frigidaire.bynder.com/transform/XL-1400/fa472cfb-2998-43c6-b702-c038cb226387/FDPC4221AS-34VL-psd"],
                    "dimension_status": "proportions estimated from official model photographs; no control or latch articulation"},
-    "rack_dimension_datum": "Outer wire-rim envelope; wheels, hubs and front grip projections are reported separately. Rack outer sizes, tine counts and pitches are the user's 2026-09-21 tape measurements; margins are derived from them, not measured.",
+    "rack_dimension_datum": "Outer wire-rim envelope; wheels, hubs and front grip projections are reported separately. Rack outer sizes, tine counts, pitches and the front/left margins are the user's tape measurements (2026-09-21, re-measured 2026-09-28); the rear/right margins are the leftover of the rim.",
     "interior_fit": {"hinge_yz": [-.27425, .19125],
                      "hinge_shift_from_first_reconstruction_yz": [-.02025, .02025],
                      "hinge_status": "inferred mechanical datum, not measured",
@@ -49,28 +49,28 @@ PARAMETERS = {
                      "tub_back_inner_y": .3015, "closed_liner_inner_y": -.2855,
                      "lower_rim_front_back_clearance": .012,
                      "lower_rim_side_clearance": .0145},
-    "lower_rack": {"wire_width": .525, "wire_depth": .563, "rim_height": .1106,   # rim wire centre; outer (floor wire underside to rim top) = the tape 115 mm
-                   "outer_height_tape": .115,
+    "lower_rack": {"wire_width": .525, "wire_depth": .561, "rim_height": .1036,   # rim wire centre; outer (floor wire underside to rim top) = the tape 108 mm
+                   "outer_height_tape": .108,
                    "wire_diameter": .004, "rim_diameter": .0048,
                    "floor_cross_ribs": 21, "floor_longitudinal_ribs": 17,
-                   "geometry_revision": "lower_tines_6x12_v3",
+                   "geometry_revision": "lower_tines_6x12_v4",
                    "tine_banks": 6, "tines_per_bank": 12,
                    "tine_repetition_axis": "X",
-                   "tine_pitch": {"x": .036, "y": .080},
-                   "tine_margins_tape_m": {"left": .077, "right": .105, "front": .105, "rear": .120},
-                   "tine_margins": None,   # derived below from the outer size, counts and pitch, split by the tape ratio
+                   "tine_pitch": {"x": .0318, "y": [.081, .073, .067, .073, .081]},   # y: the five row gaps, front to back (tape 2026-09-28)
+                   "tine_margins_tape_m": {"left": .073, "right": .102, "front": .101, "rear": .113},
+                   "tine_margins": None,   # derived below: left and front are the tape values, right and rear the leftover of the rim
                    "tine_margin_datum": "Tine base centers to the outer wire-rim edge; front -Y, rear +Y.",
-                   "tine_margin_derivation": "Outer size, tine counts and pitch are trusted; the leftover width and depth are split by the ratio of the tape margins, which over-determine the field by 53 mm (X) and 62 mm (Y).",
+                   "tine_margin_derivation": "Outer size, tine counts, pitches and the LEFT and FRONT tape margins are trusted (the user's counting datums); the right and rear margins are the rim's leftover. Width closes exactly (right 102.2 vs tape 102 mm); the depth is over-determined by 28 mm (rear 85 vs tape 113 mm).",
                    "tine_diameter": .0039, "tine_height": .095,
                    "tine_short_height": .045, "tine_short_rows": [2, 3],
                    "tine_tip_offset_x": .008, "tine_base_z": .006,
                    "basket_bay": {"clearance": .006,
-                                  "rule": "Tines whose base center lies inside the basket footprint grown by the clearance are omitted, and the base rails of those rows end at the last remaining tine, so the basket rests on the floor wires."},
+                                  "rule": "Tines whose base center (or leaning tip, in X) lies inside the basket footprint grown by the clearance are omitted, and the base rails of those rows end at the last remaining tine, so the basket rests on the floor wires."},
                    "basket_reserved_x": None, "basket_reserved_y": None,   # derived: footprint +- clearance
                    "wheel_count": 8, "wheel_radius": .016,
                    "wheel_center_x_abs": .2693,   # set by the cabinet's LowerWheelTrack, not by the rim
                    "wheel_center_z": -.019, "estimated_mass_kg": 3.7,
-                   "source": ["user tape measurement 2026-09-21: 52.5 W x 56.3 D x 11.5 H cm outer rim; 12 columns x 6 rows; 3.6 cm left-right and 8 cm front-back pitch; tines 9.5 cm, rows 3-4 4.5 cm; tape margins 7.7 left, 10.5 right, 10.5 front, 12 rear cm (derived, see tine_margin_derivation)", "build/frigidaire_collection/references/lower_rack/front.jpg", "build/frigidaire_collection/references/lower_rack/right.jpg", "build/frigidaire_collection/references/lower_rack/front_left.jpg", "build/frigidaire_collection/references/overall/overall_1.webp", "build/frigidaire_collection/references/loaded/loaded_2.webp", "build/frigidaire_collection/references/loaded/loaded_3.webp", "build/frigidaire_collection/references/loaded/loaded_4.webp"]},
+                   "source": ["user tape re-measurement 2026-09-28: 52.5 W x 56.1 D x 10.8 H cm outer rim; 12 columns at 3.18 cm; 6 rows at 8.1 / 7.3 / 6.7 / 7.3 / 8.1 cm front to back; tines 9.5 cm, rows 3-4 4.5 cm; margins 7.3 left, 10.2 right, 10.1 front, 11.3 rear cm (left and front applied, see tine_margin_derivation)", "user tape measurement 2026-09-21 (superseded): 52.5 x 56.3 x 11.5 cm; 3.6 x 8 cm pitch; margins 7.7 / 10.5 / 10.5 / 12 cm", "build/frigidaire_collection/references/lower_rack/front.jpg", "build/frigidaire_collection/references/lower_rack/right.jpg", "build/frigidaire_collection/references/lower_rack/front_left.jpg", "build/frigidaire_collection/references/overall/overall_1.webp", "build/frigidaire_collection/references/loaded/loaded_2.webp", "build/frigidaire_collection/references/loaded/loaded_3.webp", "build/frigidaire_collection/references/loaded/loaded_4.webp"]},
     "upper_rack": {"wire_width": .480, "wire_depth": .515,
                    "rim_height": .1041, "lowest_floor_center_z": -.018,   # rim wire centre; outer (lowest floor wire to rim top) = the tape 125 mm
                    "outer_height_tape": .125,
@@ -78,15 +78,15 @@ PARAMETERS = {
                    "wire_diameter": .0038, "rim_diameter": .0044,
                    "floor_cross_ribs": 21, "floor_longitudinal_ribs": 9,
                    "front_uprights": 9, "front_horizontal_rails": 2,
-                   "geometry_revision": "upper_tines_4x13_v4",
-                   "tine_banks": 4, "tines_per_bank": 13, "tine_spacing": .037,
-                   "tine_column_pitch": .090,
+                   "geometry_revision": "upper_tines_4x13_v5",
+                   "tine_banks": 4, "tines_per_bank": 13, "tine_spacing": .033,
+                   "tine_column_gaps": [.092, .086, .092],   # column to column, left to right (tape 2026-09-28)
                    "tine_repetition_axis": "Y",
-                   "tine_bank_x": None,           # derived: symmetric columns at tine_column_pitch
+                   "tine_bank_x": None,           # derived: the tape column gaps, symmetric about the centre
                    "tine_side_margin": None, "tine_front_margin": None, "tine_rear_margin": None,   # derived
-                   "tine_margins_tape_m": {"side": .120, "front": .080, "rear": .055},
+                   "tine_margins_tape_m": {"side": .116, "front": .082, "rear": .044},
                    "tine_margin_datum": "Tine base centers to the outer wire-rim edge; front -Y, rear +Y.",
-                   "tine_margin_derivation": "Outer size, column pitch, tine count and pitch are trusted; the side margin is the symmetric leftover and the front/rear margins split the leftover depth by the tape ratio (the tape margins over-determine the field by 30 mm (X) and 64 mm (Y)).",
+                   "tine_margin_derivation": "Outer size, column gaps, tine count, pitch and the FRONT tape margin are trusted; the columns are symmetric (the tape is symmetric: 11.6 both sides), so the side margin is the leftover (105 vs tape 116 mm), and the rear margin is the leftover depth (37 vs tape 44 mm).",
                    "tine_absent": {"columns": [1, 2], "indices": [5, 6],
                                    "note": "the two middle columns have 11 tines: positions 6-7 of 13 from the front are absent (gap centered as closely as the odd count allows)"},
                    "tine_diameter": .0036, "tine_height": .091,
@@ -97,7 +97,7 @@ PARAMETERS = {
                    "wheel_count": 4, "wheel_radius": .0105,
                    "roller_center_x_abs": .2595, "roller_hub_x_abs": .2638,   # cabinet UpperRollerTrack coupled
                    "estimated_mass_kg": 2.9,
-                   "source": ["user tape measurement 2026-09-21: 48 W x 51.5 D x 12.5 H cm outer rim; 4 columns 9 cm apart; 13 tines at 3.7 cm in the outer columns, 11 in the middle columns (two missing at the center); tape margins 12 left/right, 8 front, 5.5 rear cm (derived, see tine_margin_derivation)", "build/frigidaire_collection/references/upper_rack/front.jpg", "build/frigidaire_collection/references/upper_rack/right.jpg", "build/frigidaire_collection/references/upper_rack/front_left.jpg", "build/frigidaire_collection/references/overall/overall_1.webp", "build/frigidaire_collection/references/overall/overall_2.webp", "build/frigidaire_collection/references/loaded/loaded_1.webp", "build/frigidaire_collection/references/loaded/loaded_2.webp", "build/frigidaire_collection/references/loaded/loaded_3.webp", "build/frigidaire_collection/references/loaded/loaded_4.webp"]},
+                   "source": ["user tape re-measurement 2026-09-28: 48 W x 51.5 D x 12.5 H cm outer rim; 4 columns 9.2 / 8.6 / 9.2 cm apart; 13 positions at 3.3 cm in the outer columns, 11 in the middle columns (two missing at the center); margins 11.6 left/right, 8.2 front, 4.4 rear cm (front applied, see tine_margin_derivation)", "user tape measurement 2026-09-21 (superseded): 4 columns 9 cm apart, 3.7 cm pitch; margins 12 / 8 / 5.5 cm", "build/frigidaire_collection/references/upper_rack/front.jpg", "build/frigidaire_collection/references/upper_rack/right.jpg", "build/frigidaire_collection/references/upper_rack/front_left.jpg", "build/frigidaire_collection/references/overall/overall_1.webp", "build/frigidaire_collection/references/overall/overall_2.webp", "build/frigidaire_collection/references/loaded/loaded_1.webp", "build/frigidaire_collection/references/loaded/loaded_2.webp", "build/frigidaire_collection/references/loaded/loaded_3.webp", "build/frigidaire_collection/references/loaded/loaded_4.webp"]},
     "silverware_basket": {"geometry_revision": "basket_1x4_320x95_v4",
                           "length_y": .320, "width_x": .095, "body_height": .130, "handle_top_z": .220,
                           "envelope_datum": "outer wire surfaces of the TOP rim including the 3 mm rim radius (the walls taper inward toward the floor); basket origin at the bottom-face center (the lowest wire surface is z = 0, so the body and handle heights are outer heights), X across the width, Y along the length, Z up",
@@ -149,13 +149,13 @@ PARAMETERS = {
         "basket/top": "Open top and elongated handle aperture; body is dark molded plastic with taper and reinforced corners."},
     "assumptions": [
         "Photo resolutions do not identify every overlapping wire; counts, local bends and inaccessible structure are inferred.",
-        "Rack outer wire-rim dimensions, tine counts and pitches follow the user's 2026-09-21 tape measurements; edge margins are derived from them (see tine_margin_derivation); wire diameters, absolute interior depths and clearances are still estimates.",
+        "Rack outer wire-rim dimensions, tine counts, pitches (the upper column gaps and the lower row gaps are non-uniform) and the front/left margins follow the user's 2026-09-28 tape re-measurement; the rear/right margins are the rim's leftover (see tine_margin_derivation; the lower depth is over-determined by 28 mm); wire diameters, absolute interior depths and clearances are still estimates.",
         "Visible four-per-side lower wheels and four basket compartments guide topology; rack tines are fixed.",
         "Upper lowest side floor is -18 mm (the mug valley 10.5 mm outside the outer tine column and the glass trough 17.8 mm inside the rim centreline), central floor is -10 mm and the rim wire centre is +104.1 mm, so the rack measures the tape 125 mm outside (lowest floor wire to rim top); the photo-fitted sloped glass channels and intermediate mug channels are kept inside the tape-measured 480 mm rim, with the ridge between them lowered to +4 mm because the 75 mm between that ridge and the wall cannot pass an 80 mm tumbler mouth at floor level.",
         "Upper front and rear wall ribs terminate on the actual filleted cross-floor rib centerlines, rather than free-hanging above the troughs.",
         "Ribs and lattice are swept round sections with rounded ends; plastic molding draft and ribs are approximated.",
         "The basket is the v3 photo-fitted design (tapered lattice body, double rims, corner posts, loop handle with an open aperture over the outer long wall) authored at the user's tape size: 320 by 95 mm top rim, 130 mm body, handle top 220 mm, four equal open compartments in a row; the taper ratios, lattice pitch, wire radii, loop proportions and the seat inside the right rim are estimates.",
-        "The lower 6-by-12 tine grid keeps all 72 positions except the 8 under the basket footprint (columns 11-12 of rows 3-6), whose base rails end at the last remaining tine; rows 3-4 are the short 45 mm tines. The outer row pairs provide front and rear plate supports. Installed rack rollers use simplified constrained slides.",
+        "The lower 6-by-12 tine grid keeps all 72 positions except the 8 under the basket footprint (columns 11-12 of rows 3-6: column 11's base sits 2 mm ahead of the bay but its leaning tip enters it), whose base rails end at the last remaining tine; rows 3-4 are the short 45 mm tines. The outer row pairs provide front and rear plate supports. Installed rack rollers use simplified constrained slides.",
         "The estimated tub back and inner door liner are recessed to accommodate the deeper rack targets. The inferred hinge shifts 20.25 mm forward and 20.25 mm upward so flush door wheel strips align to the 180 mm tracks; closed exterior points and door-open depth are unchanged. Upper rack and carriers are raised 50 mm from the first reconstruction.",
         "Door front topology follows official model photographs; pocket dimensions, tub sill and roller runways remain functional approximations.",
         "Stainless skin extends 55.25 mm below the revised hinge, leaving the same 13 mm closed front seam; toe kick and plinth stay recessed for the full 0–90 degree sweep.",
@@ -163,28 +163,35 @@ PARAMETERS = {
 }
 
 
-def _split_leftover(outer, count, pitch, ratio_a, ratio_b):
-    """Split the span left after (count-1) pitches in the ratio a:b; raise if the field does not fit."""
-    leftover = outer - (count - 1) * pitch
-    if leftover <= 0:
-        raise ValueError("Tine field of %.4f m does not fit inside %.4f m" % ((count - 1) * pitch, outer))
-    return leftover * ratio_a / (ratio_a + ratio_b), leftover * ratio_b / (ratio_a + ratio_b)
+def _leftover(outer, near_margin, field, what):
+    """Far margin left by the near tape margin and the tine field inside the outer size; raise if it does not fit."""
+    far = outer - near_margin - field
+    if far <= 0:
+        raise ValueError("%s: tine field of %.4f m behind a %.4f m margin does not fit inside %.4f m"
+                         % (what, field, near_margin, outer))
+    return far
 
 
 def _derive_parameters(p):
-    """Fill every value marked None: margins from outer size, counts and pitch; basket seat and cells."""
+    """Fill every value marked None: tine columns/rows from the tape margins and pitches; basket seat and cells."""
     lower, tape = p["lower_rack"], p["lower_rack"]["tine_margins_tape_m"]
-    left, right = _split_leftover(lower["wire_width"], lower["tines_per_bank"], lower["tine_pitch"]["x"],
-                                  tape["left"], tape["right"])
-    front, rear = _split_leftover(lower["wire_depth"], lower["tine_banks"], lower["tine_pitch"]["y"],
-                                  tape["front"], tape["rear"])
-    lower["tine_margins"] = {"left": left, "right": right, "front": front, "rear": rear}
+    field_x = (lower["tines_per_bank"] - 1) * lower["tine_pitch"]["x"]
+    field_y = float(sum(lower["tine_pitch"]["y"]))
+    if len(lower["tine_pitch"]["y"]) != lower["tine_banks"] - 1:
+        raise ValueError("lower_rack tine_pitch['y'] must list one gap per pair of rows")
+    lower["tine_margins"] = {"left": tape["left"], "front": tape["front"],
+                             "right": _leftover(lower["wire_width"], tape["left"], field_x, "lower_rack width"),
+                             "rear": _leftover(lower["wire_depth"], tape["front"], field_y, "lower_rack depth")}
     upper, tape = p["upper_rack"], p["upper_rack"]["tine_margins_tape_m"]
-    banks = upper["tine_banks"]
-    upper["tine_bank_x"] = [(i - (banks - 1) / 2) * upper["tine_column_pitch"] for i in range(banks)]
-    upper["tine_side_margin"] = (upper["wire_width"] - (banks - 1) * upper["tine_column_pitch"]) / 2
-    upper["tine_front_margin"], upper["tine_rear_margin"] = _split_leftover(
-        upper["wire_depth"], upper["tines_per_bank"], upper["tine_spacing"], tape["front"], tape["rear"])
+    gaps = list(upper["tine_column_gaps"])
+    if len(gaps) != upper["tine_banks"] - 1:
+        raise ValueError("upper_rack tine_column_gaps must list one gap per pair of columns")
+    xs = np.concatenate([[0.], np.cumsum(gaps)])
+    upper["tine_bank_x"] = (xs - xs[-1] / 2).tolist()          # symmetric about the centre, as the tape is
+    upper["tine_side_margin"] = _leftover(upper["wire_width"], 0., float(xs[-1]), "upper_rack width") / 2
+    upper["tine_front_margin"] = tape["front"]
+    upper["tine_rear_margin"] = _leftover(upper["wire_depth"], tape["front"],
+                                          (upper["tines_per_bank"] - 1) * upper["tine_spacing"], "upper_rack depth")
     basket = p["silverware_basket"]
     seat = np.asarray(basket["seat"]["origin_in_rack_m"], dtype=float)
     p["origins"]["SilverwareBasket"] = (np.asarray(p["origins"]["LowerRack"], dtype=float) + seat).tolist()
@@ -345,17 +352,17 @@ def _perimeter(c, name, halfx, front, rear, z, radius=.0024, bend=.012, material
 def lower_tine_positions():
     """Return column X and front-to-back row Y base positions in local metres.
 
-    The outer rim size, counts and pitches are the tape measurements; the margins
-    are derived from them (see PARAMETERS["lower_rack"]["tine_margin_derivation"]).
-    Placement and inspection consume the same generated grid, including positions
-    that the basket bay omits (see lower_tine_mask).
+    The outer rim size, counts, pitches and the left/front margins are the tape
+    measurements: columns run from the left margin at the column pitch, rows from
+    the front margin at the five tape row gaps (see
+    PARAMETERS["lower_rack"]["tine_margin_derivation"]). Placement and inspection
+    consume the same generated grid, including positions that the basket bay omits
+    (see lower_tine_mask).
     """
     p = PARAMETERS["lower_rack"]
     m = p["tine_margins"]
-    xs = np.linspace(-p["wire_width"]/2+m["left"],
-                     p["wire_width"]/2-m["right"], p["tines_per_bank"])
-    ys = np.linspace(-p["wire_depth"]/2+m["front"],
-                     p["wire_depth"]/2-m["rear"], p["tine_banks"])
+    xs = -p["wire_width"]/2 + m["left"] + np.arange(p["tines_per_bank"]) * p["tine_pitch"]["x"]
+    ys = -p["wire_depth"]/2 + m["front"] + np.concatenate([[0.], np.cumsum(p["tine_pitch"]["y"])])
     return xs, ys
 
 
@@ -377,11 +384,16 @@ def lower_basket_footprint():
 
 
 def lower_tine_mask():
-    """Boolean (rows, columns) array; False where the basket bay omits the tine."""
+    """Boolean (rows, columns) array; False where the basket bay omits the tine.
+
+    A tine is omitted when its base centre, or the tip it leans toward +X, lies
+    inside the basket footprint grown by the bay clearance.
+    """
     xs, ys = lower_tine_positions()
     footprint = lower_basket_footprint()
     c = footprint["clearance"]
-    inside_x = (xs >= footprint["x"][0]-c) & (xs <= footprint["x"][1]+c)
+    tips = xs + PARAMETERS["lower_rack"]["tine_tip_offset_x"]
+    inside_x = (tips >= footprint["x"][0]-c) & (xs <= footprint["x"][1]+c)
     inside_y = (ys >= footprint["y"][0]-c) & (ys <= footprint["y"][1]+c)
     return ~(inside_y[:, None] & inside_x[None, :])
 
@@ -456,10 +468,10 @@ def _lower_rack():
     rear_columns = np.flatnonzero(mask[-1])
     seat = np.asarray(PARAMETERS["silverware_basket"]["seat"]["origin_in_rack_m"], dtype=float)
     c["sites"] = {"handle_center": [0, -hy, rim_z],
-                  # Plate seed: the second front gap, forward of the short row-3 tines and
-                  # inset behind the front rim, so the 260 mm fixture disc stands 3 mm above
-                  # the floor wires and clear of tines and rim.
-                  "plate": [float(mids[1]), -.150, .139],
+                  # Plate seed: the second front gap, 15 mm behind the front bank centre
+                  # (forward of the short row-3 tines, inset behind the front rim), so the
+                  # 260 mm fixture disc stands 3 mm above the floor wires and clear of tines and rim.
+                  "plate": [float(mids[1]), round(front_y + .015, 6), .139],
                   "bowl": [.191, -.140, .006],
                   "front_plate_bank": [0, front_y, base_z],
                   "rear_plate_bank": [float((xs[rear_columns[0]]+xs[rear_columns[-1]])/2), rear_y, base_z],
@@ -474,13 +486,13 @@ def _lower_rack():
 def upper_tine_positions():
     """Return column X and front-to-back base Y positions in rack-local metres.
 
-    Columns are symmetric at the tape column pitch; positions run at the tape
-    pitch anchored by the derived rear margin. The same grid defines geometry,
+    Columns follow the tape column gaps, symmetric about the centre; positions run
+    at the tape pitch from the tape front margin. The same grid defines geometry,
     loading gaps and inspection; absent positions come from upper_tine_mask.
     """
     p = PARAMETERS["upper_rack"]
-    rear_y = p["wire_depth"]/2 - p["tine_rear_margin"]
-    ys = rear_y + (np.arange(p["tines_per_bank"])-(p["tines_per_bank"]-1))*p["tine_spacing"]
+    front_y = -p["wire_depth"]/2 + p["tine_front_margin"]
+    ys = front_y + np.arange(p["tines_per_bank"])*p["tine_spacing"]
     return np.array(p["tine_bank_x"], dtype=float), ys
 
 

@@ -170,7 +170,7 @@ def measurements(rack, basket, basket_offset):
                     "right": float(rim_max[0] - xs[-1]),
                     "rear": float(rim_max[1] - ys[-1]),
                     "front": float(ys[0] - rim_min[1])},
-        "margin_status": "derived from the outer rim, tine counts and pitch; the right margin is measured on the full front rows",
+        "margin_status": "left and front margins as tape-measured (2026-09-28); right and rear margins are the rim's leftover after the tape pitches; the right margin is measured on the full front rows",
         "derived_margins_mm": {key: value * 1000 for key, value in p["tine_margins"].items()},
         "user_margins_tape_mm": {key: value * 1000 for key, value in p["tine_margins_tape_m"].items()},
         "margin_derivation": p["tine_margin_derivation"],
@@ -248,16 +248,16 @@ def overhead(rack, basket, basket_offset, report, bases, rim_min, rim_max, out_d
     for y in [rim_min[1], rim_max[1]]:
         ax.plot([-360, rim_min[0] - 8], [y, y], color=PALE, lw=.7)
     tape = report["user_margins_tape_mm"]
-    for a, b, side in [(rim_min[0], xs[0], "left"), (xs[-1], rim_max[0], "right")]:
-        dimension(ax, (a, -232), (b, -232), "%.2f mm\n(derived; tape %g)" % (b - a, tape[side]))
+    dimension(ax, (rim_min[0], -232), (xs[0], -232), "%.2f mm\n(tape)" % (xs[0] - rim_min[0]))
+    dimension(ax, (xs[-1], -232), (rim_max[0], -232), "%.2f mm\n(leftover; tape %g)" % (rim_max[0] - xs[-1], tape["right"]))
     for y in [rim_min[1], ys[0], ys[-1], rim_max[1]]:
         ax.plot([rim_max[0] + 8, 324], [y, y], color=PALE, lw=.7)
     dimension(ax, (313, rim_min[1]), (313, ys[0]),
-              "%.2f mm front (derived; tape %g)" % (report["margins"]["front"], tape["front"]), rotation=90)
+              "%.2f mm front (tape)" % report["margins"]["front"], rotation=90)
     dimension(ax, (313, ys[-1]), (313, rim_max[1]),
-              "%.2f mm rear (derived; tape %g)" % (report["margins"]["rear"], tape["rear"]), rotation=90)
-    dimension(ax, (-260, ys[1]), (-260, ys[2]),
-              "%g mm pitch" % (ys[2] - ys[1]), (-30, 0), rotation=90)
+              "%.2f mm rear (leftover; tape %g)" % (report["margins"]["rear"], tape["rear"]), rotation=90)
+    for r in range(len(ys) - 1):
+        dimension(ax, (-260, ys[r]), (-260, ys[r + 1]), "%g" % round(ys[r + 1] - ys[r], 3), (-24, 0), rotation=90)
     body = report["basket"]["tape_measured_body_mm"]
     ax.text(basket_offset[0] * 1000, basket_offset[1] * 1000,
             "BASKET %g×%g" % (body["length_y"], body["width_x"]),
@@ -274,7 +274,7 @@ def overhead(rack, basket, basket_offset, report, bases, rim_min, rim_max, out_d
         report["columns_left_to_right"], report["rows_front_to_back"], report["tine_count"], len(removed)),
         fontsize=11, color=MUTED, va="top")
     fig.text(.065, .069, "All dimensions: mm. Margins: tine base center to outer wire-rim edge, "
-             "derived from the tape outer size, counts and pitch (tape margins in brackets).",
+             "left/front margins and pitches as taped; right/rear margins are the rim's leftover (tape in brackets).",
              fontsize=9, color=INK)
     fig.text(.065, .047, "Basket shown as its generated rim, handle and partition outline so all tine bases remain visible.",
              fontsize=9, color=BASKET)

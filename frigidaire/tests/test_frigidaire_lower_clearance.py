@@ -78,7 +78,7 @@ class BasketFitTests(unittest.TestCase):
         self.assertAlmostEqual(window[1], 262.)
         thresholds = report["group_thresholds_mm"]
         self.assertAlmostEqual(thresholds["floor_x"], 225.18)
-        self.assertAlmostEqual(thresholds["long_turn_y"], 256.67)
+        self.assertAlmostEqual(thresholds["long_turn_y"], 255.67)   # 561 mm rim (2026-09-28); 256.67 at 563
 
     def test_rail_reaching_under_the_footprint_fails_without_any_contact(self):
         footprint = geometry.lower_basket_footprint()

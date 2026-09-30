@@ -9,11 +9,12 @@ and an exact target arrangement of kitchen objects in an articulated dishwasher 
 self-authored Bosch 800 twin; the ArtVIP baseline ships too), an algorithm moves one object at
 a time by **teleportation** and Isaac settles every move. Feasible = **collision-free**
 (Kit-free FCL pose query, `CollisionWorld.object_in_collision`) + **physically stable** (Isaac
-settle validation). There is no robot arm, no grasping, no motion planning on this branch
-(that stack lives in git history / other branches). `dishsim/compat.py` computes the provably
-minimum move count per instance, so results are quoted as an optimality gap.
+settle validation). The Bosch benchmark has no robot arm, no grasping, no motion planning (the
+old robot stack lives in git history / other branches); a fresh UR5e + Robotiq bring-up in the
+Frigidaire twin is in progress, see `frigidaire/docs/robot.md`. `dishsim/compat.py` computes the
+provably minimum move count per instance, so results are quoted as an optimality gap.
 
-The minimal pipeline, in order (this is the whole repo):
+The minimal pipeline, in order (this is the whole Bosch benchmark):
 
 1. **Bring-up** — `scripts/tools/bootstrap.sh`: image build if absent, `compose up`, archive
    restore (validates every cache's `config_hash`), kit_smoke install gate.
@@ -108,9 +109,11 @@ forever at full CPU, and Kit's fast-exit discards block-buffered stdout — incl
 ## Validation status
 
 **`placement` is green on this box** (2026-08-30, corallab / Isaac 4.5 port, bosch800 @
-side_winner): pytest 11/11 → restore PASS → kit_smoke → capacity 39/15 → gen_instances →
+side_winner): pytest → restore PASS → kit_smoke → capacity 39/15 → gen_instances →
 instance_views → run_rearrange all `[RESULT] PASS`; greedy solved 3/3 perturbed 15-item
-instances in 9 moves of 45 (provable optima 9/8/8 — `compat.optimal_moves`). Instances are
+instances in 9 moves of 45 (provable optima 9/9/9 — `compat.optimal_moves`; the first pins of
+9/8/8 were a table-reuse bug, re-pinned 2026-08-31, and that run left no records). `pytest
+tests/` is 65 tests, about 70 s (2026-09-29). Instances are
 PER-MACHINE artifacts (PhysX 4.5 settle fixed points differ from the retired 6.0.1 cloud
 box), so the at-goal/optima pins in `tests/test_compat.py` belong to this box's instances.
 Other rack states (`third_out`, `middle_out`) have never run under Kit here; the fault knobs
@@ -159,9 +162,10 @@ or silent import shadowing, not clean errors:
   `run_rearrange.py`; accept a `seed=` kwarg if stochastic (the runner delivers a
   per-(instance, algorithm) sha256-derived seed). `obs` carries `counter_cap` /
   `counter_count` — a move onto a full counter is refused (`counter-full`, non-fatal,
-  counted); 25 straight refusals abort `refusal-loop`. `unstable-settle` is NON-fatal
-  (oracle teleports the item back; move counts as `failed-settle`); `disturbed` stays
-  fatal. The optimality gap in `compare_algorithms.py` reads each instance's cap-aware
+  counted); 25 straight refusals abort `refusal-loop`. `failed-settle` (a drifting settle)
+  is NON-fatal (oracle teleports the item back, the move counts; 25 straight abort
+  `settle-loop`); a put-back that does not reproduce (`unstable-settle`) and `disturbed`
+  stay fatal. The optimality gap in `compare_algorithms.py` reads each instance's cap-aware
   `meta.optimum` (computed at generation; never re-solved).
 - Every number is a *measured* value (`docs/joint_report.md`, `docs/bosch800_source_data.md`)
   — never eyeball-edit. Spawn poses place the articulation **root link** (`E_body_5`, not the
@@ -171,26 +175,28 @@ or silent import shadowing, not clean errors:
 
 A Kit-free ray-cast proxy that ranks arrangements of the SAME objects in the Frigidaire
 FDPC4221AS by how much of their food-contact surface the spray arms can reach; it is not a
-cleaning measurement. Lives in the gitignored `frigidaire/` package: `exposure.py`, the
-`frigidaire_exposure_{demo,summary,search,settled_best}.py` scripts, `frigidaire/tests/test_exposure.py`.
-Reference, commands, results and landmines: `frigidaire/docs/exposure.md`; human quickstart:
-`frigidaire/docs/exposure_quickstart.md`. Outputs under `results/exposure/frigidaire/`.
-Two traps: Warp kernels must live in a file (never `python -c`), and settling a search
-proposal must go through `frigidaire_organized_validate.py`, because the claims evidence
-script rejects lower-rack mugs.
+cleaning measurement. Lives in the `frigidaire/` package (tracked in git): `exposure.py` (the
+scorer, used by the HOTEC bench and top-5 code) and `frigidaire/tests/test_exposure.py` (two of
+its tests run on settled states kept in `frigidaire/tests/fixtures/settled_states/`). The v3-era
+demo, summary, search and settled-best scripts, their results, and the organized/packing
+pipelines they read were retired 2026-09-29: code in git history (last at commit 4455813), result
+folders in `dishsim/_trash_20260929/` until 2026-10-29; their numbers ran on the v3 racks and are
+history. Reference and landmines: `frigidaire/docs/exposure.md`; quickstart
+`frigidaire/docs/exposure_quickstart.md`. Live outputs: `results/exposure/frigidaire/{hotec,hotec_heightfix}`
+(pre-2026-09-28 racks, history). Trap: Warp kernels must live in a file (never `python -c`).
 
-## Frigidaire arrangement planner (2026-09-20)
+## Frigidaire planner helpers (live half of the 2026-09-20 arrangement planner)
 
-Kit-free planner over the revision-5 exposure objective: a messy counter pile (new runtime worktop
-slab, top at 0.914 m) plus unorganized racks -> every object inside, maximise `S`. Reuses the Bosch
-driver `rearrange.run_episode` with a Frigidaire FCL world and a geometric oracle (support-order
-fault), goals from the screened candidate pool plus keep-in-place, greedy sequencer with the counter
-cap, first-fit baseline, one Isaac settle of the final arrangement as the gate. Lives in
-`frigidaire/src/dishsim_frigidaire/planner.py`; scripts `frigidaire_planner_{instances,generate,run,video}.py`;
-reference `frigidaire/docs/planner.md`; outputs under `results/planner/frigidaire/`. Two traps: the
-backend's rack-speed gate flakes (the generator retries the other rack order), and `scripts/run_py.sh`
-now exports Kit's USD extension so `pxr` imports Kit-free (the FCL checker needs it).
-Geometry (2026-09-22): the twin's racks and basket are now tape-measured (48/64 tines, 1x4 basket 320 x 95 x 130 with a 220 mm handle; revisions `upper_tines_4x13_v4` / `lower_tines_6x12_v3` / `basket_1x4_320x95_v4` since 2026-09-23, when the rim and basket heights were fixed to the tape's outside heights), claims variant B retired, the v3 and v4 builds archived under `build/frigidaire_collection/history/`; reference `frigidaire/docs/geometry.md`.
+The pool-search arrangement planner (ExposurePlanner, FirstFitBaseline, the geometric pool, the
+`frigidaire_planner_{instances,generate,run}.py` scripts, `results/planner/frigidaire/`) was retired
+2026-09-29 (code in git history, results in `dishsim/_trash_20260929/` until 2026-10-29); the HOTEC
+bench and the MCTS replaced it. What remains in `frigidaire/src/dishsim_frigidaire/planner.py` serves
+the bench: the FCL `PlannerWorld` (appliance mirror, counter slab at top 0.914 m, objects), the support
+graph and the greedy sequencer with the counter cap, on the Bosch driver `rearrange.run_episode`;
+reference `frigidaire/docs/planner.md`; `frigidaire_planner_video.py` renders episodes. Two traps:
+the backend's rack-speed gate flakes (retry the other rack order), and `scripts/run_py.sh` exports
+Kit's USD extension so `pxr` imports Kit-free (the FCL checker needs it).
+Geometry (2026-09-28): the twin's racks and basket are tape-measured (48/64 tines, 1x4 basket 320 x 95 x 130 with a 220 mm handle; revisions `upper_tines_4x13_v5` / `lower_tines_6x12_v4` / `basket_1x4_320x95_v4` since the 2026-09-28 re-measurement: non-uniform column/row gaps, front/left margins from the tape, rear/right margins the rim's leftover, lower rack 561 deep and 108 tall), claims variant B retired, the v3, v4 and v5 builds archived under `build/frigidaire_collection/history/`; reference `frigidaire/docs/geometry.md`. Every Isaac result before 2026-09-28 (HOTEC v11-v13, exposure, the whole HOTEC benchmark) is stale on the new racks.
 
 ## HOTEC wheat-straw dinnerware assets (2026-09-21)
 
@@ -204,18 +210,48 @@ point (bowl 764 vs 769 mL advertised; cup 283 vs 355 mL — the envelope cannot 
 not tuned). Report: `docs/hotec_wheatstraw_asset.md`; tests: `tests/test_hotec_gen.py`; the Frigidaire
 load/settle/orbit script is `frigidaire/scripts/evaluation/frigidaire_hotec_load.py` (`--layout-only`
 first, then Kit). Landmine: the loading helpers assume centre-origin pieces — place by centroid.
+Top-5 exposure loads of all 24 pieces (2026-09-29): `frigidaire/scripts/evaluation/frigidaire_hotec_top5.py --all`
+(nesting scored, dishes may touch 0.8 mm, front-bank plates, joint gate with a 5 mm peak); see the report's dated section.
 
 ## HOTEC rearrangement benchmark (2026-09-23)
 
-Frigidaire twin + HOTEC v2 set: 7 bowls (easy, counter allowance n+3), + 8 plates (medium, n+1), + 8 cups
-(hard, n+0); n dishes start in messy counter stacks, the rest dropped into the racks. No hand-given goal: the
-highest-exposure load found by coordinate ascent (track A reaches it; track B is open, scored by S). Teleport
+Frigidaire twin + HOTEC v2 set: 7 bowls (easy, counter allowance n+3), + 8 plates (medium, n+2), + 8 cups
+(hard, n+1; both +1 since 2026-09-29, and goals must pass the sequencing certificate); n dishes start in messy
+counter stacks, the rest dropped into the racks. No hand-given goal: the
+highest-exposure load found by coordinate ascent (track A: greedy_offline / rrt_connect reach it; track B: first-fit
+/ move-level MCTS (`dishsim_frigidaire/mcts.py`, since 2026-09-29; the ascent "exposure planner" is retired) build their OWN load, which is Isaac sequence-gated like the goal before replay, scored by S,
+success needs a pooling-free load; no row is copied between tracks, 2026-09-28). Teleport
 moves, Isaac settle per move, end check = retract both racks + containment. Kit-free library/CLI/scheduler
 `frigidaire/scripts/experiment/frigidaire_bench.py`, Kit side `frigidaire_bench_kit.py`, results page
 `frigidaire/scripts/evaluation/frigidaire_bench_page.py`; reference, decisions and landmines:
 `frigidaire/docs/hotec_bench.md`; outputs under `results/benchmark/frigidaire_hotec/`. Two traps: pass host
 paths into the container only through `rel()` (a `/home/...` path lands in the container's writable layer),
 and stop jobs by PID, never broad `pkill -f` in the shared container.
+
+## Cleanup state and landmines (2026-09-29)
+
+- Hold folders on the 2 TB drive: `dishsim/_trash_20260917/` (only `outputs/viewer_validation`, 675 MiB, the
+  retired PDF exporters' offline browser, is left of value; delete after 2026-10-17) and
+  `dishsim/_trash_20260929/` (v3-era experiment results + HOTEC v2-v5, 1.3 GiB; `MANIFEST.txt`; undo = `mv`
+  back to the same relative path under `repo_data/`; delete after 2026-10-29). The 98 byte-identical media
+  copies deleted the same day are listed with sha256 and surviving copy in its
+  `MANIFEST_4a_media_duplicates.txt` (undo = `cp -p` the survivor back; the v2-v5 survivors live in this hold folder).
+- `outputs/archive/` holds the local 20260910 tarballs: the only local backup of the pinned Bosch instances.
+  Never run `archive_assets.py --upload` with the documented kinds: `assets` walks all of `results/` (private
+  outputs) and `models` includes HOTEC. Never hard-link or symlink two files that both sit inside `assets/ media/
+  results/`: the archive tooling stores such a pair as a link member that `restore_assets.py` refuses. The only
+  links are history v4/v5 claims sharing inodes with v3 (all under `build/.../history`) and the two media gallery
+  zips sharing inodes with `history/{v1,v2}/archives` (the partner is outside every archive kind, so it packs as
+  a plain file).
+- `package_frigidaire.py --check` is red (4 assembly gates) until the two-job Kit evidence refresh
+  (`frigidaire_asset_evidence.py`, physics-only then render-only): untracked `mcts.py` (and `robot/` on refresh)
+  are not in the 2026-09-28 evidence hashes, and any edit to a top-level `frigidaire/src/dishsim_frigidaire`
+  file stales it. Batch package edits before refreshing.
+- Benchmark history traces (`stopped_20260928`, `pre_rebuild_20260928`, `history_planner_20260929`,
+  `smoke_20260923`) are `*trace.jsonl.xz`; robot-era arm meshes were removed from `assets/cache`.
+- In progress and untracked (commit before any cleanup; `git clean` would destroy it): `mcts.py`,
+  `robot/` + `frigidaire_robot_*`/`frigidaire_grasp_test.py` (`frigidaire/docs/robot.md`), the top-5 load,
+  `docs/scoring_note/`.
 
 ## Ground rules
 
@@ -231,3 +267,9 @@ and stop jobs by PID, never broad `pkill -f` in the shared container.
 - The dishwasher base stays fixed (`fix_root_link=True`); the door stays locked open.
 - Ask the user before: downloads over 2 GB, runs expected to exceed 30 minutes, opening
   ports, or installs that restructure the container.
+
+## Research workflow (Fable plans, Opus executes)
+- If your instructions say you execute research experiment plans, you are the runner: follow the plan you are given. Any other session is for discussion and planning only: do not edit code or launch runs; the only files you write are under plans/.
+- An idea becomes an experiment by becoming plans/<date>-<slug>.md, filled in from plans/TEMPLATE.md. A plan is approved only when it has a numeric success criterion, a kill rule, and a compute budget.
+- Execution is delegated to the experiment-runner agent (Opus). Invoke it with the plan path. Never execute a plan in this session.
+- When the runner returns, read results/<slug>.md, state what was learned in 5 lines, and propose the next experiment.

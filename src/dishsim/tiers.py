@@ -36,8 +36,6 @@ Fork drop-column safety at the Bosch basket position is UNMEASURED.
 
 import math
 
-PRESETS = ("easy", "medium", "hard")
-
 CELLS: dict[str, dict] = {
     "easy":   {"classes": {"bowl": 5},                           "counter_cap": 6,
                "displace": 1 / 3, "no_goal_squat": True,  "cycles": (),     "settle_bar": None},

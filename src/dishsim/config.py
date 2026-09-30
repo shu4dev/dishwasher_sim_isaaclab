@@ -196,8 +196,6 @@ T_WRIST3_TCP_QUAT: tuple[float, float, float, float] | None = (-0.5, -0.5, -0.5,
 # YCB 029_plate does NOT exist in the Isaac 6.0 S3 bucket (HTTP 404, checked 2026-07-29), so the
 # mug is the v0 stand-in, as the project brief allows.
 OBJECT_NAME = "025_mug"
-OBJECT_USD = os.path.join(ASSETS_DIR, "props", "025_mug_physics.usd")
-OBJECT_MASS_KG = 0.118
 # Measured from the mesh (2026-08-10, public YCB google_16k scan at scale 0.85): the scan
 # stands Z-UP — the mug AXIS runs along OBJECT +Z (opening/rim at z = +0.0346, closed bottom
 # at z = -0.0346), the handle points along +X, and the body circle in the xy-plane is
@@ -207,7 +205,6 @@ OBJECT_MASS_KG = 0.118
 OBJECT_BBOX_HALF = (0.0497, 0.0396, 0.0346)
 OBJECT_AXIS_OBJ = (0.0, 0.0, 1.0)  # mug "up" (bottom -> opening) in the object frame
 OBJECT_BODY_CENTER_XZ = (-0.0099, 0.0)
-OBJECT_RIM_RADIUS_M = 0.0390
 OBJECT_HEIGHT_M = 0.0691
 
 # FROZEN CACHE ANCHOR — robot-era carry ("grasp") transform for the legacy mug; the per-class
@@ -685,10 +682,10 @@ class PlacementSpec:
 class ObjectSpec:
     """One manipulable object class (dims in the object's own canonical frame).
 
-    Frame convention: NEW assets are authored Z-up with the origin at the bbox center
-    (``axis_obj = (0, 0, 1)``); the legacy mug keeps its validated Y-up frame. ``bbox_half``
-    is origin-to-face half extents [m]; ``body_center_uv`` is the axis-perpendicular offset
-    (u, v) of the body circle center from the origin [m] (for the Y-up mug: (x, z)).
+    Frame convention: assets are authored with the origin at the bbox center and the object
+    axis along +Z (``axis_obj = (0, 0, 1)``) or +X (``(1, 0, 0)``). ``bbox_half`` is
+    origin-to-face half extents [m]; ``body_center_uv`` is the axis-perpendicular offset
+    (u, v) of the body circle center from the origin [m].
     """
 
     name: str
@@ -1068,9 +1065,7 @@ ACTIVE_OBJECT = "mug"
 def grasp_transform(spec: ObjectSpec) -> tuple[tuple, tuple]:
     """T_tcp_obj (pos, quat XYZW) for a spec, from its grasp family + measured dims.
 
-    Derivations (documented per family; the mug case reproduces the frozen v0 transform):
-      - Y-up ``rim_diam`` (mug): R = Rx(-90) maps z_tcp = -y_obj (upright carry, opening
-        toward the gripper); the rim-center axis point (u, h/2, v) lands on (0, 0, rim_z).
+    Derivations (documented per family):
       - Z-up ``rim_diam``/``rim_edge``: R = Rx(180) (z_tcp = -z_obj); rim center — or the rim
         wall point on the +y side (jaw axis) for ``rim_edge`` — lands on (0, 0, rim_z).
       - ``edge_pinch``: on-edge carry; the disc's rim point on +x_obj is the top of the
@@ -1083,14 +1078,6 @@ def grasp_transform(spec: ObjectSpec) -> tuple[tuple, tuple]:
     u, v = spec.body_center_uv
     r = spec.rim_radius_m
     z = spec.grasp.rim_tcp_z_m
-    if spec.axis_obj == (0.0, 1.0, 0.0):  # legacy Y-up mug frame
-        if fam != "rim_diam":
-            raise ValueError(f"unsupported family {fam!r} for the legacy Y-up frame")
-        # h2 from the bbox half along the axis (0.0407, the frozen v0 literal), NOT
-        # height_m / 2 — the measured bbox is 0.1 mm asymmetric and the baseline cache hash
-        # depends on the exact float. `+ 0.0` normalizes -0.0 for stable JSON hashing.
-        h2 = spec.bbox_half[1]
-        return (-u + 0.0, -v + 0.0, z + h2), (-0.70710678, 0.0, 0.0, 0.70710678)
     h2 = spec.bbox_half[2]
     if fam in ("rim_diam", "stem_pinch"):
         return (-u + 0.0, v + 0.0, z + h2), (1.0, 0.0, 0.0, 0.0)
@@ -1141,8 +1128,8 @@ def set_active_object(name: str) -> None:
     Args:
         name: Key into :data:`OBJECTS`.
     """
-    global ACTIVE_OBJECT, OBJECT_NAME, OBJECT_USD, OBJECT_MASS_KG, OBJECT_BBOX_HALF
-    global OBJECT_AXIS_OBJ, OBJECT_BODY_CENTER_XZ, OBJECT_RIM_RADIUS_M, OBJECT_HEIGHT_M
+    global ACTIVE_OBJECT, OBJECT_NAME, OBJECT_BBOX_HALF
+    global OBJECT_AXIS_OBJ, OBJECT_BODY_CENTER_XZ, OBJECT_HEIGHT_M
     global GRASP_RIM_TCP_Z_M, GRASP_TCP_OBJ_POS, GRASP_TCP_OBJ_QUAT
     global GRIPPER_APERTURE_GRASP_RAD
     if name not in OBJECTS:
@@ -1150,12 +1137,9 @@ def set_active_object(name: str) -> None:
     spec = OBJECTS[name]
     ACTIVE_OBJECT = name
     OBJECT_NAME = spec.object_name
-    OBJECT_USD = spec.usd_path
-    OBJECT_MASS_KG = spec.mass_kg
     OBJECT_BBOX_HALF = spec.bbox_half
     OBJECT_AXIS_OBJ = spec.axis_obj
     OBJECT_BODY_CENTER_XZ = spec.body_center_uv
-    OBJECT_RIM_RADIUS_M = spec.rim_radius_m
     OBJECT_HEIGHT_M = spec.height_m
     # FROZEN CACHE ANCHORS: the per-class grasp view feeds geometry.config_hash ("grasp" and
     # "aperture" keys) and nothing else — the exact robot-era derivation is kept verbatim so

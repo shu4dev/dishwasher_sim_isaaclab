@@ -146,12 +146,13 @@ def test_revised_rim_envelopes_match_user_dimensions(reconstructed_components):
         p = PARAMETERS[key]
         lo, hi = _wire_family_bounds(reconstructed_components[body], rim)
         assert np.allclose((hi-lo)[:2], [p["wire_width"], p["wire_depth"]], atol=0.0001), body
-    assert np.allclose([PARAMETERS["lower_rack"]["wire_width"], PARAMETERS["lower_rack"]["wire_depth"]], [.525, .563])
+    assert np.allclose([PARAMETERS["lower_rack"]["wire_width"], PARAMETERS["lower_rack"]["wire_depth"]], [.525, .561])
     assert np.allclose([PARAMETERS["upper_rack"]["wire_width"], PARAMETERS["upper_rack"]["wire_depth"]], [.480, .515])
 
 
 def test_lower_tines_match_measured_grid_and_basket_clearance(reconstructed_components):
-    """The 6 x 12 tape grid minus the basket bay fits the derived margins beside the tape-measured basket."""
+    """The 6 x 12 tape grid (3.18 cm columns from the tape left margin, the five tape row gaps from the tape
+    front margin) minus the basket bay fits beside the tape-measured basket (re-measured 2026-09-28)."""
     from dishsim_frigidaire.geometry import (PARAMETERS, lower_basket_footprint, lower_tine_heights,
                                              lower_tine_mask, lower_tine_positions)
 
@@ -167,9 +168,12 @@ def test_lower_tines_match_measured_grid_and_basket_clearance(reconstructed_comp
     grid_x, grid_y = lower_tine_positions()
     mask, heights = lower_tine_mask(), lower_tine_heights()
     assert np.allclose(ys, grid_y, atol=1e-9)
-    assert np.allclose(np.diff(ys), .080, atol=1e-9)
+    assert np.allclose(np.diff(ys), [.081, .073, .067, .073, .081], atol=1e-9)
     lo, hi = _wire_family_bounds(rack, "UpperRim")
     margins = p["tine_margins"]
+    tape = p["tine_margins_tape_m"]
+    assert margins["left"] == tape["left"] == .073 and margins["front"] == tape["front"] == .101
+    assert abs(margins["right"]-.1022) < 1e-9 and abs(margins["rear"]-.085) < 1e-9   # the rim's leftover (tape 102 / 113)
     assert np.allclose([ys[0]-lo[1], hi[1]-ys[-1]], [margins["front"], margins["rear"]], atol=1e-7)
     assert mask.sum(axis=1).tolist() == [12, 12, 10, 10, 10, 10]
     assert np.allclose(heights, [.095, .095, .045, .045, .095, .095])
@@ -178,7 +182,7 @@ def test_lower_tines_match_measured_grid_and_basket_clearance(reconstructed_comp
         assert len(teeth) == mask[row].sum()
         xs = np.asarray([path[0, 0] for path, _ in teeth])
         assert np.allclose(xs, grid_x[mask[row]], atol=1e-9)
-        assert np.allclose(np.diff(xs), .036, atol=1e-9)
+        assert np.allclose(np.diff(xs), .0318, atol=1e-9)
         if mask[row].all():
             assert np.allclose([xs[0]-lo[0], hi[0]-xs[-1]], [margins["left"], margins["right"]], atol=1e-7)
         assert all(np.allclose(path[-1]-path[0], [.008, 0, heights[row]], atol=1e-9)
@@ -265,7 +269,8 @@ def test_upper_floor_restores_the_sloped_glass_channel(reconstructed_components)
 
 
 def test_upper_tines_match_measured_grid_and_edge_datums(reconstructed_components):
-    """48 base centers (13 + 11 + 11 + 13) meet the tape spacings inside the derived margins."""
+    """48 base centers (13 + 11 + 11 + 13) at the tape column gaps (9.2 / 8.6 / 9.2, symmetric) and the 3.3 cm
+    pitch from the tape front margin (re-measured 2026-09-28)."""
     from dishsim_frigidaire.geometry import PARAMETERS, upper_tine_mask, upper_tine_positions
 
     p = PARAMETERS["upper_rack"]
@@ -278,11 +283,13 @@ def test_upper_tines_match_measured_grid_and_edge_datums(reconstructed_component
     grid_x, grid_y = upper_tine_positions()
     xs = np.unique([path[0, 0] for _, path, _ in teeth])
     assert np.allclose(xs, grid_x, atol=1e-9)
-    assert np.allclose(xs, [-.135, -.045, .045, .135], atol=1e-9)
-    assert np.allclose(np.diff(xs), .090, atol=1e-9)
+    assert np.allclose(xs, [-.135, -.043, .043, .135], atol=1e-9)
+    assert np.allclose(np.diff(xs), [.092, .086, .092], atol=1e-9)
     lo, hi = _wire_family_bounds(rack, "TopRim")
-    assert abs(p["tine_side_margin"]-.105) < 1e-9
+    assert abs(p["tine_side_margin"]-.105) < 1e-9                          # leftover of the 480 mm rim (tape 116)
     assert np.allclose([xs[0]-lo[0], hi[0]-xs[-1]], p["tine_side_margin"], atol=1e-7)
+    assert p["tine_front_margin"] == p["tine_margins_tape_m"]["front"] == .082
+    assert abs(p["tine_rear_margin"]-.037) < 1e-9                          # leftover of the 515 mm rim (tape 44)
     absent_columns = p["tine_absent"]["columns"]
     for column, x in enumerate(xs):
         paths = [path for _, path, _ in teeth if abs(path[0, 0]-x) < 1e-9]
@@ -290,9 +297,9 @@ def test_upper_tines_match_measured_grid_and_edge_datums(reconstructed_component
         assert len(paths) == mask[:, column].sum()
         assert np.allclose(ys, grid_y[mask[:, column]], atol=1e-9)
         pitches = np.diff(ys)
-        jumps = pitches[~np.isclose(pitches, .037, atol=1e-9)]
+        jumps = pitches[~np.isclose(pitches, .033, atol=1e-9)]
         if column in absent_columns:
-            assert len(jumps) == 1 and abs(jumps[0]-3*.037) < 1e-9
+            assert len(jumps) == 1 and abs(jumps[0]-3*.033) < 1e-9
         else:
             assert len(jumps) == 0
         assert abs(hi[1]-ys[-1]-p["tine_rear_margin"]) < 1e-7

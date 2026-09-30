@@ -104,6 +104,12 @@ STALE_RESULTS_BY_VERSION = {"v4": [
     "build/frigidaire_collection/images/assembly/", "results/hotec/frigidaire/v2/ to v10/",
     "results/exposure/frigidaire/hotec/", "build/frigidaire_diagnostics/claims_v4/ to claims_v7/",
     "build/frigidaire_diagnostics/cutlery_candidates.json", "build/frigidaire_diagnostics/cutlery_pose_search.json",
+], "v5": [
+    "build/frigidaire_collection/validation/composition.json", "build/frigidaire_collection/validation/lower_rack_clearance.json",
+    "build/frigidaire_collection/images/lower_rack/", "build/frigidaire_collection/images/upper_rack/",
+    "build/frigidaire_collection/images/assembly/", "results/hotec/frigidaire/v11/ to v13/",
+    "results/exposure/frigidaire/hotec/", "results/benchmark/frigidaire_hotec/ (families, instances, goals, plans, episodes)",
+    "build/frigidaire_diagnostics/claims_v8/", "docs/figures/frigidaire_{upper,lower}_rack_cm.png (regenerated)",
 ]}
 
 

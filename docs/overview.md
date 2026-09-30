@@ -2,56 +2,27 @@
 
 The full write-up that the top-level README carried until 2026-09-17: benchmark definition,
 environment, archive, quickstart with gates, results with evidence, limitations and licenses.
-The README is now the short, action-first version; this file is the reference and keeps every
-claim and link verbatim.
+The README is now the short, action-first version; this file is the reference. Links resolve
+from `docs/` (rebased 2026-09-29), and the Frigidaire v3-era block that stood at the top of §1
+was replaced by a pointer on the same day.
 
 ---
 
 ## 1 Overview
 
-The independently authored **Frigidaire FDPC4221AS** has two dedicated collections:
-[source, build tools and documentation](frigidaire/README.md) under `frigidaire/`,
-and the asset installation target `assets/models/frigidaire_fdpc4221as/`, containing
-USDs, rack layouts, dimensions, reference photos and archived releases. The cleanup
-is currently [staged here](build/frigidaire_collection/README.md); its current USD
-assembly is built and Isaac execution is available. A
-[single-dish random-pose experiment](frigidaire/docs/random_pose_experiment.md)
-completed all **600 proposals**, with **176 accepted drops (29.3%)** and
-**two numerically unresolved trials**. All 176 accepted records pass the saved
-physics-evidence and geometry audits; 168 also meet zero-tolerance containment.
-See the
-[interactive pose explorer](outputs/random_pose_viewer/index.html),
-[technical sampling report](outputs/sampling_technical_report/index.html),
-[experiment report](results/random_poses/frigidaire/complete_20260910_seed0/experiment_report.md),
-[pose examples](results/random_poses/frigidaire/complete_20260910_seed0/accepted_pose_examples.png),
-and [accepted replay records](results/random_poses/frigidaire/complete_20260910_seed0/accepted_poses.json).
-These are sampled drops, not unique arrangements or all possible poses. See the
-source README for reproduction commands and remaining delivery gates; this
-experiment does not replace the assembly release checks.
-
-The [multi-dish initial-state experiment](frigidaire/docs/initial_state_experiment.md)
-reuses those 176 templates and produced **10 jointly validated randomized states**
-(three with 9 dishes, four with 18, and three with 27). Its highest validated load
-contains **35 dishes: 1 plate, 13 bowls and 21 mugs**, matching the geometric upper
-bound for the sampled catalog. Both loaded racks retract successfully in Isaac;
-this finite-catalog result does not establish a global real-world capacity.
-See the [technical report and images](results/initial_states/frigidaire/packing_20260911_seed20260911/index.html),
-[PDF report](results/initial_states/frigidaire/packing_20260911_seed20260911/technical_report.pdf),
-and [complete evidence package](results/initial_states/frigidaire/packing_20260911_seed20260911.zip).
-
-The [organized counterpart experiment](frigidaire/docs/organized_counterparts.md)
-preserves every original dish and adds direct rack support, 5 mm dish spacing,
-opening orientation and exposure rules, and exclusion of nesting and stacking.
-**Seven of the eleven inventories passed**: all three 9-dish states and all four
-18-dish states. Each passed both loaded rack retractions, actual door closure,
-reopening and rack extension, plus an independent replay. The 35-dish highest
-inventory and three 27-dish inventories remain **unresolved**; no dishes were
-removed and no acceptance limits were relaxed. The 104 screened poses have a
-25-item pairwise geometric upper bound under the highest inventory's type
-ceilings; this is not a physically validated or global capacity claim.
-See the [before/after viewer](results/initial_states/frigidaire/organized_20260911_seed20260911/index.html),
-[technical PDF](results/initial_states/frigidaire/organized_20260911_seed20260911/technical_report.pdf),
-and [source and evidence package](results/initial_states/frigidaire/organized_20260911_seed20260911.zip).
+The independently authored **Frigidaire FDPC4221AS** twin lives in its own package,
+`frigidaire/` ([source README](../frigidaire/README.md)); its current build is staged in
+`build/frigidaire_collection/` (`build/` is a symlink onto the 2 TB drive; this is the only
+copy of the current build, and no archive tarball contains it). Its v3-era experiments
+(single-dish random drops, multi-dish randomized states, organized counterparts, the first
+exposure and planner runs) ran on the 52/72-tine photo-fitted racks, before the 2026-09-22
+and 2026-09-28 rebuilds, and were retired on 2026-09-29: the code is in git history (last
+commit before the retirement: `4455813`), the result folders are held until 2026-10-29 in
+`_trash_20260929/` on the 2 TB drive, and none of their numbers are quoted here. Current
+documents: [geometry](../frigidaire/docs/geometry.md) (racks re-measured 2026-09-28), the
+[HOTEC rearrangement benchmark](../frigidaire/docs/hotec_bench.md) on that twin, the
+[exposure scorer](../frigidaire/docs/exposure.md) and the
+[arm bring-up](../frigidaire/docs/robot.md) (UR5e + Robotiq 2F-85, in progress 2026-09-29).
 
 This repo is a **benchmark for dishwasher rearrangement planning**: given a physically
 settled initial arrangement and an exact target arrangement in an articulated dishwasher
@@ -66,9 +37,13 @@ A placement is feasible when it is
 - **physically stable** — Isaac Sim settles the planned arrangement and judges it against
   per-mode measured tolerances (drift, tilt, seating height, rack closability).
 
-There is no robot arm and no motion planning on this branch — Isaac Sim's only jobs are
-physics validation and evidence rendering. (The earlier UR5e + OMPL manipulation stack lives
-in git history; the RL door-opening pipeline on `archive/rl-door-opening`.)
+The Bosch benchmark has no robot arm and no arm motion planning — Isaac Sim's only jobs are
+physics validation and evidence rendering. (The earlier UR5e + OMPL manipulation stack is not
+on this branch: it lives on `main` and `on-corrallab` and in git history. The RL door-opening
+pipeline, `scripts/rsl_rl/` and `source/dishwasher_tasks/`, was removed on 2026-07-30 in
+commit `2628cfc` and lives in git history only. A UR5e + Robotiq arm is being brought up
+separately in the Frigidaire twin: [frigidaire/docs/robot.md](../frigidaire/docs/robot.md),
+in progress 2026-09-29.)
 
 The pipeline, mirrored by the layout of `scripts/`:
 
@@ -77,17 +52,17 @@ The pipeline, mirrored by the layout of `scripts/`:
 | **Plan** | in-process (`capacity.plan_full_load`) | Kit-free greedy capacity plan: derive slots live, pre-scan placeability, certify the load jointly, gate on z-budget + measured settle reliability | (consumed live by Generate) |
 | **Generate** | `setup/gen_instances.py` | Seeded rearrangement instances (perturbed plans / random drops), physically settled and saved as artifacts | `results/instances/<machine>/<state>/` |
 | **Problem images** | `evaluation/instance_views.py` | One instance's initial-vs-goal stills — the problem, where the episode video is the solving | `media/instances/<machine>/<state>/<cell>/` (legacy instances without a cell: flat in `<state>/`) |
-| **Benchmark** | `experiment/run_rearrange.py` | Closed-loop algorithm episodes: every move teleports + settles; abort on first fault; move budget; `--video` per-episode MP4 | `results/rearrange/<machine>/<state>/`, `media/rearrange/` |
+| **Benchmark** | `experiment/run_rearrange.py` | Closed-loop algorithm episodes: every move teleports + settles; abort on first fatal fault; move budget; `--video` per-episode MP4 | `results/rearrange/<machine>/<state>/`, `media/rearrange/` |
 
 <table align="center">
   <tr>
     <td align="center">
-      <img src="docs/figures/slot_detection.png" width="300" alt="slot derivation"/>
+      <img src="figures/slot_detection.png" width="300" alt="slot derivation"/>
       <br/>
       Slot derivation from rack geometry (retired producer, git history)
     </td>
     <td align="center">
-      <img src="docs/figures/bosch800_loaded_reveal.png" width="460" alt="Bosch 800 loaded reveal"/>
+      <img src="figures/bosch800_loaded_reveal.png" width="460" alt="Bosch 800 loaded reveal"/>
       <br/>
       A planned Bosch 800 load, physically settled, max drift 1.1 mm (retired producer, git history)
     </td>
@@ -101,14 +76,19 @@ The pipeline, mirrored by the layout of `scripts/`:
   pose per object (the capacity plan's jointly-certified release pose, carrying its slot so
   the at-goal verdict reuses the per-mode settle tolerances).
 - **Move**: `move(object, pose)` — teleport anywhere, a rack slot or the counter buffer band
-  (just physical space; its finite capacity emerges from geometry).
+  (just physical space; its finite capacity emerges from geometry, and tier instances add a
+  hard occupancy cap, see §4).
 - **Episode** (closed-loop): the harness FCL-pre-checks each commanded pose, executes it,
   settles physics, and hands the algorithm the measured state via `next_move(obs)`. The
-  episode **aborts on the first fault** — unstable settle or a disturbed neighbor — or at the
-  move budget (3× roster by default) or the optional planning-time budget. An **infeasible
-  commanded pose is refused and counted** (`infeasible_commands`), not fatal: every algorithm
-  can pre-check with the same oracle, so emitting one is a search error worth measuring rather
-  than a reason to end the episode — ending it there would flatter pre-checking planners.
+  episode **aborts on the first fatal fault** — a disturbed neighbor, or a put-back that does
+  not reproduce (`unstable-settle`) — or at the move budget (3× roster by default), the
+  planning-time budget (60 s by default) or a loop guard (25 straight refused commands or
+  failed settles). A drifting or far-off settle is a non-fatal `failed-settle`: the item is
+  put back, the move counts, and the algorithm may retry. An **infeasible commanded pose is
+  refused and counted** (`infeasible_commands`), not fatal: every algorithm can pre-check with
+  the same oracle, so emitting one is a search error worth measuring rather than a reason to
+  end the episode — ending it there would flatter pre-checking planners. A move onto a full
+  counter is refused the same way (`counter-full`).
 - **Scoring** per episode record: solved, fraction-at-goal, moves used, buffer-vs-goal move
   split, travel distance, planning time (per call and total), feasibility queries, seed, and
   whatever an algorithm reports through its optional `stats()` hook.
@@ -116,8 +96,9 @@ The pipeline, mirrored by the layout of `scripts/`:
   instance, so results can be quoted as an optimality gap rather than a relative ranking.
   Feasibility is pairwise-decomposable here, so a compatibility table (seconds) makes an exact
   A* cheap. Instances are per-machine artifacts (settle fixed points are engine-relative); on
-  this box's three shipped instances the optima are **9, 8, 8** and greedy solves 3/3 in 9
-  moves. It is a *geometric-relaxation* optimum — see the caveats in the module docstring.
+  this box's three pinned perturbed instances the optima are **9, 9, 9** (`tests/test_compat.py`,
+  re-pinned 2026-08-31) and greedy solved 3/3 in 9 moves on 2026-08-30 (that run left no
+  records). It is a *geometric-relaxation* optimum — see the caveats in the module docstring.
 - **Your algorithm**: one class implementing `reset(instance, world)` / `next_move(obs)`
   (`src/dishsim/rearrange.py`) plus one line in `ALGORITHMS` in
   `scripts/experiment/run_rearrange.py`; accept a `seed=` kwarg if stochastic. A greedy
@@ -128,20 +109,20 @@ The pipeline, mirrored by the layout of `scripts/`:
 14 classes, sourced from YCB scans or generated procedurally, then **scaled to fit** the
 machines; the certified Bosch load uses plates, bowls and forks (drinkware sits out on a
 measured settle-reliability gate). The full registry lives in `config.OBJECTS`; adding a
-class: [docs/extending.md](docs/extending.md).
+class: [docs/extending.md](extending.md).
 
 ### 1.4 Reference documentation
 
 | Doc | Contents |
 |---|---|
-| [docs/environment.md](docs/environment.md) | Hardware/software stack, container recipe, Isaac Lab 2.1 API notes, **launcher landmines (canonical)** |
-| [docs/architecture.md](docs/architecture.md) | Code structure, the Kit-free/Kit-side layering, completed one-off studies |
-| [docs/success_criteria.md](docs/success_criteria.md) | Slot model per placement mode, settle tolerances, placeable capacity |
-| [docs/known_limitations.md](docs/known_limitations.md) | Honest negative results and open items, with measured evidence |
-| [docs/extending.md](docs/extending.md) | Add an object class / placement mode / machine state |
-| [docs/joint_report.md](docs/joint_report.md) | Measured articulation numbers every constant derives from (generated by the retired inspect_scene.py, git history) |
-| [docs/bosch800_source_data.md](docs/bosch800_source_data.md) | Every Bosch 800 twin number with its provenance |
-| [docs/figures/README.md](docs/figures/README.md) | Provenance of every tracked figure (producing command + media source) |
+| [docs/environment.md](environment.md) | Hardware/software stack, container recipe, Isaac Lab 2.1 API notes, **launcher landmines (canonical)** |
+| [docs/architecture.md](architecture.md) | Code structure, the Kit-free/Kit-side layering, completed one-off studies |
+| [docs/success_criteria.md](success_criteria.md) | Slot model per placement mode, settle tolerances, placeable capacity |
+| [docs/known_limitations.md](known_limitations.md) | Honest negative results and open items, with measured evidence |
+| [docs/extending.md](extending.md) | Add an object class / placement mode / machine state |
+| [docs/joint_report.md](joint_report.md) | Measured articulation numbers of the ArtVIP baseline dishwasher (`dishwasher_2`; generated by the retired inspect_scene.py, git history) |
+| [docs/bosch800_source_data.md](bosch800_source_data.md) | Every Bosch 800 twin number with its provenance |
+| [docs/figures/README.md](figures/README.md) | Provenance of every tracked figure (producing command + media source) |
 
 ## 2 Environment Setup
 
@@ -151,7 +132,7 @@ Docker with the NVIDIA container runtime, and an NVIDIA GPU with a 535-series (o
 driver — the runtime environment (Isaac Sim **4.5.0** + Isaac Lab **v2.1.1**) is fully baked
 into the image built by `docker/Dockerfile`, and nothing installs on the host. Developed and
 validated on the corallab workstation (3× RTX 3090, driver 535.230.02, Ubuntu 20.04 — see
-[docs/environment.md](docs/environment.md)). Everything runs `--headless`; only *rendering*
+[docs/environment.md](environment.md)). Everything runs `--headless`; only *rendering*
 additionally needs `--enable_cameras`.
 
 ### 2.2 Runtime container
@@ -162,11 +143,16 @@ docker compose -f docker/compose.yaml up -d                  # long-lived contai
 ```
 
 The compose file keeps every bulky mutable path (assets, media, results, Kit caches,
-`HF_HOME`) on `/media/corallab-s1/2tbhdd/brianshu/dishsim`; the repo's data dirs are symlinks
-there, and the container is the only root-disk artifact. Pick the least-loaded GPU per shell
+`HF_HOME`) on `/media/corallab-s1/2tbhdd/brianshu/dishsim`; the repo's data dirs (`assets/`,
+`build/`, `media/`, `results/`, `logs/`, `outputs/`) are symlinks there. On the root disk
+stay the `dishsim-isaac:4.5.0` image and the container's writable layer (0.93 GiB on
+2026-09-29: the isaaclab and pytest installs that every start re-applies); the root disk is
+80 % used with about 182 GiB free (2026-09-29). Retired data waits in 30-day hold folders
+next to `repo_data/` (`_trash_20260917/`, delete after 2026-10-17; `_trash_20260929/`, delete
+after 2026-10-29; each has a `MANIFEST.txt`). Pick the least-loaded GPU per shell
 (`nvidia-smi`, then `DISHSIM_GPU=<n> docker compose ... up -d` — shared machine).
 `requirements-planning.txt` pins the measured working set (the table in
-[docs/environment.md](docs/environment.md) is the measurement of record); the Dockerfile
+[docs/environment.md](environment.md) is the measurement of record); the Dockerfile
 installs it plus pytest and the archive tooling into Kit's python — no venv.
 
 ### 2.3 Assets (public archive — the one-command path)
@@ -174,37 +160,42 @@ installs it plus pytest and the archive tooling into Kit's python — no venv.
 Every asset this project uses is publicly redistributable with attribution (see §7): the
 ArtVIP dishwasher (Apache-2.0), YCB-scan-derived objects incl. the mug (YCB dataset terms),
 and this project's own procedural props, racks and geometry caches. One command restores
-everything, no token needed:
+all of them, no token needed:
 
 ```bash
-scripts/run_py.sh scripts/tools/restore_assets.py --repo shu4dev/dishsim-assets --with_media
+scripts/run_py.sh scripts/tools/restore_assets.py --repo shu4dev/dishsim-assets
 ```
 
 The restore downloads the archive (built props, every geometry cache — the ~1.5 h-of-Kit
-part — derived dishwasher USDs, recorded results), re-downloads the ArtVIP originals,
-validates every cache's `config_hash` against the current `config.py`, and runs the test
-suite. `assets/`, `media/`, `results/` are gitignored; only curated figures under
-`docs/figures/` are tracked.
+part — derived dishwasher USDs), re-downloads the ArtVIP originals, validates every cache's
+`config_hash` against the current `config.py`, and runs the test suite. It extracts `assets/`
+members only (`EXTRACT_PREFIXES` in `restore_assets.py`): the `assets` tarball also packs the
+recorded Bosch instances, episode records and comparison table (`results/`), but they are
+skipped, so a restored box regenerates instances with `gen_instances.py`; the same rule makes
+`--with_media` download a tarball whose members are all skipped, so the command omits it.
+`assets/`, `media/`, `results/` are gitignored; only curated figures under `docs/figures/`
+are tracked.
 
 **The archive ships the complete Bosch 800 digital-twin world**: collision caches for all
 five Bosch rack states baked at the measured `side_winner` anchor
-(`assets/cache/machines/bosch800/`); the machine USDs re-author on demand at import. One
-post-restore step: the shipped `E_door_4` CoACD pieces predate a static-CoACD param change,
-so run `decompose_meshes.py` once per cached context (quickstart step 2; the loud
+(`assets/cache/machines/bosch800/`); the machine USDs re-author on demand at import. Tags
+dated 2026-09-10 or later carry the exact `E_door_4` CoACD pieces and need no post-restore
+step; an OLDER tag's pieces predate a static-CoACD param change, so run
+`decompose_meshes.py` once per cached context (quickstart step 2; the loud
 `missing CoACD pieces` load error names the fix). `--machine bosch800` switches the whole
 stack via `config.apply_machine`; `--placement side_winner` selects the frozen base-frame
 anchor the Bosch caches are expressed in. Bosch numbers and their provenance:
-[docs/bosch800_source_data.md](docs/bosch800_source_data.md).
+[docs/bosch800_source_data.md](bosch800_source_data.md).
 
 **Standalone Bosch 800 asset (opt-in tarball kinds).** The same dataset also carries an
 independently authored, redistributable Bosch 800 USD (`bosch800.usdc` + rack exports +
 textures) and its validation evidence, as two extra tarball kinds that `latest.json` names
 beside the cache archive; every file is sha256-verified against the tarball manifest on
 restore. It is a visual/manipulation asset, not (yet) the benchmark machine — see
-[docs/bosch800_asset.md](docs/bosch800_asset.md):
+[docs/bosch800_asset.md](bosch800_asset.md):
 
 ```bash
-scripts/run_py.sh scripts/tools/restore_assets.py --kinds models            # ~2 MB
+scripts/run_py.sh scripts/tools/restore_assets.py --kinds models            # ~3.5 MB
 scripts/run_py.sh scripts/tools/restore_assets.py --kinds models evidence   # +74 MB stills/video
 ```
 
@@ -248,9 +239,11 @@ scripts/run_py.sh -m pytest frigidaire/tests/
 ```
 
 `kit_smoke.py` proves the collision stack imports *inside* the Kit process and that headless
-camera capture produces non-black frames (bootstrap runs it automatically). The suite is
-deliberately minimal — **4 Kit-free files**: the two frozen-invariant pins (the tripwires that
-protect the shipped caches) and the benchmark driver's toy-oracle check.
+camera capture produces non-black frames (bootstrap runs it automatically). `tests/` is
+**8 Kit-free files, 65 tests, about 70 s**: the two frozen-invariant pins (the tripwires that
+protect the shipped caches), the compat ground truth, the benchmark driver's and the RRT
+planners' toy-oracle checks, the instance sampler's tier knobs, the archive tool's tarball
+selection and the HOTEC generator's properties.
 
 > **Note:** `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is required outside Kit — the site-packages
 > carry hydra, whose pytest plugin breaks collection there. `scripts/run_py.sh` bakes it in.
@@ -270,7 +263,8 @@ DISHSIM_GPU=<n> docker compose -f docker/compose.yaml up -d
 scripts/tools/bootstrap.sh
 #    GATE: restore prints "[OK] ... @ <placement>" per cache, then kit_smoke "[RESULT] PASS"
 
-# 2. once per restored context: re-decompose (shipped E_door_4 pieces predate a param change).
+# 2. only after restoring an archive tag dated before 2026-09-10 (later tags already carry the
+#    exact E_door_4 pieces): re-decompose once per restored context.
 #    The anchor MUST match the restore log's "@ side_winner" — a wrong anchor reads as
 #    "cache is stale".
 scripts/run_py.sh scripts/setup/decompose_meshes.py \
@@ -279,7 +273,7 @@ scripts/run_py.sh scripts/setup/decompose_meshes.py \
     --machine bosch800 --placement side_winner --scenario placement --object bowl
 
 # 3. gates: tests + Kit-free capacity sanity
-scripts/run_py.sh -m pytest tests/          # GATE: 11 passed
+scripts/run_py.sh -m pytest tests/          # GATE: 65 passed (about 70 s)
 scripts/run_py.sh -c "
 import sys; sys.path.insert(0, 'src')
 from dishsim import config
@@ -330,10 +324,11 @@ video. Tinting is visual only and never touches physics or collision geometry.
 An algorithm implements `reset(instance, world)` / `next_move(obs) -> Move | None`
 (`src/dishsim/rearrange.py`; register it in `ALGORITHMS` in `run_rearrange.py`; accept a
 `seed=` kwarg if stochastic). Every move teleports one object, settles `SETTLE_STEPS_MOVE`
-physics steps, and the episode ABORTS on the first fault — unstable settle or a disturbed
-neighbor — or at the move budget. An infeasible commanded pose is refused and counted
-(`infeasible_commands`), not fatal. The greedy baseline is the thing to beat — one-blocker
-lookahead, so swap-cycles defeat it.
+physics steps, and the episode ABORTS on the first fatal fault — a disturbed neighbor or an
+`unstable-settle` put-back — or at the move budget; a drifting settle is a non-fatal
+`failed-settle` (item put back, the move counts). An infeasible commanded pose is refused and
+counted (`infeasible_commands`), not fatal. The greedy baseline is the thing to beat —
+one-blocker lookahead, so swap-cycles defeat it.
 
 **Rebaking after a hashed-config change** (rack params, machine geometry, an object spec — or
 a FROZEN CACHE ANCHOR, which you must not touch): the affected caches invalidate loudly and
@@ -357,25 +352,26 @@ Every claim maps to a recorded artifact; artifacts live under the gitignored `re
 
 | Claim | Run / artifact | Evidence |
 |---|---|---|
-| **The benchmark runs closed-loop on a 15-item roster** (corallab, 2026-08-30): greedy solves 3/3 perturbed instances (15/15 at goal in 9 moves of a 45 budget) with **0 harness aborts, 0 infeasible commands**, against provable optima 9/8/8 (`compat.optimal_moves`) | `results/rearrange/bosch800/placement/` | `media/rearrange/bosch800/placement/` (episode MP4s), `media/instances/bosch800/placement/` (initial vs goal) |
+| **The benchmark runs closed-loop** (corallab, 2026-09-04 tier benchmark of record): greedy_offline and rrt_connect on easy / medium / hard (5 / 10 / 15 items, 10 instances each, no move budget, 60 s planning budget) solve **39 of 60** — easy 10/10 for both, medium 8/10 for both, hard 1/10 (greedy_offline) and 2/10 (rrt_connect). Provable optima on the three pinned perturbed instances are 9/9/9 (`compat.optimal_moves`, `tests/test_compat.py`); the 2026-08-30 "greedy 3/3 in 9 moves" run left no records | `results/rearrange/bosch800/placement/` (60 records), `results/compare/summary.md` | `media/rearrange/bosch800/placement/` (11 episode MP4s, illustrative reruns of a subset of the episodes), `media/instances/bosch800/placement/` (initial vs goal) |
 | **Bosch 800 full load settles**: a planned multi-rack load teleported to its release poses settles with max drift 1.1 mm — the plan's poses are physically self-consistent | episode-era artifact of record (robot-era media, retired; HF archive + git history) | `docs/figures/bosch800_loaded_reveal.png` |
-| **Measured settle-reliability gates**: bowls 59/60 upright on the Bosch lower rack; scaled cups 49/82 and tumblers 64/88 wedge into the OEM wire lattice — which is why drinkware sits out of the certified Bosch count | probe campaign of record (archived: HF tarball `results/plate_settle/`); gates frozen in `capacity.MEASURED_SETTLE_RELIABILITY` | [docs/known_limitations.md](docs/known_limitations.md) |
+| **Measured settle-reliability gates**: bowls 59/60 upright on the Bosch lower rack; scaled cups 49/82 and tumblers 64/88 wedge into the OEM wire lattice — which is why drinkware sits out of the certified Bosch count | probe campaign of record (records kept outside the repo roots, in `/media/corallab-s1/2tbhdd/brianshu/dishsim/robot_era_evidence/results/plate_settle/`; the current archive tarballs, tag `20260910_b3584ae`, do not carry them); gates frozen in `capacity.MEASURED_SETTLE_RELIABILITY` | [docs/known_limitations.md](known_limitations.md) |
 
 ## 6 Known limitations
 
 The honest edges, each with measured evidence: scaled drinkware does not stand reliably on
 the Bosch OEM wire lattice; the loaded lower rack cannot be driven back over the door sill;
 the stemware lie-in never settles. Added 2026-08-28: `config_hash` is **not** the only cache
-key (a static-CoACD change is invisible to the staleness check, so a restored box must re-run
-`decompose_meshes.py` once); CoACD's manifold preprocess inflates authored bodies by millimetres
-of phantom volume; only the `placement` rack state is Kit-validated; the move model has **no
-insertion-path gate**, so blocking and non-monotonicity are unrepresentable; the stowed lower
+key (a static-CoACD change is invisible to the staleness check, so a box restored from an
+archive tag older than 2026-09-10 must re-run `decompose_meshes.py` once); CoACD's manifold
+preprocess inflates authored bodies by millimetres of phantom volume; only the `placement`
+rack state is Kit-validated; the move model has **no insertion-path gate**, so blocking and
+non-monotonicity are unrepresentable; the stowed lower
 rack interpenetrates the tub; and capacity is capped by the half-scale dish library and a
 single-rank plate bank rather than by the machine. Details and next levers:
-[docs/known_limitations.md](docs/known_limitations.md).
+[docs/known_limitations.md](known_limitations.md).
 
 Adding an **object class**, **placement mode**, or **machine state**:
-[docs/extending.md](docs/extending.md).
+[docs/extending.md](extending.md).
 
 ## 7 Assets and licenses
 

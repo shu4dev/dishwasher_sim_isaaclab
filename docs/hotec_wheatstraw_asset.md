@@ -179,10 +179,12 @@ per vertex; qualify within 12 s, then 5 s of continuous observation), and render
 centre gap counts as fitted and the rest go to the counter. Front-bank plates seat 10 mm rearward so
 a 228.6 mm plate between the front rows clears the front rim.
 
-**History (first tape build, archived as `build/frigidaire_collection/history/v4`; the current run of record is v11, see "Height-fixed twin" below). Run of record then: v6, the v2 assets (measured masses) on the tape-measured racks with the v3-look
+**History (first tape build, archived as `build/frigidaire_collection/history/v4`; later runs v11 to v13 used the 2026-09-23 outside-height twin, see "Height-fixed twin" below; the runs on the current racks are v14 and the top-5 loads of 2026-09-29, last section). Run of record then: v6, the v2 assets (measured masses) on the tape-measured racks with the v3-look
 upper floor and the v3-design basket (320 x 95 x 130, seat x 184; 2026-09-22).** Layout Kit-free,
 `[RESULT] PASS` (`logs/hotec_v6_layout.log`, `results/hotec/frigidaire/v6/layout.json`). Runs v2 to v5
 (same day, massless v1 assets on intermediate appliance builds) are superseded; all fitted the same counts.
+Their result folders (`results/hotec/frigidaire/v2` to `v5`) were moved on 2026-09-29 to the hold folder
+`dishsim/_trash_20260929/results/hotec/frigidaire/` (deleted after 2026-10-29); the numbers are kept below.
 
 | | v6 (v2 assets with measured masses, first tape build, 2026-09-22) | v1 (photo-fitted racks, 2026-09-21) |
 |---|---|---|
@@ -199,55 +201,19 @@ settle passed after 6.25 s simulated (qualified at 1.25 s, no restarts), worst f
 the wall, as with the heavier massless pieces), counter bowls 2 mm; every piece inside its rack box or on
 the slab; assets unchanged by the session (sha256 before = after); media `hotec_v6_placed.png`,
 `hotec_v6_settled.png`, `hotec_v6_collision.png` (1920 x 1440), `hotec_v6_orbit.mp4` (288 frames, 24 fps,
-1280 x 960); wall time 126 s. Records and media are under `results/hotec/frigidaire/v6/` (root-owned)
-with host copies under `media/hotec_wheatstraw/v6/`. The lighter measured masses did not change the
+1280 x 960); wall time 126 s. Records and media are under `results/hotec/frigidaire/v6/` (root-owned);
+`media/hotec_wheatstraw/v6/` keeps only the downscaled settled still. The lighter measured masses did not change the
 settled arrangement measurably (displacements within 1 mm / 1 deg of run v5).
 
-**v5 settle and orbit (`--tag hotec_v5`, 2026-09-22, massless v1 assets, superseded), `[RESULT] PASS`:** settle passed after 6.23 s
-simulated (qualified at 1.23 s, no restarts), worst final-window vertex speed 0.9 mm/s; placed to
-settled displacement plates 15 to 24 mm / 9 to 14 deg, lower bowls 19 to 23 mm / 5 to 7 deg,
-upper bowls 2 to 3 mm / under 1.5 deg, cups 23 to 25 mm / 11 to 14 deg (down the glass slope onto
-the wall), counter bowls 2 mm; every piece inside its rack box or on the slab; masses as v1
-(PhysX-derived, no MassAPI); assets unchanged by the session (sha256 before = after); media
-`hotec_v5_placed.png`, `hotec_v5_settled.png`, `hotec_v5_collision.png` (1920 x 1440),
-`hotec_v5_orbit.mp4` (288 frames, 24 fps, 1280 x 960); wall time 120 s. Records and media are under
-`results/hotec/frigidaire/v5/` (root-owned) with host copies under `media/hotec_wheatstraw/v5/`.
-
-**v4 settle and orbit (`--tag hotec_v4`, 2026-09-22, 130 mm-wide basket, superseded), `[RESULT] PASS`:** settle passed after 6.23 s
-simulated (qualified at 1.23 s, no restarts), worst final-window vertex speed 0.4 mm/s; placed to
-settled displacement plates 15 to 24 mm / 9 to 14 deg, lower bowls 19 to 23 mm / 5 to 7 deg,
-upper bowls 2 to 3 mm / under 1.5 deg, cups 23 to 25 mm / 11 to 15 deg (down the glass slope onto
-the wall, as in v3 and v1), counter bowls 2 mm; every piece inside its rack box or on the slab;
-masses as v1 (PhysX-derived, no MassAPI); assets unchanged by the session (sha256 before = after);
-media `hotec_v4_placed.png`, `hotec_v4_settled.png`, `hotec_v4_collision.png` (1920 x 1440),
-`hotec_v4_orbit.mp4` (288 frames, 24 fps, 1280 x 960); wall time 122 s. Records and media are
-under `results/hotec/frigidaire/v4/` (root-owned) with host copies under `media/hotec_wheatstraw/v4/`.
-The basket carries no HOTEC piece, so v4 differs from v3 only by the appliance hash and the
-130 mm-wide v3-design basket (`basket_1x4_320x130_v2`, seat x 169; since superseded by the
-95 mm-wide `basket_1x4_320x95_v3` at seat x 184) in the frame.
-
-**v3 settle and orbit (`--tag hotec_v3`, 2026-09-22, box basket, superseded), `[RESULT] PASS`:** settle passed after 6.24 s
-simulated (qualified at 1.24 s, no restarts), worst final-window vertex speed 2.0 mm/s; placed to
-settled displacement plates 15 to 23 mm / 8 to 13 deg (the -24 deg lean relaxes onto the tines),
-lower bowls 19 to 23 mm / 4 to 7 deg (down from the tine tips onto the floor wires), upper bowls
-2 to 3 mm / under 1.5 deg, cups 23 to 25 mm / 11 to 14 deg (they slide down the restored glass
-slope and lean on the wall, as in v1), counter bowls 2 mm; every piece inside its rack box or on
-the slab; masses as v1 (PhysX-derived, no MassAPI); assets unchanged by the session (sha256
-before = after); media `hotec_v3_placed.png`, `hotec_v3_settled.png`, `hotec_v3_collision.png`
-(1920 x 1440), `hotec_v3_orbit.mp4` (288 frames, 24 fps, 1280 x 960); wall time 114 s. Records
-and media are under `results/hotec/frigidaire/v3/` (root-owned) with host copies under
-`media/hotec_wheatstraw/v3/`.
-
-**v2 settle and orbit (`--tag hotec_v2`, 2026-09-22, V-shelf upper floor, superseded), `[RESULT] PASS`:** settle passed after 6.25 s
-simulated (qualified at 1.25 s, no restarts), worst final-window vertex speed 3.1 mm/s; placed to
-settled displacement plates 15 to 23 mm / 9 to 13 deg (the -24 deg lean relaxes onto the tines),
-lower bowls 19 to 23 mm / 4 to 7 deg (down from the tine tips onto the floor wires), upper bowls
-2 to 3 mm / under 1.5 deg, cups 13 mm / under 2.1 deg (the 10 mm hover plus the trough slope),
-counter bowls 2 mm; every piece inside its rack box or on the slab; masses as v1 (PhysX-derived,
-no MassAPI); assets unchanged by the session (sha256 before = after); media `hotec_v2_placed.png`,
-`hotec_v2_settled.png`, `hotec_v2_collision.png` (1920 x 1440), `hotec_v2_orbit.mp4` (288 frames,
-24 fps, 1280 x 960); wall time 109 s. Records and media are under `results/hotec/frigidaire/v2/`
-(root-owned) with host copies under `media/hotec_wheatstraw/v2/`.
+**v2 to v5 (`--tag hotec_v2` to `hotec_v5`, 2026-09-22, massless v1 assets on intermediate appliance builds:
+v2 V-shelf upper floor, v3 box basket, v4 the 130 mm-wide v3-design basket `basket_1x4_320x130_v2` at seat x 169,
+v5 the last massless run; all superseded by v6), each `[RESULT] PASS`:** settle passed after about 6.2 s simulated
+(qualified at about 1.2 s, no restarts), worst final-window vertex speed 0.4 to 3.1 mm/s; placed-to-settled displacement
+plates 15 to 24 mm / 8 to 14 deg, lower bowls 19 to 23 mm / 4 to 7 deg, upper bowls 2 to 3 mm / under 1.5 deg, cups
+23 to 25 mm / 11 to 15 deg (v2 with its 10 mm hover: 13 mm / under 2.1 deg), counter bowls 2 mm; every piece inside
+its rack box or on the slab; masses as v1 (PhysX-derived, no MassAPI); assets unchanged by the sessions (sha256
+before = after); wall time 109 to 122 s. Their folders are in the hold folder (see above); each kept media folder
+`media/hotec_wheatstraw/v2` to `v5` holds only the downscaled settled still.
 
 **v1 (photo-fitted racks, 2026-09-21), `[RESULT] PASS`:** layout as in the table (the v3 racks had a
 73 mm tine-row pitch, so the lower rack took one bowl); settle passed after 11.4 s simulated
@@ -258,8 +224,8 @@ bowls 2 mm; every piece inside its rack box or on the slab; PhysX-derived masses
 bowl 0.126 kg, cup 0.060 kg (shell volume × 1000 kg/m³, no MassAPI); assets unchanged by the
 session (sha256 before = after); media `hotec_v1_placed.png`, `hotec_v1_settled.png`,
 `hotec_v1_collision.png` (1920×1440), `hotec_v1_orbit.mp4` (288 frames, 24 fps, 1280×960); wall
-time 150 s. Full-size v1 stills, the orbit video and the JSON records are under
-`media/hotec_wheatstraw/v1/` (copies of `results/hotec/frigidaire/v1/`).
+time 150 s. The v1 stills, the orbit video and the JSON records are under
+`results/hotec/frigidaire/v1/` (`media/hotec_wheatstraw/v1/` keeps a downscaled still and `hotec_profiles.png`).
 
 Figures: `docs/figures/hotec_profiles.png` (cross-sections with collision bands, brimful fill and
 headspace line) and `docs/figures/hotec_loaded_fdpc4221as.png` (the v8 settled still, the full 24-piece load, downscaled to
@@ -292,12 +258,12 @@ Run v8 settle (`--tag hotec_v8`, v2 massed assets): `[RESULT] PASS`, 6.29 s simu
 pieces contained; placed-to-settled displacement plates 12 to 22 mm / 6 to 12 deg (the shingled front bank
 holds), lower bowls 19 to 67 mm / 4 to 15 deg (one rear bowl drops from its 60 mm lifted seed onto the tine
 tips), upper bowls 2 to 3 mm, cups 23 to 25 mm; still `hotec_v8_settled.png`, orbit `hotec_v8_orbit.mp4`
-under `results/hotec/frigidaire/v8/` and `media/hotec_wheatstraw/v8/`; `docs/figures/hotec_loaded_fdpc4221as.png`
+under `results/hotec/frigidaire/v8/` (a downscaled still is in `media/hotec_wheatstraw/v8/`); `docs/figures/hotec_loaded_fdpc4221as.png`
 is this run's settled still. Layout records: `results/hotec/frigidaire/v{7,8}/layout.json`
 (`rejected_per_item` lists the FCL rejections); `logs/hotec_v{7,8}_layout.log`. Run v7 settle of the split load (`--tag hotec_v7`, v2 massed assets): `[RESULT] PASS`,
 settle 6.25 s (no restarts), max placed-to-settled displacement 25 mm / 15 deg,
 all 24 pieces contained (22 racked, 2 bowls on the slab); still `hotec_v7_settled.png`, orbit `hotec_v7_orbit.mp4`
-under `results/hotec/frigidaire/v7/` and `media/hotec_wheatstraw/v7/`.
+under `results/hotec/frigidaire/v7/`.
 
 ## Highest-exposure load (run v9, 2026-09-22)
 
@@ -318,9 +284,14 @@ no cycle, so run v9 is order-feasible. The 24-step order with human wording is i
 time (`--sequential`). 23 steps settle cleanly; step 11 (the bowl between the plate banks) tumbles and
 ends mouth up, so that pose is not hand-reproducible as specified and the settled load scores
 0.186 with one pooling piece (v9 all-at-once: 0.197). Contact sheet of the 24 steps:
-`docs/figures/hotec_placement_steps.png`; orbit `media/hotec_wheatstraw/v10/hotec_v10_orbit.mp4`.
+`docs/figures/hotec_placement_steps.png`; orbit `results/hotec/frigidaire/v10/hotec_v10_orbit.mp4`.
 
 ## Height-fixed twin (runs v11 to v13, 2026-09-23)
+
+History (2026-09-28): these runs used the 2026-09-23 outside-height twin (`upper_tines_4x13_v4`,
+`lower_tines_6x12_v3`; archived as `build/frigidaire_collection/history/v5`), which was re-measured and rebuilt on
+2026-09-28, so their numbers do not describe the current racks. Records on the current racks: `results/hotec/frigidaire/v14`
+and the top-5 loads (last section).
 
 The user measured every rack and basket height outside, bottom to top, so the twin was rebuilt
 with the rims lowered and the basket 1.5 mm taller (`upper_tines_4x13_v4`, `lower_tines_6x12_v3`,
@@ -351,6 +322,42 @@ Records: `results/hotec/frigidaire/v11`, `v12`, `v13`; the v12 layout and its or
 `logs/hotec_v1{1,2,3}_*.log`, `logs/hotec_heightfix_exposure.log`. The re-certification and
 re-scoring scripts are `build/frigidaire_diagnostics/scratch/recert_layout.py` and
 `settled_score_to.py`.
+
+## Top five loads on the re-measured racks (2026-09-29)
+
+All 24 pieces, no planning: the five highest-exposure complete loads, each validated by the joint Isaac gate (all
+24 teleported at once, settle, both racks retracted, containment) and rendered. Tool:
+`frigidaire/scripts/evaluation/frigidaire_hotec_top5.py` (tests `frigidaire/tests/test_hotec_top5.py`), reusing the
+HOTEC benchmark library without modifying it. Private results page: https://claude.ai/artifact/Ve2AHygZ7879EAx56Ko7ww.
+
+A first run with the benchmark's placement rules (`results/hotec/frigidaire/top5_20260929/`) racked all 24 in 0 of 40
+first-fit packings at every relaxation level. Kit-free diagnosis
+(`build/frigidaire_diagnostics/scratch/top5_{tol_diag,front_test,bowl_diag,tol08_test}.py`):
+
+| Rule (benchmark) | Effect on 24 pieces | Now |
+|---|---|---|
+| no two bowls with overlapping outline and depth range (`nests`) | rejected every remaining bowl pose once 6 to 7 bowls sat | scored, not forbidden: a hidden bowl interior already costs exposure; nested pairs are listed per load |
+| dishes >= 3 mm apart (needed for one-dish-at-a-time building) | 8 plates could not share the front bank | dishes may touch, at most 0.8 mm overlap (the gate's preflight allows 1 mm) |
+| plates scattered by shuffled first-fit | closed the rear bank the bowls need | a `front_plates` packing order puts plates first, front bank, gaps in order |
+
+With these, 16 of 40 packings racked all 24 at the benchmark's own zones (no relaxation). The joint gate's momentary
+peak-penetration limit (2 mm) rejected the first dense loads within 20 s (bowl-bowl 4.0 / 4.5 mm on landing); the
+top-five gates allow a 5 mm peak through a new validator flag (`frigidaire_initial_state_validate.py
+--peak-penetration-m`, default unchanged), keeping the 1 mm median, the 1 mm preflight, rest windows, retraction and
+containment. Distinctness: every plate ends in front gaps 00-07 and every cup in the same 8 glass slots, so loads
+differ only in their bowls; ranks the ">= 6 of 24 dishes" rule cannot fill take loads at least 4 apart.
+
+| Rank | Load | Planned S | Settled S | Worst dish | Nested pairs | Min dishes apart |
+|---|---|---:|---:|---:|---:|---:|
+| 1 | start_00 | 0.211 | 0.195 | 0.033 | 4 | 5 |
+| 2 | start_13 | 0.197 | 0.185 | 0.002 | 4 | 5 |
+| 3 | start_17 | 0.194 | 0.179 | 0.033 | 3 | 5 |
+| 4 | start_12 | 0.193 | 0.183 | 0.036 | 2 | 7 |
+| 5 | start_04 | 0.191 | 0.182 | 0.002 | 3 | 5 |
+
+20 starts, all feasible; 16 gated, 7 accepted (the others: settle or penetration failures); no pooling after the settle;
+all five renders PASS. Records `results/hotec/frigidaire/top5_20260929_touch08/` (`summary.{json,md}`), media
+`media/hotec_wheatstraw/top5_20260929_touch08/` (renders, exposure figures), logs `logs/hotec_top5/`.
 
 ## Reproduce
 

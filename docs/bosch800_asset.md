@@ -89,17 +89,22 @@ a robot should physically pull a passive rack.
 
 ## Fetch the prebuilt asset
 
-From the repository root, inside the runtime container (README §2.2); the dataset is public
-and needs no token. Each tarball carries a `MANIFEST.json` with a sha256 per file, and
+From the repository root, inside the runtime container
+([overview §2.2](overview.md#22-runtime-container)); the dataset is public and needs no
+token. Each tarball carries a `MANIFEST.json` with a sha256 per file, and
 `restore_assets.py` verifies every extracted file against it:
 
 ```bash
-# standalone machine assets (~6 MB, seconds): this Bosch 800 asset plus the preliminary
+# standalone machine assets (~3.5 MB, seconds): this Bosch 800 asset plus the preliminary
 # Frigidaire FDPC4221AS revisions under assets/models/frigidaire_fdpc4221as{,_v2}/
 scripts/run_py.sh scripts/tools/restore_assets.py --kinds models
 # add its validation evidence (~74 MB: stills, video, validation.json, previous-asset zip)
 scripts/run_py.sh scripts/tools/restore_assets.py --kinds models evidence
 ```
+
+Sizes of the local tarballs of tag `20260910_b3584ae` (`ls -l outputs/archive/`): `models`
+3,477,304 bytes, `evidence` 74,317,755 bytes and, for the default cache restore, `assets`
+137,085,513 bytes.
 
 Without the repo (any machine with `curl` + `python3`); the archive extracts to
 `assets/models/bosch800/` relative to the current directory:

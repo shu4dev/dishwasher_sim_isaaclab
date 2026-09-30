@@ -22,7 +22,7 @@ def B():
 def test_tiers_counts_caps_and_n_ranges(B):
     assert [len(B.roster(t)) for t in B.TIERS] == [7, 15, 23]
     assert {k for _, k in B.roster("hard")} == {"plate", "bowl", "cup"}
-    for tier, (lo, hi), slack in (("easy", (2, 5), 3), ("medium", (4, 11), 1), ("hard", (6, 17), 0)):
+    for tier, (lo, hi), slack in (("easy", (2, 5), 3), ("medium", (4, 11), 2), ("hard", (6, 17), 1)):   # medium/hard +1 since 2026-09-28
         ns = {B.draw_n(tier, s) for s in range(200)}
         assert min(ns) >= lo and max(ns) <= hi and len(ns) > 3
         assert B.cap_of(tier, 5) == 5 + slack
@@ -55,6 +55,13 @@ def test_family_filters_drop_the_mid_zone_and_the_outer_front_right(B):
     assert B.family_ok(c("lower_rear", .205), pts)                    # other slots: the wall itself (lip .275)
     assert not B.family_ok(c("lower_rear", .208), pts)
 
+
+def test_every_plate_gap_stays_in_the_families(B):
+    """The every-second-gap plate rule was reverted (2026-09-29): it left no room for the 7th bowl."""
+    assert not hasattr(B, "plate_slot_ok")
+    pts = np.array([[-.07, 0., 0.], [.07, 0., 0.]])
+    plate = lambda slot: {"kind": "plate", "slot": slot, "position": [0., 0., 0.], "quaternion_xyzw": [0., 0., 0., 1.]}
+    assert B.family_ok(plate("lower_front_03"), pts) and B.family_ok(plate("lower_front_04"), pts)
 
 def test_racked_in_uses_the_rack_boxes(B):
     pts = np.zeros((1, 3))
@@ -171,8 +178,118 @@ def test_banned_pairs_block_only_the_pair_and_poses_across_slot_names(B):
     assert B.banned(c, [], old)
 
 
+def _episode(out, track, tier, algo, **kw):
+    import json
+    rec = {"track": track, "tier": tier, "instance": f"{tier}_s0", "algorithm": algo, "solved": True, "abort": None,
+           "end_check": {"outcome": "accepted"}, "moves_used": 8, "gap": 1, "S_ref": .3, "failed_settles": 0,
+           "planning_time_total_s": .1, "planning_cpu_s": .1, **kw}
+    p = out / "episodes" / track / tier / f"{tier}_s0__{algo}.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(rec))
+    return p
+
+
+def test_episode_rows_have_no_copies_and_open_success_needs_a_pooling_free_load(B, tmp_path):
+    import json
+    _episode(tmp_path, "goal", "easy", "greedy_offline")
+    _episode(tmp_path, "goal", "easy", "rrt_connect", solved=False, abort="give-up")
+    _episode(tmp_path, "goal", "easy", "planner")                                   # retired row: ignored
+    _episode(tmp_path, "open", "easy", "planner", solved=False, abort="give-up", gap=None)   # retired 2026-09-29: ignored
+    p = _episode(tmp_path, "open", "easy", "mcts", solved=False, abort="give-up", gap=None)
+    p.with_suffix(".analysis.json").write_text(json.dumps({"S_final": .26, "feasible_final": False}))
+    q = _episode(tmp_path, "open", "easy", "baseline", solved=False, abort="give-up", gap=None,
+                 end_check={"outcome": "not_all_racked"})
+    q.with_suffix(".analysis.json").write_text(json.dumps({"S_final": .35, "feasible_final": True}))
+    rows = B.episode_rows(tmp_path)
+    assert [r["algorithm"] for r in rows["goal"]] == ["greedy_offline", "rrt_connect"]
+    assert [(r["algorithm"], r["success"], r["failure"]) for r in rows["open"]] == \
+        [("baseline", False, "not_all_racked"), ("mcts", False, "pooling")]
+    assert [(r["success"], r["failure"]) for r in rows["goal"]] == [(True, None), (False, "give-up")]
+    s = B.summarize(rows["open"])
+    assert s["solved"] == 0 and s["S_final"] is None and s["aborts"] == {"not_all_racked": 1, "pooling": 1}
+    ok = [r for r in rows["open"] if r["algorithm"] == "mcts"][0]
+    ok["feasible_final"], ok["failure"], ok["success"] = True, None, True          # the same load, no puddle
+    assert B.summarize([ok])["S_over_S_ref"] == pytest.approx(.26 / .3)
+
+
+def test_replay_marks_its_load_certified_only_when_the_plan_is(B):
+    class World:
+        def __init__(self):
+            self.marked = None
+        def in_counter(self, T):
+            return T[2, 3] > .9
+        def mark_goals(self, targets, centroids=None, certified=True):
+            self.marked = (sorted(targets), certified)
+    hi, lo = np.eye(4), np.eye(4)
+    hi[2, 3], lo[2, 3] = .95, .3
+    moves = [{"item_id": "bowl_01", "T_base_obj": hi.tolist()}, {"item_id": "bowl_01", "T_base_obj": lo.tolist()},
+             {"item_id": "bowl_02", "T_base_obj": lo.tolist()}]
+    w = World()
+    B.Replay({"moves": moves, "certified": True}).reset(None, w)
+    assert w.marked == (["bowl_01", "bowl_02"], True)                  # the parked pose is not a goal
+    w = World()
+    B.Replay({"moves": moves}).reset(None, w)
+    assert w.marked == (["bowl_01", "bowl_02"], False)
+
+
+def test_failure_of_reports_the_uncertified_load_and_pooling(B):
+    base = {"track": "open", "solved": False, "end_check": {"outcome": "accepted"}}
+    assert B.failure_of({**base, "abort": "load-not-buildable", "end_check": {"outcome": "aborted"}}) == "load-not-buildable"
+    assert B.failure_of({**base, "abort": "give-up", "feasible_final": False}) == "pooling"
+    assert B.failure_of({**base, "abort": "give-up", "feasible_final": True}) is None
+    assert B.failure_of({"track": "goal", "solved": False, "abort": "give-up", "end_check": {"outcome": "accepted"}}) == "give-up"
+    assert B.failure_of({"track": "goal", "solved": True, "abort": None, "end_check": {"outcome": "closure_failure"}}) == "closure_failure"
+
+
 def test_neighbour_order_keeps_the_build_order_between_close_dishes_only(B):
     poses = {"a": {"position_m": [0., 0., .1]}, "b": {"position_m": [.05, 0., .1]}, "c": {"position_m": [.5, 0., .1]},
              "d": {"position_m": [.06, 0., .6]}}
     racks = {"a": "LowerRack", "b": "LowerRack", "c": "LowerRack", "d": "UpperRack"}
     assert B.neighbour_order(["b", "a", "c", "d"], poses, racks) == [("b", "a")]
+
+
+def test_first_fit_re_plans_shuffle_the_family_order_reproducibly(B, monkeypatch):
+    """Attempt 0 packs in family order; a re-plan (rng given) takes a seeded random order that differs from the
+    deterministic pack and repeats for the same seed (2026-09-28: deterministic re-plans never became buildable)."""
+    fam = {"cup": [({"kind": "cup", "rack": "UpperRack", "slot": f"s{i}", "variant": "v", "position": [i * .1, 0., 0.],
+                     "quaternion_xyzw": [0., 0., 0., 1.]}, None) for i in range(8)]}
+    masks = {"cup": np.ones(8, bool)}
+    monkeypatch.setattr(B, "DishSet", lambda parts, points: _StubDishes())
+    ids = [(f"cup_{i:02d}", "cup") for i in range(3)]
+    slots = lambda entries: [e["slot"] for e in entries]
+    plain = slots(B.first_fit(ids, fam, masks, None, None))
+    assert plain == ["s0", "s1", "s2"]
+    shuffled = slots(B.first_fit(ids, fam, masks, None, None, rng=np.random.default_rng(7)))
+    again = slots(B.first_fit(ids, fam, masks, None, None, rng=np.random.default_rng(7)))
+    assert shuffled != plain and shuffled == again and len(set(shuffled)) == 3
+    assert B.PLAN_ATTEMPTS == 6
+
+
+def test_own_order_keeps_a_legal_plan_and_rejects_an_illegal_one(B):
+    """The MCTS replay order is kept only when every re-targeted move is legal and the load ends complete."""
+    class World:
+        def __init__(self):
+            self._poses, self.classes, self.blocked = {"a": np.eye(4), "b": np.eye(4)}, {"a": "bowl", "b": "bowl"}, set()
+        def snapshot(self):
+            return {k: v.copy() for k, v in self._poses.items()}
+        def sync(self, poses, classes):
+            self._poses.update({k: np.asarray(v, dtype=float).copy() for k, v in poses.items()})
+        def in_counter(self, T):
+            return float(np.asarray(T)[2, 3]) > 5.
+        def move_collides(self, oid, T):
+            return oid in self.blocked
+    w = World()
+    ta, tb = np.eye(4), np.eye(4)
+    ta[0, 3], tb[0, 3] = 1., 2.
+    planned = [{"item_id": "a", "T_base_obj": (ta + .01).tolist()}, {"item_id": "b", "T_base_obj": tb.tolist()}]
+    moves = B.own_order(w, planned, {"a": ta, "b": tb}, cap=1)
+    assert [m.item_id for m in moves] == ["a", "b"] and np.allclose(moves[0].T_base_obj, ta)   # re-targeted to the build
+    assert np.allclose(w._poses["a"], np.eye(4))                                              # world restored
+    w.blocked = {"b"}
+    assert B.own_order(w, planned, {"a": ta, "b": tb}, cap=1) is None
+    w.blocked = set()
+    assert B.own_order(w, planned[:1], {"a": ta, "b": tb}, cap=1) is None                    # load incomplete
+
+
+def test_open_track_is_first_fit_and_mcts(B):
+    assert B.TRACK_ALGORITHMS["open"] == ("baseline", "mcts")

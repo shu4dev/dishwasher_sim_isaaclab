@@ -175,11 +175,6 @@ class CompatTable:
             return False
         return self._pair_ok.get((a, b), self._pair_ok.get((b, a), False))
 
-    def arrangement_ok(self, locs) -> bool:
-        """Whether a whole assignment of items to locations is jointly feasible."""
-        locs = list(locs)
-        return all(self.compatible(a, b) for a, b in itertools.combinations(locs, 2))
-
 
 def optimal_moves(instance, table: CompatTable | None = None, max_expansions: int = 2_000_000,
                   max_seconds: float | None = 120.0, counter_cap: int | None = None):

@@ -21,10 +21,17 @@ dishwasher_sim_isaaclab/
 │   │                                  episodes, per-move settle + fault gates, --video]
 │   │
 │   ├── evaluation/
-│   │   └── instance_views.py         [one instance's initial-vs-goal stills, one Kit boot]
+│   │   ├── instance_views.py         [one instance's initial-vs-goal stills, one Kit boot]
+│   │   ├── compare_algorithms.py     [Kit-free: aggregates episode records into the per-cell
+│   │   │                              comparison table, results/compare/summary.{csv,md}]
+│   │   └── bosch800_asset_evidence.py [Kit: the standalone Bosch 800 asset's open/extend/load/
+│   │                                   retract/close cycle, media/bosch800_asset/]
 │   │
 │   └── tools/
 │       ├── restore_assets.py         [download, safe-extract, validate cache hashes, run tests]
+│       ├── archive_assets.py         [producer side of restore_assets: kind-aware tarballs
+│       │                              (assets/media/models/evidence) with sha256 manifests,
+│       │                              optional HF upload; --status diffs against the remote]
 │       └── bootstrap.sh              [fresh-box bring-up: image build if absent + compose up +
 │                                      restore + the kit_smoke gate]
 │
@@ -71,6 +78,13 @@ dishwasher_sim_isaaclab/
 │   │                                  settle success per mode]
 │   ├── rearrange.py                  [benchmark core: instances, closed-loop episode driver,
 │   │                                  FCL arrangement mirror, greedy baseline]
+│   ├── rrt.py                        [arrangement-space RRT / RRT-Connect / RRT* planners
+│   │                                  (Kit-free): a state is a full arrangement, an edge one
+│   │                                  legal teleport; registered in run_rearrange.ALGORITHMS]
+│   ├── tiers.py                      [difficulty tiers: 3 presets (easy/medium/hard) + 9
+│   │                                  one-knob ablation cells off medium; module constants,
+│   │                                  deliberately outside config.py so they never touch
+│   │                                  config_hash]
 │   ├── capacity.py                   [greedy placeable-capacity planner: slots -> placeable
 │   │                                  pre-scan -> joint certification -> z-budget/settle gates;
 │   │                                  gen_instances calls plan_full_load() in-process]
@@ -79,13 +93,22 @@ dishwasher_sim_isaaclab/
 │   ├── transforms.py                 [pose helpers (XYZW throughout)]
 │   └── checks.py                     [pass/fail gate helpers for scripts]
 │
-├── tests/                            [8 files / 60 tests: the frozen-invariant pins, the
-│                                      compat ground truth, the harness's toy-oracle check,
-│                                      the HOTEC generator properties; run via
-│                                      scripts/run_py.sh -m pytest]
+├── tests/                            [8 files / 65 tests: the frozen-invariant pins, the
+│                                      compat ground truth, the harness's and the RRT
+│                                      planners' toy-oracle checks, the instance sampler's
+│                                      tier knobs, the archive tool's tarball selection, the
+│                                      HOTEC generator properties; run via
+│                                      scripts/run_py.sh -m pytest tests/]
+├── frigidaire/                       [the Frigidaire FDPC4221AS twin, a separate package
+│                                      (dishsim_frigidaire) with its own src/ scripts/ tests/
+│                                      docs/, tracked in git: generator, loaders, HOTEC
+│                                      benchmark, exposure scorer; the arm bring-up in
+│                                      src/dishsim_frigidaire/robot/ is in progress.
+│                                      See frigidaire/README.md]
 ├── docs/                             [environment, success criteria, measured reports]
 ├── docker/                           [Dockerfile (build record) + compose.yaml (the runtime)]
-├── assets/  media/  results/         [generated, gitignored — symlinks onto the 2 TB drive]
+├── assets/ build/ media/ results/ logs/ outputs/
+│                                     [generated, gitignored — symlinks onto the 2 TB drive]
 ├── requirements-planning.txt         [pinned planning deps, baked into the image]
 └── pyproject.toml
 ```

@@ -3,6 +3,16 @@
 Reference for agents working on `frigidaire/src/dishsim_frigidaire/exposure.py` and its
 scripts. Human quickstart: [exposure_quickstart.md](exposure_quickstart.md).
 
+> **Status 2026-09-29.** The scorer is live: the HOTEC exposure search, the top-5 code
+> (`frigidaire_hotec_top5.py`) and the HOTEC benchmark score with it, and
+> `frigidaire/tests/test_exposure.py` tests it. Every result below is history: the demo scene,
+> seven-pair, ceiling-sweep and search results were computed on the v3 racks (arm radii
+> 0.245 / 0.205), the HOTEC runs v8 to v13 on racks built before the 2026-09-28 re-measurement
+> ([geometry.md](geometry.md)). The scripts that produced them were retired on 2026-09-29 (in git
+> history at HEAD 4455813) and their result folders are in the hold folder
+> `/media/corallab-s1/2tbhdd/brianshu/dishsim/_trash_20260929/` until 2026-10-29. Current arm
+> radii: 0.233 / 0.191.
+
 ## What it is
 
 A Kit-free, ray-cast proxy for "how well would this arrangement wash". It ranks arrangements
@@ -10,7 +20,8 @@ of the SAME object set; absolute values are not comparable across different sets
 cleaning measurement and is never quoted as one. Chosen 2026-09-17 over (a) simulating the
 wash (months, uncheckable without residue data) and (b) a measured spray-arm model (needs
 the real unit); one idea only, no asset changes. Revision 5 (2026-09-20) is the closing
-revision: it is the objective the arrangement planner consumes, and nothing in the
+revision: it is the objective of the HOTEC search, top-5 and benchmark code (the pool-search
+arrangement planner that first consumed it was retired 2026-09-29), and nothing in the
 definition is tuned to a result.
 
 ## Definition (revision 5)
@@ -50,8 +61,9 @@ feasible iff no vessel or plate pools: min z(interior vertices) >= min z(rim rin
   wholly above the bolster ring at local z 4 mm, both faces). Handles never count. Anything
   else raises.
 - Pooling applies to vessels and plates (a flat plate holds water in its well, a plate on
-  edge drains); cutlery never pools. Pooling is a hard gate for the search and the planner,
-  never a penalty. `mouth_up` (organized-policy angle rule) is still recorded beside `pools`.
+  edge drains); cutlery never pools. Pooling is a hard gate for the HOTEC search, the top-5
+  code and the benchmark, never a penalty. `mouth_up` (organized-policy angle rule) is still
+  recorded beside `pools`.
 - `baselines` (per-object exposure alone at its pose, the self-occlusion ceiling) is a
   diagnostic that never enters `S`; it is opt-in (`score_arrangement(..., baselines=False)`
   in the objective path, on in the reporting scripts). Rays run on CUDA when Warp sees a GPU
@@ -61,30 +73,34 @@ feasible iff no vessel or plate pools: min z(interior vertices) >= min z(rim rin
 - Legacy `source` modes kept for comparison: `hemisphere` (rev 1 uniform AO), `below`
   (rev 2), `per-rack-directions` (rev 3).
 
-`FORMULA.md` under `results/exposure/frigidaire/` is written by the summary script from the
-`FORMULA` constant in `frigidaire_exposure_summary.py`; keep that constant and this section
-in agreement.
+`FORMULA.md` under `results/exposure/frigidaire/` was written on 2026-09-20 by the retired
+summary script and is not regenerated; it still shows the pre-2026-09-22 arm radii 0.245 /
+0.205, so this section and `exposure.py` (0.233 / 0.191) are the reference.
 
 ## Files
 
 | File | Role |
 |---|---|
 | `src/dishsim_frigidaire/exposure.py` | scorer: `food_contact`, `surface_samples`, `rack_sources`, `cast` (Warp), `exposure_of`, `pools`, `load_state`, `score_state`, `score_arrangement`, `sanity_pair` |
-| `scripts/evaluation/frigidaire_exposure_scene.py` | demo scene: organized random_06 + plate on edge + fork/knife/tablespoon in the basket -> `scene/<pair>_plus.json`, `_scores.json`, `_method.png` (the method figure) |
-| `scripts/evaluation/frigidaire_exposure_scene_render.py` | Kit, `--enable_cameras`: Isaac RTX still of that scene and, with `--orbit-seconds N`, `<state_id>_orbit.mp4` (camera sweeps across the front, 1280x960, H.264 via imageio's bundled ffmpeg); no physics step |
-| `scripts/evaluation/frigidaire_exposure_demo.py` | one pair: sanity/pair/bars/evidence png, turntable.gif, rays.gif |
-| `scripts/evaluation/frigidaire_exposure_summary.py` | all seven pairs, `--source`, `--ceiling-weight`, `--ceiling-sweep`, `--convergence <pair>`; writes FORMULA.md |
-| `scripts/evaluation/frigidaire_exposure_search.py` | samples feasible alternatives from the organized candidate pool (random greedy + MILP), drops pooling proposals, ranks the rest |
-| `scripts/evaluation/frigidaire_exposure_settled_best.py` | turns a settled attempt folder into `state.json`, re-scores proposal and settled state at the same parameters, draws `settled_best.png` |
+| `scripts/evaluation/frigidaire_hotec_exposure_search.py` | HOTEC 24-piece search: registers `hotec_plate` / `hotec_bowl` / `hotec_cup` in the scorer, coordinate ascent, `--insertion-gate`; writes `search.json` and `best_layout.json`; reused as a module by `frigidaire_bench.py` and the figure script |
+| `scripts/evaluation/frigidaire_hotec_exposure_figure.py` | method image of two HOTEC loads: per-sample exposure top-down per rack plus per-piece bars |
+| `scripts/evaluation/frigidaire_hotec_top5.py` | top-5 exposure loads of all 24 HOTEC pieces (2026-09-29), each Isaac-gated |
+| `scripts/experiment/frigidaire_bench.py` | HOTEC rearrangement benchmark; its goal search and the S it reports use the scorer ([hotec_bench.md](hotec_bench.md)) |
 | `tests/test_exposure.py` | 22 Kit-free tests (analytic ray cases, lathe layout incl. spoons, fork/knife rules, loader re-seating, pooling incl. plates, feasibility, baselines opt-in) |
 
-Inputs are the settled initial states under `results/initial_states/frigidaire/*_20260911_seed20260911/states/`.
-They store the racks OUT (door 90°, slides at their limits); `load_state` re-seats every
-object from `rack_local_pose` onto the racks-in origins in `asset.BODY_POSITIONS` (basket
-objects onto the basket's own settled pose) and re-seats the basket by its settled offset to
-the LowerRack. Each organized state re-arranges exactly the objects of the packing state with
-the same name (seven pairs, bowls and mugs). No settled state contains a plate or cutlery;
-the demo scene poses them geometrically.
+Retired 2026-09-29 (in git history at HEAD 4455813):
+`frigidaire_exposure_{scene,scene_render,demo,summary,search,settled_best}.py` (the v3-rack demo
+scene and its Isaac render, the one-pair demo, the seven-pair summary, the pool search over the
+organized candidates, the settled-best scorer of a search proposal).
+
+`load_state` reads a settled initial-state file. Those store the racks OUT (door 90°, slides at
+their limits); it re-seats every object from `rack_local_pose` onto the racks-in origins in
+`asset.BODY_POSITIONS` (basket objects onto the basket's own settled pose) and re-seats the
+basket by its settled offset to the LowerRack. The tests read two v3-geometry states,
+`frigidaire/tests/fixtures/settled_states/{packing,organized}_random_06.json`. The original
+inputs, the seven packing/organized pairs of bowls and mugs of the 2026-09-11 runs, are in the
+hold folder (`_trash_20260929/results/initial_states/frigidaire/*_20260911_seed20260911/states/`);
+no settled state contains a plate or cutlery.
 
 ## Commands
 
@@ -93,48 +109,40 @@ All Kit-free unless marked; run from the repo root. Warp runs on CUDA when avail
 root-owned; clean with `docker exec dishsim-isaac rm`).
 
 ```bash
-scripts/run_py.sh -m pytest frigidaire/tests/test_exposure.py                                       # 3 s
-scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_exposure_scene.py --pair random_06      # 6 s: scene json, scores, method.png
-scripts/run_kit.sh frigidaire/scripts/evaluation/frigidaire_exposure_scene_render.py --headless --enable_cameras \
-    --state results/exposure/frigidaire/scene/random_06_plus.json --out-dir results/exposure/frigidaire/scene \
-    --orbit-seconds 12   # ~4 min: Isaac still + 12 s orbit video (omit --orbit-seconds for the still alone)
-scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_exposure_demo.py --pair random_06        # 3 min, GIFs dominate
-scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_exposure_summary.py --ceiling-sweep --convergence random_06   # ~1 min CUDA
-scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_exposure_search.py --pair random_06     # ~2 min, MILP dominates
-scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_exposure_settled_best.py                # 10 s
+scripts/run_py.sh -m pytest frigidaire/tests/test_exposure.py                                       # 22 tests
+scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_hotec_exposure_search.py --sweeps 3 --seed 0 --out <new folder>   # HOTEC search, CUDA, 34 min on 2026-09-22
+scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_hotec_exposure_figure.py --start <start layout.json> --best <best_layout.json> --out <heatmap.png>
 ```
 
-Settling a search proposal (Kit, CPU physics, ~4 min per run). The claims evidence script
-`frigidaire_full_load_evidence.py` REJECTS mugs in the lower rack; use the organized backend:
+The search's default `--out` is `results/exposure/frigidaire/hotec/` (the records cited below) and
+its default start layout is `results/hotec/frigidaire/v8/layout.json`, laid out on the
+pre-2026-09-28 racks: always pass a new `--out`. The top-5 loads and the benchmark use the same
+scorer (`frigidaire_hotec_top5.py`, `frigidaire_bench.py`; commands in their docstrings and in
+[hotec_bench.md](hotec_bench.md)).
 
-1. Build a manifest: candidates for the chosen `indices` from
-   `organized_20260911_seed20260911/candidates_screened.json`, identities via
-   `assign_identities(selected, source_state['objects'], source_state['baseline'])`
-   (import from `frigidaire/scripts/experiment/frigidaire_organized_experiment.py` with
-   `frigidaire/scripts/experiment` on `sys.path`), plus `policy` and `baseline` copied from
-   the source organized state, `order: upper_first`, `schema_version: 1`.
-2. `scripts/run_kit.sh frigidaire/scripts/experiment/frigidaire_organized_validate.py --usd build/frigidaire_collection/usd/fdpc4221as.usdc --out-dir <dir> --max-wall-seconds 480 --headless --device cpu --order upper_first --manifest <dir>/manifest.json`
-   Judge by `[RESULT] accepted` in the log; `result.json` carries the measured snapshots.
-3. `scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_exposure_settled_best.py <dir>` → `state.json`, `scores.json`, `settled_best.png`.
-4. Reproduce: same manifest with `objects` = the settled `state.json` objects,
-   `purpose: reproduction`, `reproduction_of: <first attempt_id>`; run step 2 into `<dir>/replay`;
-   the state counts as accepted only when the replay is accepted too (the organized
-   pipeline's standard). Record the verdict in `state.json["reproduction"]`.
+Retired 2026-09-29 (in git history at HEAD 4455813): the commands for the demo scene, its Isaac
+render and orbit video, the one-pair demo, the seven-pair summary (`--ceiling-sweep`,
+`--convergence`), the pool search and the settled-best scorer, and the four-step procedure that
+settled a search proposal in Isaac through the organized backend (`frigidaire_organized_validate.py`
+on a manifest built from the screened organized candidates, then a replay that had to be accepted
+too).
 
-Isaac render of any settled state (Kit, GPU, ~2 min): `frigidaire_initial_state_render.py --headless
---enable_cameras --state <run>/states/<id>.json --out-dir <out>`. It validates a run layout:
-`<run>/attempts/<state.source_attempt>/result.json` equal to `state.validation`,
-`state.input_hashes.asset_hashes` (copy from a packing state) or `<run>/summary.json`,
-`purpose` in {`randomized`, `highest`}, `accepted: true`, and it refuses to overwrite an
-existing image or evidence file: use a fresh `--out-dir`. It rejects cutlery and the basket
-rack; the demo scene has its own renderer (above).
+`frigidaire_initial_state_render.py` is still in the tree (Kit, GPU): `--headless
+--enable_cameras --state <run>/states/<id>.json --out-dir <out>` renders one saved accepted state
+of an experiment run. It checks the state against `<run>/attempts/<state.source_attempt>/result.json`,
+requires the USD files' hashes to equal those recorded with the state, and refuses to overwrite an
+existing image or evidence file (use a fresh `--out-dir`). The runs it was written for are in the
+hold folder, and on the rebuilt twin it would refuse them: 4 of the 9 USD hashes recorded in
+a 2026-09-11 state differ from today's collection (checked 2026-09-29).
 
 ## Results on record (2026-09-20, revision 5, ceiling weight 0)
 
-Stale (2026-09-22): every score under `results/exposure/frigidaire/` was computed on the v3
-racks and basket (archived as `build/frigidaire_collection/history/v3`) with arm radii
-0.245 / 0.205. The racks and basket were rebuilt to tape measurements on 2026-09-22;
-re-score at the current parameters before comparing with any v4 result.
+History (2026-09-29): every score in this table was computed on the v3 racks and basket
+(archived as `build/frigidaire_collection/history/v3`) with arm radii 0.245 / 0.205. The racks and
+basket were rebuilt to tape measurements on 2026-09-22 and again on 2026-09-28
+([geometry.md](geometry.md)); re-score at the current parameters before comparing with any later
+result. The scripts and result folders behind this table were retired on 2026-09-29 (status note
+at the top).
 
 | Result | Value |
 |---|---|
@@ -146,10 +154,12 @@ re-score at the current parameters before comparing with any v4 result.
 | best proposal | 0.274 unsettled, 0.274 settled (difference 3e-5 at the same parameters and device), independently reproduced, all gates passed |
 | demo scene (`scene/`) | organized random_06 + plate on edge + fork, knife, tablespoon: 22 objects, score 0.233, feasible; plate 0.174, fork 0.108, knife 0.176, tablespoon 0.080 (the basket cage and neighbours shade most rays) |
 
-Folders: `summary/` (default), `summary_below/` (rev-2 rays for comparison), `scene/`
-(revision-5 demo: Isaac still, orbit video, method figure), `demo_random_0N/` (per pair, with `isaac/`
-renders; 00–05 were written under revision 3 and only differ in schema, the summary table is
-authoritative), `search/` and `search/settle_best/`.
+Folders (moved 2026-09-29 to `_trash_20260929/results/exposure/frigidaire/` in the hold folder;
+undo: `mv` a folder back under `repo_data/` at the same relative path): `summary/` (default),
+`summary_below/` (rev-2 rays for comparison), `scene/` (revision-5 demo: Isaac still, orbit video,
+method figure), `demo_random_00` to `demo_random_06` (per pair, with `isaac/` renders; 00–05 were
+written under revision 3 and only differ in schema, the summary table is authoritative) and
+`search/` with its `settle_best` folder. `hotec/` and `hotec_heightfix/` stayed.
 
 ## Landmines
 
@@ -164,9 +174,11 @@ authoritative), `search/` and `search/settle_best/`.
 - Scores are only comparable across arrangements of the same objects; each object has its
   own self-occlusion ceiling (`baseline` in the record when `baselines=True`).
 - A spoon whose bowl faces the ceiling scores 0 alone (no source faces its interior); the
-  demo scene picks, per cutlery kind, the best-exposed head-down candidate of its compartment.
+  retired demo scene picked, per cutlery kind, the best-exposed head-down candidate of its
+  compartment.
 - A score stored in a manifest or an older record was computed under the defaults of its
-  day; always re-score at the current parameters before comparing (settled_best does).
+  day; always re-score at the current parameters before comparing (the retired settled-best
+  script did).
 
 ## Limitations to state with any result
 
@@ -175,9 +187,16 @@ source disc ("toward the centre" is invisible); arm discs, ceiling point and cos
 are assumptions, not measurements; the ceiling nozzle is off by default and the ranking is
 only claimed for weights up to 0.5; plate and cutlery rules are geometric and were never
 validated against a settled state (cutlery cannot be settled reproducibly here); search
-proposals are FCL-feasible, not settled, until run through step 2 above.
+proposals are FCL-feasible, not settled, until an Isaac settle confirms them.
 
 ## HOTEC set: highest-exposure full load (2026-09-22)
+
+> **Old racks (2026-09-29).** Every run in this section (v8 to v13) used racks built before the
+> 2026-09-28 re-measurement (`upper_tines_4x13_v5`, `lower_tines_6x12_v4`,
+> [geometry.md](geometry.md)); the S values, poses and settled results are history and not
+> comparable with loads scored on the current racks. Current HOTEC records:
+> `results/hotec/frigidaire/v14` (layout only), `results/hotec/frigidaire/top5_20260929*` and
+> `results/benchmark/frigidaire_hotec/`.
 
 The user asked for the arrangement of the whole HOTEC set (8 plates, 8 bowls, 8 cups; v2 massed
 assets) that scores highest under this scorer, in the final twin (tape racks, v3-look upper floor,
@@ -192,7 +211,8 @@ walls and the foot recess excluded); the mouth ring is the interior's highest ri
 for the prototypes. Areas: plate 502 cm2, bowl 340 cm2, cup 215 cm2.
 
 **Search.** Coordinate ascent from run v8 (the first complete load): every piece owns the realistic
-candidate family of its kind (the HOTEC planner's slot families: plates in every front and rear gap x
+candidate family of its kind (the slot families of the HOTEC layout planner in
+`frigidaire_hotec_load.py`, not the retired pool planner: plates in every front and rear gap x
 leans x offsets, 1404 poses; bowls in the lower zones and every upper centre gap x tilts x lifts,
 27966 poses; cups in the ten ladder slots x variants, 48 poses). One move re-poses one piece to
 an FCL-free, non-nesting alternative given the other 23; alternatives are ranked by their cached
@@ -215,9 +235,9 @@ placed-to-settled displacement 55 mm / 16 deg; re-scoring the settled poses give
 settling costs about 0.015 in S for both loads (plates relax onto the tines, cups slide down the slope).
 
 Records: `results/exposure/frigidaire/hotec/` (`search.json` with the move history and per-piece
-exposures and the v8 start score, `best_layout.json`, `settled_score.json`, `heatmap.png`), host
-copies under `media/exposure_hotec/`; Isaac run `results/hotec/frigidaire/v9/`, `media/hotec_wheatstraw/v9/`;
-figure `docs/figures/hotec_exposure_best.png` (settled still + heat map).
+exposures and the v8 start score, `best_layout.json`, `settled_score.json`, `heatmap.png`);
+Isaac run `results/hotec/frigidaire/v9/`; figure `docs/figures/hotec_exposure_best.png`
+(settled still + heat map).
 
 The HOTEC records above ran on the first tape build. On the height-fixed twin (2026-09-23,
 `frigidaire/docs/geometry.md` "Outside heights") the v9 poses score 0.2119 proposed and 0.1979
@@ -255,8 +275,8 @@ racks, but the settled load scores 0.1859 with one pooling piece (v9 settled all
 0.1971, no pooling). So the geometric order gate is satisfied, and the sequence exposes a
 physics-stability limit of that one pose: the mid-zone bowl is not reproducible by hand as specified.
 Records: `results/hotec/frigidaire/v10/` (`hotec_v10_settle.json` has the per-step `sequential.steps`
-with each step's settle verdict and the nudge of earlier pieces, `hotec_v10_step_NN.png` stills),
-host copies `media/hotec_wheatstraw/v10/`; contact sheet `docs/figures/hotec_placement_steps.png`.
+with each step's settle verdict and the nudge of earlier pieces, `hotec_v10_step_NN.png` stills);
+contact sheet `docs/figures/hotec_placement_steps.png`.
 Next step if the load is to be reproduced by hand: exclude the mid zone from the bowl family and re-run
 the search (the bowl returns to the rear rows as in run v8; S will drop a little), or seed that bowl on
 the tines without the lift.

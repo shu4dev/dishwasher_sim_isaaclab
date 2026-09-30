@@ -40,8 +40,6 @@ from .collision_world import CollisionWorld, load_object_pieces
 from .geometry import config_hash
 from . import slotting
 
-CAPACITY_SCHEMA_VERSION = 1
-
 #: Loading phases in execution order, per machine: each is an INTERNAL state (no rack
 #: action) in which exactly one rack is extended and loadable. The LOWER rack loads LAST:
 #: its stow drives the loaded rack back up over the door sill, which stalls under load

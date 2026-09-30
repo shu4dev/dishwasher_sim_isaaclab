@@ -6,8 +6,8 @@
     scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_bench_page.py [--label "pilot, 1 instance per tier"]
 
 Writes media/benchmark/frigidaire_hotec/page/: index.html (tables and the per-episode browser, data inline),
-sheets/<instance>.jpg (the Isaac stills of one instance as a 4 x 2 sprite: initial, goal, the five finished
-episodes), analysis/<instance>.jpg (the five score-detail figures stacked), video/*.mp4 (copied) and files.json
+sheets/<instance>.jpg (the Isaac stills of one instance as a 4 x 2 sprite: initial, goal, the four finished
+episodes), analysis/<instance>.jpg (the four score-detail figures stacked), video/*.mp4 (copied) and files.json
 (the relative paths to publish). Sprites keep the file count inside the artifact limits (255 files, 64 MB).
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 PANEL = (640, 480)                              # one Isaac still in the sprite (4:3, the render aspect)
 ANALYSIS_W = 1200                               # score-detail figure width in its sprite
-EPISODES = (("goal", "greedy_offline"), ("goal", "rrt_connect"), ("goal", "planner"), ("open", "planner"), ("open", "baseline"))
+EPISODES = (("goal", "greedy_offline"), ("goal", "rrt_connect"), ("open", "baseline"), ("open", "mcts"))
 PANELS = ["initial", "goal"] + [f"finished__{t}__{a}" for t, a in EPISODES]
 COLS, ROWS = 4, 2
 
@@ -109,9 +109,16 @@ def build(label, out=None, media=None):
                              "panel": PANELS.index(f"finished__{src_track}__{src_algo}"),
                              "figure": [f"{t}__{a}" for t, a in EPISODES].index(f"{src_track}__{src_algo}"),
                              "source": f"{src_track}__{src_algo}"})
-    data = {"label": label, "generated_utc": summary["generated_utc"], "tables": summary["tables"], "instances": instances,
+    method = None
+    if (media / "mcts_method.png").is_file():               # the track-B MCTS method figure (frigidaire_mcts_figure.py)
+        (page / "method").mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(media / "mcts_method.png", page / "method" / "mcts_method.png")
+        method = "method/mcts_method.png"
+        files.append(method)
+    data = {"label": label, "method": method, "generated_utc": summary["generated_utc"], "tables": summary["tables"], "instances": instances,
             "episodes": episodes, "tiers": {t: {"inventory": v["inventory"], "slack": v["slack"]} for t, v in B.TIERS.items()},
             "sprite": {"cols": COLS, "rows": ROWS, "panels": PANELS}, "analysis_aspect": [ANALYSIS_W, cell or 706],
+            "figures": len(EPISODES),
             "at_goal": B.AT_GOAL}
     (page / "index.html").write_text(TEMPLATE.replace("__DATA__", json.dumps(data).replace("</", "<\\/")))   # raw-text <script>
     (page / "files.json").write_text(json.dumps(files, indent=1) + "\n")
@@ -213,6 +220,9 @@ dialog::backdrop { background: rgba(8, 12, 16, .82); }
 dialog .big { width: min(94vw, 1500px); max-width: 100%; border-radius: 8px; background-repeat: no-repeat; }
 dialog button { position: absolute; top: 8px; right: 8px; font: 600 13px/1 var(--body); padding: 8px 12px; border-radius: 7px; border: 0; background: var(--surface); color: var(--ink); cursor: pointer; }
 footer.wrap { padding-block: 10px 40px; color: var(--muted); font-size: 13px; }
+.paths { margin: 12px 0 0; padding-left: 18px; }
+.paths li { margin-bottom: 8px; }
+.paths code { font: 13px/1.5 var(--mono); overflow-wrap: anywhere; }
 @media (max-width: 820px) {
   .formula, .media { grid-template-columns: minmax(0, 1fr); }
   .shots { grid-template-columns: minmax(0, 1fr); }
@@ -251,6 +261,14 @@ footer.wrap { padding-block: 10px 40px; color: var(--muted); font-size: 13px; }
   </div>
 </section>
 
+<section class="wrap" id="methodSection" hidden>
+  <h2>Track B planner: move-level MCTS</h2>
+  <p class="note">Each action moves one dish: onto one of its best free rack poses, kept in place, or parked on the
+  counter. A rollout repairs the parent's complete load around the moved dish and scores it. The search starts from
+  the best of a pool of complete packings and has the same 60 s budget as every other planner.</p>
+  <img id="methodImg" alt="MCTS method: the search loop, the best S found over the 60 s, and S against a longer budget" style="width:100%;border-radius:8px;border:1px solid var(--line);background:#fff">
+</section>
+
 <section class="wrap">
   <h2>Results</h2>
   <div class="tables" id="tables"></div>
@@ -260,6 +278,13 @@ footer.wrap { padding-block: 10px 40px; color: var(--muted); font-size: 13px; }
   <h2>Episodes</h2>
   <div class="controls" id="controls"></div>
   <article class="episode" id="episode" aria-live="polite"></article>
+</section>
+
+<section class="wrap">
+  <h2>Files on disk</h2>
+  <p class="note">Full-resolution sources of every image and video on this page, relative to the repository root on the
+  lab workstation (results, media and logs live on its data drive).</p>
+  <ul class="paths" id="paths"></ul>
 </section>
 
 <footer class="wrap" id="footer"></footer>
@@ -281,7 +306,7 @@ footer.wrap { padding-block: 10px 40px; color: var(--muted); font-size: 13px; }
     return n;
   };
   const f = (v, d = 1) => (v == null || Number.isNaN(v)) ? "–" : Number(v).toFixed(d);
-  const ALGO = { greedy_offline: "Greedy (offline)", rrt_connect: "RRT-Connect", planner: "Exposure planner", baseline: "First-fit baseline" };
+  const ALGO = { greedy_offline: "Greedy (offline)", rrt_connect: "RRT-Connect", planner: "Exposure planner (retired)", mcts: "MCTS", baseline: "First-fit baseline" };
   const TRACK = { goal: "Track A: goal", open: "Track B: open" };
   const WHY = { disturbed: "disturbed a neighbour", "give-up": "gave up", "refusal-loop": "refusal loop", "settle-loop": "settle loop",
     "init-mismatch": "start did not reproduce", not_all_racked: "not every dish racked", tub_wall: "crossed the tub wall",
@@ -414,8 +439,8 @@ footer.wrap { padding-block: 10px 40px; color: var(--muted); font-size: 13px; }
       const a = el("button", { type: "button", class: "analysis", "aria-label": "Score detail (enlarge)" });
       a.style.aspectRatio = w + " / " + h;
       a.style.backgroundImage = "url('analysis/" + ep.instance + ".jpg')";
-      a.style.backgroundSize = "100% 500%";
-      a.style.backgroundPosition = spritePos(ep.figure, 1, 5);
+      a.style.backgroundSize = "100% " + (100 * D.figures) + "%";
+      a.style.backgroundPosition = spritePos(ep.figure, 1, D.figures);
       a.addEventListener("click", () => zoom(a.style.backgroundImage, a.style.backgroundSize, a.style.backgroundPosition, w + " / " + h, "Score detail"));
       media.append(el("figure", {}, a, el("figcaption", {}, el("b", { text: "Score detail. " }),
         "Exposure of every food-contact sample in the finished load, per-dish exposure, and S after each move (a low-resolution re-score)")));
@@ -430,7 +455,24 @@ footer.wrap { padding-block: 10px 40px; color: var(--muted); font-size: 13px; }
     box.append(media);
   }
   render();
-  $("footer").textContent = "Generated " + D.generated_utc.replace("T", " ").slice(0, 16) + " UTC from the benchmark records " +
+  if (D.method) { $("methodImg").src = D.method; $("methodSection").hidden = false; }
+  const M = "media/benchmark/frigidaire_hotec/", R = "results/benchmark/frigidaire_hotec/";
+  for (const [what, path] of [
+    ["Isaac stills", M + "stills/<tier>/<instance>/{initial,goal,finished__<track>__<algorithm>}.png"],
+    ["Score-detail figures", M + "analysis/<tier>/<instance>__<track>__<algorithm>.png"],
+    ["Result tables", R + "compare/summary.{md,json}"],
+    ["Episode records", R + "episodes/{goal,open}/<tier>/<instance>__<algorithm>.json (+ .analysis.json)"],
+    ["Instances", R + "instances/<tier>/<instance>.json"],
+    ["MCTS method figure", M + "mcts_method.png"],
+    ["MCTS budget sweep", R + "mcts_budget_sweep/<instance>__<budget>s.json"],
+    ["Logs", "logs/benchmark_frigidaire_hotec/<unit>.log"]])
+    $("paths").append(el("li", {}, el("b", { text: what + ": " }), el("code", { text: path })));
+  const vids = [];
+  for (const inst of Object.values(D.instances))
+    for (const v of Object.values(inst.videos || {})) vids.push(M + "video/" + inst.tier + "/" + v.replace(/^video\//, ""));
+  if (vids.length)
+    $("paths").append(el("li", {}, el("b", { text: "Videos: " }), ...vids.flatMap((v, i) => [i ? el("br") : null, el("code", { text: v })])));
+  $("footer").textContent ="Generated " + D.generated_utc.replace("T", " ").slice(0, 16) + " UTC from the benchmark records " +
     "(results/benchmark/frigidaire_hotec on the lab workstation). Images: Isaac RTX renders; score detail: Kit-free Warp re-score.";
 })();
 </script>

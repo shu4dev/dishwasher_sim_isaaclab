@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from dishsim_frigidaire import exposure as E  # noqa: E402
 
-STATES = ROOT / "results/initial_states/frigidaire"
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "settled_states"
 
 
 @pytest.mark.parametrize("kind", ["bowl", "mug", "dinner_plate"])
@@ -67,7 +67,7 @@ def test_sanity_pair_orders_covered_below_alone():
 
 
 def test_load_state_reseats_racks_in():
-    path = STATES / "organized_20260911_seed20260911/states/random_06.json"
+    path = FIXTURES / "organized_random_06.json"
     if not path.exists():
         pytest.skip("settled Frigidaire states not present")
     import json
@@ -141,8 +141,8 @@ def test_pooling_is_a_draining_test():
 
 
 def test_feasibility_follows_mouth_up():
-    packing = STATES / "packing_20260911_seed20260911/states/random_06.json"
-    organized = STATES / "organized_20260911_seed20260911/states/random_06.json"
+    packing = FIXTURES / "packing_random_06.json"
+    organized = FIXTURES / "organized_random_06.json"
     if not (packing.exists() and organized.exists()):
         pytest.skip("settled Frigidaire states not present")
     a = E.score_state(packing, samples=50, directions=16)

@@ -7,10 +7,16 @@ rounds on 2026-09-23; the approved plan is `~/.claude/plans/i-am-creating-a-maje
 
 ## The problem
 
+> **Regenerated 2026-09-28/29 on the re-measured racks** (`upper_tines_4x13_v5`, `lower_tines_6x12_v4`,
+> `frigidaire/docs/geometry.md`): baseline snapshot, instances, plans, episodes and `compare/` under
+> `results/benchmark/frigidaire_hotec/` are new-rack artefacts (see "Results" below); the previous racks' artefacts
+> are in `pre_rebuild_20260928/`, the stopped 2026-09-28 medium/hard run in `stopped_20260928/`. Measured numbers
+> quoted inside the decision table are from the run that motivated each decision (old racks before 2026-09-28).
+
 ```
 tiers      easy   7 bowls                     counter allowance n + 3
-           medium 8 plates + 7 bowls          n + 1
-           hard   8 plates + 7 bowls + 8 cups n + 0        n = dishes on the counter at the start, uniform in [N/4, 3N/4]
+           medium 8 plates + 7 bowls          n + 2 (n + 1 until 2026-09-28)
+           hard   8 plates + 7 bowls + 8 cups n + 1 (n + 0 until 2026-09-28)   n = dishes on the counter at the start, uniform in [N/4, 3N/4]
            (7 bowls: the 8th did not fit physically beside plates, and without them only once in 300 packings)
 start      n dishes in messy STACKS on a 1.8 x 0.6 m counter slab (top 0.914 m); the rest dropped messily into the
            extended racks (plates lower rack, bowls and cups either rack); built in Isaac one dish at a time
@@ -24,10 +30,23 @@ goal       no hand-given goal: the highest-exposure complete load found by coord
 track A    reach the sampled goal: every dish within the at-goal tolerance (bowls/cups 15 mm lateral, 20 mm dz,
            15 deg tilt; plates 18 mm / 20 mm / 16 deg), then the end check. gap = moves - lower bound,
            lower bound = counter dishes + rack dishes the goal does not keep.
-track B    open: success = every dish racked and the end check passes; reported S (all dishes) vs S_ref.
-algorithms greedy_offline, rrt_connect (Bosch, live), exposure planner, first-fit baseline (Kit-free plans,
-           replayed). Track A: the planner and baseline are both the fixed-goal sequencer (one run, two rows);
-           track B: the Bosch pair's input is the sampled goal, so their track-A runs are scored again.
+track B    open: success = every dish racked, the end check passes AND no dish pools (the score's puddle rule,
+           2026-09-28); reported S_final (racked dishes, full resolution) vs S_ref.
+algorithms track A: greedy_offline, rrt_connect (Bosch, live) on the sampled goal. Track B: first-fit baseline
+           and move-level MCTS (since 2026-09-29; the coordinate-ascent "exposure planner" is retired, its rows
+           in history_planner_20260929/), each with its OWN load (Kit-free plan -> Isaac sequence build of that load
+           -> re-sequenced under the build's order -> replayed). No row is copied from the other track
+           (2026-09-28; before, the planner/baseline shared one goal-track run and the Bosch pair's goal-track
+           runs were re-scored as open rows).
+own loads  --plan-all per algorithm: plan attempt a<k> -> `frigidaire_bench_kit.py --sequence-plan` builds the
+           load one dish at a time in the instance's extended racks (landing = settle deviation <= 8 cm and
+           contact depth < 2 mm, no placed dish moved > 10 mm / 20 deg; the built poses become the targets)
+           -> `--resequence` re-sequences the moves under the build's order and writes <id>__<algo>.json
+           (certified); a failed build bans what it blamed (<plan>.bans.json, global like the gate's bans)
+           and re-plans, up to 6 attempts (a baseline re-plan is the deterministic first-fit under the bans,
+           falling back to a few seeded shuffles of the family order when that no longer packs); still failing =
+           the row's failure `load-not-buildable`, not a
+           blind replay. Planning time = the sum over attempts (the Isaac builds are not charged).
 moves      teleport only; FCL refusal (non-fatal, counted); Isaac settle 150 + 60 ticks at 120 Hz; another dish
            moved > 10 mm / 20 deg is FATAL (disturbed) if it was at its goal before the move or ends off the
            counter and out of the racks, otherwise a recorded non-fatal "nudge" (a messy start dish); lifting a
@@ -77,7 +96,7 @@ The orchestrator runs on the host (`python3`, it needs docker); every stage runs
 B="nice -n 10 python3 frigidaire/scripts/experiment/frigidaire_bench.py"
 $B --capacity                                   # gate G2 (Kit-free, in the container): 8 / 16 / 24 racked
 $B --generate --tiers easy medium hard --seeds 0 1 2 --kit-jobs 3 --py-jobs 2 --max-attempts 12
-$B --plan-all --tiers easy medium hard --seeds 0 1 2 --py-jobs 2      # open-track plans (Warp, 60 s each)
+$B --plan-all --tiers easy medium hard --seeds 0 1 2 --kit-jobs 3 --py-jobs 2   # own loads: plan (Warp, 60 s) -> Isaac build -> resequence
 $B --run-all  --tiers easy medium hard --seeds 0 1 2 --kit-jobs 3 --cameras   # 5 Isaac episodes + stills each
 $B --analyze-all --tiers easy medium hard --py-jobs 2                 # S_final, S per move, score-detail figure
 $B --videos --tiers easy medium hard --kit-jobs 3                     # first instance per tier, 5 videos each
@@ -99,6 +118,79 @@ Logs: `logs/benchmark_frigidaire_hotec/<unit>.log`, judged by the `[RESULT]` lin
 `media/benchmark/frigidaire_hotec/`: `stills/<tier>/<id>/` (initial, goal, finished per episode),
 `analysis/<tier>/`, `video/<tier>/`, `page/` (the published folder). Smoke runs of 2026-09-23 are kept under
 `*_smoke_20260923/` with one folder per failed design (see below).
+
+## Results (2026-09-29, re-measured racks)
+
+Run: host `python3 frigidaire/scripts/experiment/frigidaire_bench.py --full --tiers easy medium hard --seeds 0 1 2
+--max-attempts 8 --kit-jobs 3 --py-jobs 2`, `[RESULT] PASS full (9 instances)` at 05:46 local; pilot = the seed-0
+chains (published 03:45). Easy s3-s5 (generated and run 2026-09-28 on the same racks) are in the tables too. Tables:
+`results/benchmark/frigidaire_hotec/compare/summary.md` (`--collect` must run in the container: `compare/` is
+root-owned, the host collect at the end of `--full` fails quietly); page: `media/benchmark/frigidaire_hotec/page/`.
+
+| track | tier | algorithm | success | moves | S / S_ref | failures |
+|---|---|---|---|---|---|---|
+| A | easy (6) | greedy_offline | 6/6 | 7.8 | 1.002 | - |
+| A | easy (6) | rrt_connect | 6/6 | 8.3 | 1.002 | - |
+| A | medium (3) | greedy_offline | 1/3 | 20.0 | 1.003 | not_all_racked 2 (gave up at move 6 and 11) |
+| A | medium (3) | rrt_connect | 2/3 | 33.0 | 1.000 | disturbed 1 (move 37) |
+| A | hard (3) | greedy_offline | 3/3 | 28.3 | 1.006 | - |
+| A | hard (3) | rrt_connect | 2/3 | 52.5 | 1.006 | not_all_racked 1 (60 s budget spent, 10 004 nodes, 0 moves) |
+| B | easy (6) | baseline | 5/6 | 7.0 | 0.666 | pooling 1 |
+| B | medium (3) | baseline | 3/3 | 19.7 | 0.975 | - |
+| B | hard (3) | baseline | 2/3 | 28.5 | 0.964 | not_all_racked 1 (replay move 14 of 27 refused, bowl_05 blocked by the settled cup_02; the blind replay cannot adapt) |
+| B | easy (6) | mcts | 6/6 | 7.8 | 1.036 | - |
+| B | medium (3) | mcts | 3/3 | 21.0 | 1.019 | - |
+| B | hard (3) | mcts | 3/3 | 29.0 | 1.008 | - |
+
+- (Retired planner, 2026-09-29 morning run; rows in `history_planner_20260929/`: easy 6/6 at 0.929, medium 2/3 at
+  0.962, hard 3/3 at 0.971 S/S_ref.) Its certified load WAS first-fit's on medium s0, medium s2 and hard s0 (0 of
+  15/23 dishes differ): its 45 s ascent from the first-fit load found no improving move in full racks. Only hard s1 and s2 differ (by 8 and
+  6 dishes; settled S 0.170 vs 0.165 and 0.174 vs 0.172). On easy (7 bowls, free space) it gains 0.93 vs 0.67 of S_ref.
+- greedy_offline is not the certificate's sequencer (see the decision table): it gives up on certified medium goals.
+- Generation attrition, attempts -> accepted instances, by the first failing step (Kit-free classifier over
+  `instances/attempts/`; no attempt failed the sequencing certificate at n + 2 / n + 1):
+
+| tier | attempts | accepted | start never rests | joint gate: penetration | joint gate: settle | one-at-a-time build |
+|---|---|---|---|---|---|---|
+| easy (2026-09-28) | 12 | 6 | 2 | 1 | 1 | 2 |
+| medium | 15 | 3 | 5 | 5 | 1 | 1 |
+| hard | 9 | 3 | 1 | 2 | 0 | 3 |
+
+## Track B planner: move-level MCTS (2026-09-29)
+
+`frigidaire/src/dishsim_frigidaire/mcts.py`, called by `plan_open(..., "mcts")` inside the same 60 s budget; the
+certification (joint gate, one-at-a-time build, bans, 6 attempts, no repeated load) is first-fit's. Replaced the
+coordinate-ascent planner, which ended on first-fit's load on 3 of 5 medium/hard instances (45 s covered part of
+one pass) and had no sequential decision in it.
+
+```
+state     every dish's current pose on the FCL mirror (counter pile, messy rack drops) + the dishes COMMITTED
+          to their final pose
+action    place(d, pose): one of d's 6 candidate poses = its 3 best stand-alone-exposure catalogue poses that fit,
+          then poses from a pool of complete packings; keep(d): a rack dish stays; buffer(d): park on the counter
+          (below the cap). Legal = FCL on the mirror (move_collides) + the load rules (one per slot, no nesting,
+          >= 3 mm, bans), cached pairwise (Conflicts)
+pool      first-fit + up to 12 seeded packs (plates in first-fit order; bowls/cups shuffle the first 200 poses of
+          the first-fit order or the first 50 of the exposure ranking), <= 15 s; the root starts from the best one
+rollout   LOCAL repair of the parent's complete load: the moved dish takes its pose, clashing uncommitted dishes are
+          re-placed (the vacated pose first, then first-fit, squeaky-wheel restarts); a pose that cannot be
+          repaired is dropped for the rest of the search. Value = low-res S (120 x 32), 0 if it pools
+tree      UCT (c = 1/sqrt 2 on min-max normalised values), progressive widening 2 N^0.5, lazy children
+          (placements round-robin over dishes, parks last), dead ends not expanded
+answer    the best complete load found (ties: fewer moves) = the tree's move prefix + planner.sequence completion;
+          --resequence replays that order re-targeted to the built poses when it is legal under the build's
+          goal order (`order_source` "mcts"), else resequences ("resequenced")
+```
+
+| Design step | Why (measured, Kit-free, medium_s2 / hard_s2, 60 s) |
+|---|---|
+| Pairwise conflict cache + AABB-gated FCL managers (`DishSet._bounds`, `_MANAGER_CACHE`) | one first-fit completion took 24 s (nests() re-posing 1814 bowl point clouds, FCL managers rebuilt per test); now 0.1-0.6 s |
+| Placements before parks | parks change no final pose: 5 of the first 10 root children were parks with the parent's value |
+| Squeaky-wheel repair, then LOCAL repair from the parent's load | completing from scratch failed 11/12 (plain first-fit) and 37/39 (repair) medium rollouts once a bowl sat on a high-exposure pose |
+| Pool of complete packings; root = the best | shuffled whole packs completed 0/6 on medium; head-shuffled (first 200) 6/6; the root at the best pool load lifted planned S 0.173 -> 0.182 (medium_s2), 0.169 -> 0.183 (hard_s2) |
+| Result (12 instances, Isaac) | every load certified (attempts used: medium 4/5/3, hard 2/1/1, easy 1-2); settled S / S_ref 1.036 easy, 1.019 medium, 1.008 hard vs first-fit 0.666 / 0.975 / 0.964, all solved; replay order: MCTS's own on 2 of 12 (easy s4, s5), resequenced on 10 (the build's lean-on order is learned after planning); planning wall summed over attempts (medium 222 s = up to 5 x 60 s); failed attempts = joint-gate transients 2.1-4.3 mm vs 2 mm (limit kept) and not-sequenceable builds |
+| Where the gain comes from | the pooled root does most of it; the tree adds 0.7-3.6 % (easy), 1.9 % (medium s0), ~0 (hard) of low-res S within 60 s (`media/.../mcts_method.png`) |
+| Budget sweep (Kit-free, planned S / first-fit's, a0 seed) | 60 / 180 / 600 s: medium 1.043-1.066 / 1.043-1.081 / 1.043-1.081, hard 1.071-1.094 / 1.078-1.120 / 1.090-1.120; ~120-170 / 600-1100 / 2300-3800 simulations (`mcts_budget_sweep/`) |
 
 ## Decisions after approval (2026-09-23)
 
@@ -123,6 +215,22 @@ Logs: `logs/benchmark_frigidaire_hotec/<unit>.log`, judged by the `[RESULT]` lin
 | Unstack rehearsal in acceptance | a propped bowl fell 45 mm when the bowl above was lifted: every algorithm aborted on move 1 |
 | Messy stacks instead of a random heap | random heaps of thin HOTEC shells: 0 of 6 clearable at coverage 0.5-1.0, some never rest, one plate thrown 1.2 m |
 | Build one dish at a time; gate the resting state | joint drops of a stacked heap failed the 2 mm gate in 3 of 4 (2.1-3.6 mm dish-on-dish transients) |
+| **2026-09-28 (evaluation-setting fixes after the seed-0 pilot review)** | |
+| Own loads are sequence-gated like the goal (`--sequence-plan`, `--resequence`, bans + re-plans) | every medium/hard open-track row failed `disturbed`: the planner's load was scored on paper and replayed blind, and a plate leaning 24 deg was pulled through a placed neighbour |
+| The goal-pair FCL exemption applies only to certified (Isaac-built) goals (`mark_goals(certified=)`) | open-track "goals" were the plan's unsettled poses, up to 4 cm off; a command to one skipped the pair check against a neighbour that was not there |
+| Track-B success needs a pooling-free final load (`failure_of`: `pooling`) | the pilot's only open-track "success" (easy planner) left two bowls holding water (W 0.0002) |
+| No copied rows: track A = greedy_offline, rrt_connect; track B = baseline, planner | half of each table was the other table; the failure column also named the abort (`give-up`) instead of the end-check outcome |
+| rrt_connect: nearest neighbour as an int code matrix; the goal tree's edges are checked on the REPLAYED move | hard_s0 rrt gave up at 57 s with 0 moves: O(nodes x items) Python NN, and the goal tree could exceed the counter cap and command a goal before the dishes it leans on (forward check on backward edges) |
+| Unstack rehearsal uses the episode's displacement rule (fatal only off the counter/racks) | generation re-rolled starts the episode would accept (any displaced dish failed it) |
+| **2026-09-28 (full experiments on the re-measured racks)** | |
+| Baseline re-plans: deterministic first-fit under the accumulated bans, then up to 5 seeded shuffles as a fallback; `PLAN_ATTEMPTS` 3 -> 6 | every medium/hard own load ended `load-not-buildable` with 3 deterministic attempts; shuffling FIRST (the first version, live 2 h) returned "no load" on every medium attempt (scattered plates take the bowls' space, 20 failed packs = 280 s per attempt) |
+| A baseline re-plan must differ from every earlier attempt's load (`load_key`, `previous`); a repeat falls to the shuffle fallback, and if no new pack exists the attempt has no load (no Isaac) | live run 14:20: a certified first-fit load that is "not sequenceable under its build order on the counter cap" bans nothing, so attempts 1-5 rebuilt the identical load in Isaac (digest 0d4c0196 on medium s2 AND s3: first-fit ignores the start, so every medium instance gets the same load) |
+| Instances are gated on the sequencing certificate (`stage_finalize` re-rolls an unsequenceable goal) | medium s1-s3 of the 2026-09-28 run were accepted with `sequenceable False`; greedy_offline gave up at move 2-6 and every own load was "not sequenceable". The certificate is `planner.sequence` (order- and support-aware greedy with buffering), NOT greedy_offline (`rearrange.Greedy`, one buffer trip per blocker): on 2026-09-29 greedy_offline still gave up on the certified medium s1 and s2 goals (6 and 11 moves) that RRT solved |
+| Counter allowance medium n + 1 -> n + 2, hard n + 0 -> n + 1 | Kit-free replay (`build/frigidaire_diagnostics/scratch/seq_diag.py`): the greedy parks until the counter is full; cap + 2 sequences medium s1/s2, cap + 4 s3; RRT solved s1 in 47 moves, so the goals were reachable, the sequencer is incomplete |
+| ~~Plate goals only in every second gap of a bank~~ REVERTED 2026-09-29, every gap stays | the rule was meant to cut plate-bank chains, but `--capacity` failed medium/hard at bowl_07: 8 plates in 5 front + 3 rear even gaps close the rear bowl zone; chains are left to the n + 2 / n + 1 allowances and the certificate gate |
+| Lossless resume (2026-09-29): `generate_unit` skips steps whose output exists (`done_step`), `gate_unit` reuses an existing gate result, the own-load build and ban steps skip existing records, and `full_unit` reruns `--run` until all 4 episodes exist | every stage refuses to overwrite its output, so each restart abandoned the attempt in flight (3 attempts lost in one restart) |
+| `--kit-cores` / `--py-cores` on `frigidaire_bench.py` (and the top-5 script) | two schedulers can share the container on disjoint cores with at most 3 Kit jobs in total on GPU 1 |
+| `--full`: one scheduler chains generate -> plan -> run -> analyze per instance (videos per tier after its first instance) | stage-by-stage runs idle the 3 Kit slots at every stage boundary and never overlap Kit-free planning with Kit; the user asked for the parallelisable steps |
 
 ## Landmines
 

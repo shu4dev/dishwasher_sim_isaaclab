@@ -84,8 +84,13 @@ placement mode was removed from the code with RACK_GEN v4 adoption.
 
 With the v4 slots in the lower rack's front band, the *extended* upper rack shadows all of
 them: every class measures 0 placeable slots in `placement_open` (both racks out). The state
-is kept as a bake-able reference and as the only real case exercising the rack-state
-tie-break in `config.resolve_rack_state`; no v4 flow places in it.
+is kept as a bake-able reference: it lives in `config.INTERNAL_STATES` of the ArtVIP baseline
+machine only (the Bosch 800 tables define `placement`, `third_out` and `middle_out`) and is
+selected by name with `config.apply_scenario`. It is also the one state whose rack targets
+equal another's: `both_out` and `placement_open` (both racks at -0.20 m) share a
+`config_hash`, and only the state name, which keys the collision-cache directory, separates
+them (measured 2026-09-29). The `config.resolve_rack_state` helper that once arbitrated that
+tie was removed on 2026-08-30 (git history); no v4 flow places in it.
 
 ## Capacity-fill realism edges
 

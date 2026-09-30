@@ -119,11 +119,8 @@ def derive_slots_from_rack(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]
     bottom = verts[verts[:, 2] < mn[2] + 0.015]
     floor_top_z = float(np.percentile(bottom[:, 2], 95))
 
-    # standing footprint = the two axis-perpendicular half extents (Y-up mug: x/z; Z-up: x/y)
-    if tuple(config.OBJECT_AXIS_OBJ) == (0.0, 1.0, 0.0):
-        footprint = 2.0 * max(config.OBJECT_BBOX_HALF[0], config.OBJECT_BBOX_HALF[2])
-    else:
-        footprint = 2.0 * max(config.OBJECT_BBOX_HALF[0], config.OBJECT_BBOX_HALF[1])
+    # standing footprint = the two axis-perpendicular half extents (x/y for a Z-up object)
+    footprint = 2.0 * max(config.OBJECT_BBOX_HALF[0], config.OBJECT_BBOX_HALF[1])
     pitch = config.SLOT_GRID_PITCH_M
     lo = mn[:2] + config.SLOT_RIM_INSET_M
     hi = mx[:2] - config.SLOT_RIM_INSET_M
@@ -308,11 +305,7 @@ def derive_flat_lay_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
 
 def _spec_R_stand() -> np.ndarray:
     """Rotation standing the ACTIVE object's axis up (design/base z)."""
-    from scipy.spatial.transform import Rotation  # noqa: PLC0415
-
     axis = tuple(config.OBJECT_AXIS_OBJ)
-    if axis == (0.0, 1.0, 0.0):
-        return Rotation.from_euler("x", np.pi / 2).as_matrix()  # the mug convention
     if axis == (0.0, 0.0, 1.0):
         return np.eye(3)
     raise ValueError(f"floor_stand unsupported for axis {axis}")
@@ -334,10 +327,8 @@ def object_pose_for_mode(slot: SlotFrame, spin: float, lateral: np.ndarray, tilt
     from scipy.spatial.transform import Rotation  # noqa: PLC0415
 
     if slot.mode == "floor_stand":
-        # standing pose: axis up (+tilt), bottom ``hover`` above the wire floor. Object frame ->
-        # "standing" frame (axis-aware): the Y-up mug stands via Rx(+90) — the -90 variant
-        # stands it on its head 8 cm underground (cost one full debugging cycle); Z-up objects
-        # stand as authored. Then spin about z.
+        # standing pose: axis up (+tilt), bottom ``hover`` above the wire floor. Objects are
+        # authored Z-up, so they stand as authored (_spec_R_stand); then spin about z.
         R = (
             Rotation.from_euler("xy", tilt).as_matrix()
             @ Rotation.from_euler("z", spin).as_matrix()
@@ -345,10 +336,7 @@ def object_pose_for_mode(slot: SlotFrame, spin: float, lateral: np.ndarray, tilt
         )
         # axis point at the object BOTTOM (obj frame), per the axis convention
         axis_uv = config.OBJECT_BODY_CENTER_XZ
-        if tuple(config.OBJECT_AXIS_OBJ) == (0.0, 1.0, 0.0):
-            p_bottom_obj = np.array([axis_uv[0], -config.OBJECT_BBOX_HALF[1], axis_uv[1]])
-        else:
-            p_bottom_obj = np.array([axis_uv[0], axis_uv[1], -config.OBJECT_BBOX_HALF[2]])
+        p_bottom_obj = np.array([axis_uv[0], axis_uv[1], -config.OBJECT_BBOX_HALF[2]])
         T = np.eye(4)
         T[:3, :3] = R
         # place the (rotated) bottom axis point at slot center + lateral, hover above the floor
@@ -419,12 +407,8 @@ def evaluate_placement(slot: SlotFrame, T_base_obj: np.ndarray) -> dict:
 
     if slot.mode == "floor_stand":
         # v0 criteria: bottom axis point near the slot center, axis near slot z
-        if tuple(spec.axis_obj) == (0.0, 1.0, 0.0):
-            u, v = config.OBJECT_BODY_CENTER_XZ
-            p_bottom_obj = np.array([u, -spec.bbox_half[1], v])
-        else:
-            u, v = config.OBJECT_BODY_CENTER_XZ
-            p_bottom_obj = np.array([u, v, -spec.bbox_half[2]])
+        u, v = config.OBJECT_BODY_CENTER_XZ
+        p_bottom_obj = np.array([u, v, -spec.bbox_half[2]])
         p_bottom = (T_base_obj @ np.append(p_bottom_obj, 1.0))[:3]
         d = R_slot.T @ (p_bottom - p_slot)
         lateral = float(np.hypot(d[0], d[1]))

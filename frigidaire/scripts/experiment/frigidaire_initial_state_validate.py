@@ -20,6 +20,9 @@ def main():
     parser.add_argument('--out-dir', type=Path, required=True)
     parser.add_argument('--max-wall-seconds', type=float, default=240)
     parser.add_argument('--order', choices=['upper_first', 'lower_first'], default='upper_first')
+    parser.add_argument('--peak-penetration-m', type=float, default=None,
+                        help='override the peak penetration limit (settle and retraction) for this run only; '
+                             'the median limit and the 1 mm preflight stay (default: random_poses.LIMITS)')
     from isaaclab.app import AppLauncher
     AppLauncher.add_app_launcher_args(parser)
     parser.set_defaults(device='cpu', headless=True)
@@ -35,7 +38,11 @@ def main():
         app = AppLauncher(args).app
         sys.path[:0] = [str(ROOT/'src'), str(ROOT/'frigidaire/src')]
         from dishsim_frigidaire.initial_state_runtime import IsaacInitialStateBackend
-        from dishsim_frigidaire.random_poses import source_geometry_domains
+        from dishsim_frigidaire.random_poses import LIMITS, source_geometry_domains
+        if args.peak_penetration_m is not None:           # the runtime reads this same dict at call time
+            LIMITS['peak_penetration_m'] = float(args.peak_penetration_m)
+        result['limits'] = {'peak_penetration_m': LIMITS['peak_penetration_m'],
+                            'median_max_penetration_m': LIMITS['median_max_penetration_m']}
         manifest = json.loads(args.manifest.read_text()) if args.manifest else {'objects': []}
         candidates = manifest['objects']
         backend = IsaacInitialStateBackend(args.usd, args.out_dir, device=args.device,

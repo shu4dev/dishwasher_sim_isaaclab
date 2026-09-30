@@ -24,8 +24,10 @@ asset archive and runs the Kit smoke test. Pass = `[OK] ... @ side_winner` per c
 
 An algorithm moves one kitchen object at a time by teleport inside a dishwasher digital twin,
 and physics judges every move. A placement counts only if it is collision-free (Kit-free FCL
-check in milliseconds) and physically stable (Isaac settles it). No robot arm, no motion
-planning. Ground truth: `dishsim/compat.py` computes the provably minimum move count, so
+check in milliseconds) and physically stable (Isaac settles it). The Bosch benchmark has no
+robot arm and no arm motion planning; a UR5e + Robotiq arm is being brought up separately in
+the Frigidaire twin ([frigidaire/docs/robot.md](frigidaire/docs/robot.md), in progress
+2026-09-29). Ground truth: `dishsim/compat.py` computes the provably minimum move count, so
 results are optimality gaps, not rankings.
 
 <table align="center"><tr><td align="center">
@@ -41,12 +43,12 @@ Every Kit command goes through `scripts/run_kit.sh`, every Kit-free one through
 
 1. Pick a GPU (shared machine): `nvidia-smi`, then `DISHSIM_GPU=<n> docker compose -f docker/compose.yaml up -d`.
 2. Bring-up: `scripts/tools/bootstrap.sh` (5 min).
-3. Once per restored box, re-decompose the two shipped pieces that predate a parameter change (seconds each):
+3. Only after restoring an archive tag dated before 2026-09-10 (later tags already carry the exact `E_door_4` pieces, see [docs/known_limitations.md](docs/known_limitations.md)): re-decompose the two shipped pieces that predate a parameter change (seconds each):
    ```bash
    scripts/run_py.sh scripts/setup/decompose_meshes.py --machine bosch800 --placement side_winner --scenario placement --object plate
    scripts/run_py.sh scripts/setup/decompose_meshes.py --machine bosch800 --placement side_winner --scenario placement --object bowl
    ```
-4. Gates: `scripts/run_py.sh -m pytest tests/` (11 pass, 3 s) and the capacity check in [docs/overview.md](docs/overview.md#3-quickstart--reproduce-the-results) (prints `total 39`).
+4. Gates: `scripts/run_py.sh -m pytest tests/` (65 pass, about 70 s) and the capacity check in [docs/overview.md](docs/overview.md#3-quickstart--reproduce-the-results) (prints `total 39`).
 5. Generate, picture, solve (Kit, a few minutes each):
    ```bash
    scripts/run_kit.sh scripts/setup/gen_instances.py --headless --mode perturbed --state placement --n 3 --seed 0
@@ -70,20 +72,11 @@ The greedy baseline is one-blocker lookahead; swap cycles defeat it.
 
 | Claim | Evidence |
 |---|---|
-| Benchmark runs closed-loop on 15 items: greedy 3/3 solved, 9 moves of 45, optima 9/8/8 (2026-08-30) | `results/rearrange/bosch800/placement/`, episode MP4s under `media/rearrange/` |
+| Benchmark runs closed-loop: the 2026-09-04 tier benchmark of record (greedy_offline and rrt_connect on easy / medium / hard = 5 / 10 / 15 items, 10 instances each, no move budget, 60 s planning budget) solved 39 of 60: easy 10/10 for both, medium 8/10 for both, hard 1/10 (greedy_offline) and 2/10 (rrt_connect). Provable optima on the three pinned perturbed instances are 9/9/9 (`tests/test_compat.py`; the 2026-08-30 "3/3 in 9 moves" greedy run left no records) | `results/rearrange/bosch800/placement/`, `results/compare/summary.md`, episode MP4s under `media/rearrange/` |
 | A planned Bosch 800 full load settles with 1.1 mm max drift | `docs/figures/bosch800_loaded_reveal.png` |
 | Settle-reliability gates: bowls 59/60 upright; scaled cups 49/82 and tumblers 64/88 wedge in the wire lattice, so drinkware sits out of the certified count | [docs/known_limitations.md](docs/known_limitations.md) |
 
-Frigidaire FDPC4221AS, independently authored twin under `frigidaire/` ([source README](frigidaire/README.md)):
-
-| Claim | Evidence |
-|---|---|
-| Single-dish random drops: 600 proposals, 176 accepted (29.3%), 168 with zero-tolerance containment | [report](results/random_poses/frigidaire/complete_20260910_seed0/experiment_report.md), [pose explorer](outputs/random_pose_viewer/index.html), [sampling report](outputs/sampling_technical_report/index.html), [protocol](frigidaire/docs/random_pose_experiment.md) |
-| Multi-dish randomized states: 10 validated (3 × 9, 4 × 18, 3 × 27 dishes); highest load 35 dishes, both racks retract | [report](results/initial_states/frigidaire/packing_20260911_seed20260911/index.html), [PDF](results/initial_states/frigidaire/packing_20260911_seed20260911/technical_report.pdf), [protocol](frigidaire/docs/initial_state_experiment.md) |
-| Organized counterparts: 7 of 11 inventories passed (all 9- and 18-dish), each with rack retraction, door cycle and independent replay; 35- and 27-dish inventories unresolved | [viewer](results/initial_states/frigidaire/organized_20260911_seed20260911/index.html), [PDF](results/initial_states/frigidaire/organized_20260911_seed20260911/technical_report.pdf), [protocol](frigidaire/docs/organized_counterparts.md) |
-| Exposure scorer (revision 5, arm discs only, plates and cutlery scored): organized beats random packing in 7 of 7 same-object pairs at every ceiling weight up to 0.5; search found and settled an arrangement scoring 0.274 vs 0.242 | [quickstart](frigidaire/docs/exposure_quickstart.md), `results/exposure/frigidaire/` |
-
-These are finite-catalog results, not global capacity claims.
+The Frigidaire FDPC4221AS, an independently authored twin under `frigidaire/` ([source README](frigidaire/README.md)), no longer has rows in this table. Its v3-era experiments (single-dish random drops, multi-dish randomized states, organized counterparts, the first exposure and planner runs) ran on the 52/72-tine photo-fitted racks, before the 2026-09-22 and 2026-09-28 rebuilds, and were retired on 2026-09-29: the code is in git history (last commit before the retirement: `4455813`) and the result folders are held on the 2 TB drive under `dishsim/_trash_20260929/` until 2026-10-29. Current documents: [geometry](frigidaire/docs/geometry.md) (racks re-measured 2026-09-28), the [HOTEC rearrangement benchmark](frigidaire/docs/hotec_bench.md) on that twin, the [exposure scorer](frigidaire/docs/exposure.md) and the [arm bring-up](frigidaire/docs/robot.md) (in progress).
 
 ## Where things live
 
@@ -91,8 +84,8 @@ These are finite-catalog results, not global capacity claims.
 |---|---|
 | `src/dishsim/` | benchmark package (`rearrange.py` core, `compat.py` optima, `collision_world.py` FCL, `config.py`) |
 | `scripts/{setup,evaluation,experiment,tools}/` | the pipeline stages, in order |
-| `frigidaire/` | the Frigidaire twin: generator, loaders, experiments, `docs/`, tests (gitignored on this box) |
-| `assets/ media/ results/ logs/ outputs/` | gitignored symlinks to the 2 TB drive; root disk gains nothing |
+| `frigidaire/` | the Frigidaire twin: generator, loaders, experiments, `docs/`, tests (tracked in git) |
+| `assets/ build/ media/ results/ logs/ outputs/` | gitignored symlinks to the 2 TB drive; root disk gains nothing (`build/` holds the only copy of the current Frigidaire twin build) |
 | `docs/figures/` | the only tracked media, with provenance in its README |
 | `experiments/` | symlink index of every experiment: machine → experiment → trial, one README per entry; nothing lives there |
 
@@ -100,7 +93,7 @@ These are finite-catalog results, not global capacity claims.
 
 1. Never change the Isaac Sim 4.5.0 / Isaac Lab 2.1.1 pins; the host driver caps Isaac at 4.5.0.
 2. Never edit the frozen cache anchors in `config.py`; they key every shipped cache. Hashed knobs mean a Kit rebake ([docs/overview.md §4](docs/overview.md#4-notes-for-running-and-extending)).
-3. `config_hash` is not the only cache key: after a restore, run step 3 above once.
+3. `config_hash` is not the only cache key: a static-CoACD edit is invisible to the staleness check, and a box restored from an archive tag older than 2026-09-10 needs step 3 above once.
 4. Every Kit script calls `dishsim.media.release_sim_for_close()` before closing, or shutdown spins forever and the `[RESULT]` line is lost.
 5. Files the container writes are root-owned: delete with `docker exec dishsim-isaac rm`, never host sudo.
 
@@ -114,10 +107,14 @@ These are finite-catalog results, not global capacity claims.
 | [docs/success_criteria.md](docs/success_criteria.md) | Slot model per placement mode, settle tolerances, capacity |
 | [docs/known_limitations.md](docs/known_limitations.md) | Negative results and open items, with measurements |
 | [docs/extending.md](docs/extending.md) | Add an object class, placement mode or machine state |
-| [docs/bosch800_source_data.md](docs/bosch800_source_data.md), [docs/joint_report.md](docs/joint_report.md) | Every Bosch 800 number with provenance |
+| [docs/bosch800_source_data.md](docs/bosch800_source_data.md) | Every Bosch 800 number with provenance |
+| [docs/joint_report.md](docs/joint_report.md) | Measured joint and articulation numbers of the ArtVIP baseline dishwasher (`dishwasher_2`), from the retired `inspect_scene.py` |
 | [docs/bosch800_asset.md](docs/bosch800_asset.md) | The standalone Bosch 800 USD asset |
 | [docs/hotec_wheatstraw_asset.md](docs/hotec_wheatstraw_asset.md) | The HOTEC wheat-straw plate/bowl/cup USD assets: parameters, capacities, Frigidaire load render |
-| [frigidaire/docs/exposure.md](frigidaire/docs/exposure.md) | Exposure scorer reference for agents |
+| [frigidaire/docs/geometry.md](frigidaire/docs/geometry.md) | Current Frigidaire FDPC4221AS rack, basket and appliance geometry (tape re-measured 2026-09-28) |
+| [frigidaire/docs/hotec_bench.md](frigidaire/docs/hotec_bench.md) | HOTEC rearrangement benchmark in the Frigidaire twin: tiers, tracks, decisions, landmines |
+| [frigidaire/docs/robot.md](frigidaire/docs/robot.md) | UR5e + Robotiq 2F-85 arm bring-up in the Frigidaire twin (work in progress, 2026-09-29) |
+| [frigidaire/docs/exposure.md](frigidaire/docs/exposure.md) | Exposure scorer reference for agents ([quickstart](frigidaire/docs/exposure_quickstart.md) for humans) |
 
 ## Assets and licenses
 

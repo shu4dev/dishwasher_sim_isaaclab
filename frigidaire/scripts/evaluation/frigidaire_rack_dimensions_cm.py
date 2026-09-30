@@ -118,7 +118,7 @@ def table(ax, rows, title):
 
 def legend(fig, y):
     for i, (label, c) in enumerate((("teal = your tape measurement", TAPE),
-                                    ("orange = derived from your tape values (your figure in brackets)", DERIVED),
+                                    ("orange = leftover of the rim after your tape values (your figure in brackets)", DERIVED),
                                     ("grey = estimate from the photo fit", EST))):
         fig.text(.04 + (0, .22, .6)[i], y, "■ " + label, color=c, fontsize=10.5,
                  fontweight="bold" if c == TAPE else "normal")
@@ -134,7 +134,7 @@ def upper(out):
     ts = tines(rack, "BowlComb")
     xs, ys = (np.asarray(v) * CM for v in G.upper_tine_positions())
     mask = G.upper_tine_mask()                     # [position, column]
-    pitch, cpitch = p["tine_spacing"] * CM, p["tine_column_pitch"] * CM
+    pitch, cgaps = p["tine_spacing"] * CM, [g * CM for g in p["tine_column_gaps"]]
     side, front, rear = (p[k] * CM for k in ("tine_side_margin", "tine_front_margin", "tine_rear_margin"))
     tape = {k: v * CM for k, v in p["tine_margins_tape_m"].items()}
     rim_z = p["rim_height"] * CM
@@ -188,15 +188,15 @@ def upper(out):
     dim(ax, (lo[0] - 6, lo[1]), (lo[0] - 6, hi[1]), f"{f(D)} outer rim depth", rot=90)
     # column pitch
     for j in range(3):
-        dim(ax, (xs[j], hi[1] + 1.2), (xs[j + 1], hi[1] + 1.2), f"{f(cpitch)}", fs=9)
+        dim(ax, (xs[j], hi[1] + 1.2), (xs[j + 1], hi[1] + 1.2), f"{f(cgaps[j])}", fs=9)
     # side margins (tine base centre to outer rim)
     yl = (ys[1] + ys[2]) / 2
     dim(ax, (lo[0], yl), (xs[0], yl), f"side {f(side)}\n(tape {f(tape['side'])})", DERIVED, off=(0, 1.5), fs=9)
     dim(ax, (xs[-1], yl), (hi[0], yl), f"side {f(side)}\n(tape {f(tape['side'])})", DERIVED, off=(0, 1.5), fs=9)
     # front and rear margins beside column C2, text in the free strip between C2 and C3
     xm = xs[1] + 1.2
-    dim(ax, (xm, lo[1]), (xm, ys[0]), "", DERIVED)
-    note(ax, xm + .6, (lo[1] + ys[0]) / 2, f"front {f(front)} (tape {f(tape['front'])})", DERIVED, fs=9, va="center")
+    dim(ax, (xm, lo[1]), (xm, ys[0]), "", TAPE)
+    note(ax, xm + .6, (lo[1] + ys[0]) / 2, f"front {f(front)}", TAPE, fs=9, va="center", fontweight="bold")
     dim(ax, (xm, ys[-1]), (xm, hi[1]), "", DERIVED)
     note(ax, xm + .6, (ys[-1] + hi[1]) / 2 + .2, f"rear {f(rear)} (tape {f(tape['rear'])})", DERIVED, fs=9, va="center")
     # tine pitch
@@ -223,7 +223,7 @@ def upper(out):
     b0 = [b for _, b, _ in ts if np.isclose(b[0], xs[0])][0]
     dim(ax, (xs[0] - 1.4, b0[2]), (xs[0] - 1.4, b0[2] + rise), f"tine {f(rise)}", EST, rot=90, off=(-.9, 0), fs=9)
     for j in range(3):
-        dim(ax, (xs[j], rim_z + 2), (xs[j + 1], rim_z + 2), f"{f(cpitch)}", fs=9)
+        dim(ax, (xs[j], rim_z + 2), (xs[j + 1], rim_z + 2), f"{f(cgaps[j])}", fs=9)
     note(ax, lo[0] + .8, .5, "z = 0 (rack datum)", fs=8.5)
     # channel profile (photo-fit estimates), right half, as generated
     hxc = hi[0] - p["rim_diameter"] / 2 * CM
@@ -261,7 +261,7 @@ def upper(out):
     ax.set_ylim(-8.5, rim_z + 5)
 
     ax = fig.add_subplot(gs[2, :])
-    over_x = 2 * tape["side"] + (len(xs) - 1) * cpitch - W
+    over_x = 2 * tape["side"] + sum(cgaps) - W
     over_y = tape["front"] + tape["rear"] + (len(ys) - 1) * pitch - D
     table(ax, [
         ("outer rim width", "48", f(W), "tape"),
@@ -269,14 +269,15 @@ def upper(out):
         ("height, outside", "12.5", f"{f(z_top - z_lo)} from the lowest floor wire to the rim top", "tape"),
         ("rim wire height", "-", f"{f(rim_z)} rim wire centre above the rack datum z = 0 (set so the outside is {f(z_top - z_lo)}; "
          f"the floor dips {f(-valley[1])} below z = 0)", "derived"),
-        ("tine columns", "4, 9 apart", f"4, symmetric about the centre: x = {', '.join(f(x) for x in xs)}", "tape"),
+        ("tine columns", "4, at 9.2 / 8.6 / 9.2", f"4, symmetric about the centre: x = {', '.join(f(x) for x in xs)}", "tape"),
         ("tines per column", "13 / 11 / 11 / 13", f"{' / '.join(map(str, counts))} = {sum(counts)}", "tape"),
         ("missing tines", "2 at the centre", f"positions {absent[0]} and {absent[-1]} of {len(ys)} (from the front) in C2 and C3", "tape"),
-        ("tine pitch front-back", "3.7", f"{f(pitch)}", "tape"),
-        ("side margin", "12", f"{f(side)} (3 x {f(cpitch)} = {f(3 * cpitch)} leaves {f(W - 3 * cpitch)} of the {f(W)}; "
-         f"your margins exceed the rim by {f(over_x)})", "derived"),
-        ("front / rear margin", "8 / 5.5", f"{f(front)} / {f(rear)} ({len(ys) - 1} x {f(pitch)} = {f(ys[-1] - ys[0])} leaves "
-         f"{f(D - (len(ys) - 1) * pitch)} of the {f(D)}, split 8:5.5; your margins exceed it by {f(over_y)})", "derived"),
+        ("tine pitch front-back", "3.3", f"{f(pitch)}", "tape"),
+        ("side margin", "11.6", f"{f(side)} (the columns are symmetric: {' + '.join(f(g) for g in cgaps)} = {f(sum(cgaps))} leaves "
+         f"{f(W - sum(cgaps))} of the {f(W)}, half per side; your margins exceed the rim by {f(over_x)})", "derived"),
+        ("front margin", "8.2", f"{f(front)}", "tape"),
+        ("rear margin", "4.4", f"{f(rear)} ({f(front)} + {len(ys) - 1} x {f(pitch)} = {f(front + ys[-1] - ys[0])} leaves it of the {f(D)}; "
+         f"your margins exceed the rim by {f(over_y)})", "derived"),
         ("tine", "-", f"{f(rise)} vertical rise, {f(lean)} rearward lean, Ø{f(dia)}", "estimate"),
         ("floor profile", "-", f"generated wire: centre -1, mug valley {f(valley[1])}, low ridge +{f(crest[1])}, glass trough "
          f"{f(trough[1])} (nominal corners {f(p['lowest_floor_center_z'] * CM)} / +{f(prof['ridge_z'])} before the bends)", "estimate"),
@@ -296,7 +297,7 @@ def lower(out):
     xs, ys = (np.asarray(v) * CM for v in G.lower_tine_positions())
     mask = G.lower_tine_mask()                     # [row, column]
     heights = G.lower_tine_heights() * CM
-    px, py = p["tine_pitch"]["x"] * CM, p["tine_pitch"]["y"] * CM
+    px, pys = p["tine_pitch"]["x"] * CM, [g * CM for g in p["tine_pitch"]["y"]]
     m = {k: v * CM for k, v in p["tine_margins"].items()}
     tape = {k: v * CM for k, v in p["tine_margins_tape_m"].items()}
     rim_z, lean, dia = p["rim_height"] * CM, p["tine_tip_offset_x"] * CM, p["tine_diameter"] * CM
@@ -353,13 +354,14 @@ def lower(out):
     dim(ax, (xs[4], hi[1] + 2.5), (xs[5], hi[1] + 2.5), f"{f(px)}", off=(0, 1.1), fs=9)
     ext(ax, [lo[0] - 14.5, lo[0]], [lo[1], lo[1]]); ext(ax, [lo[0] - 14.5, lo[0]], [hi[1], hi[1]])
     dim(ax, (lo[0] - 13.5, lo[1]), (lo[0] - 13.5, hi[1]), f"{f(D)} outer rim depth", rot=90)
-    dim(ax, (xs[1] + 1.6, ys[0]), (xs[1] + 1.6, ys[1]), f"{f(py)}", off=(1.3, 0), fs=9.5)
+    for r in range(len(ys) - 1):
+        dim(ax, (xs[1] + 1.6, ys[r]), (xs[1] + 1.6, ys[r + 1]), f"{f(pys[r])}", off=(1.3, 0), fs=9.5)
     # margins
     yl = lo[1] + 1.5
-    dim(ax, (lo[0], yl), (xs[0], yl), f"left {f(m['left'])}\n(tape {f(tape['left'])})", DERIVED, off=(1.4, 2.2), fs=9)
+    dim(ax, (lo[0], yl), (xs[0], yl), f"left {f(m['left'])}", TAPE, off=(1.4, 2.2), fs=9)
     dim(ax, (xs[-1], yl), (hi[0], yl), f"right {f(m['right'])}\n(tape {f(tape['right'])})", DERIVED, off=(-1.6, 2.2), fs=9)
     xm = xs[3] + 1.8
-    dim(ax, (xm, lo[1]), (xm, ys[0]), f"front {f(m['front'])} (tape {f(tape['front'])})", DERIVED, off=(5.4, 0), fs=9)
+    dim(ax, (xm, lo[1]), (xm, ys[0]), f"front {f(m['front'])}", TAPE, off=(4.4, 0), fs=9)
     dim(ax, (xm, ys[-1]), (xm, hi[1]), f"rear {f(m['rear'])} (tape {f(tape['rear'])})", DERIVED, off=(5.2, 0), fs=9)
     # basket footprint and seat
     dim(ax, (bx0, by0 - 1.4), (bx1, by0 - 1.4), f"{f(Wb)}", fs=9.5)
@@ -388,7 +390,8 @@ def lower(out):
                 zorder=10, bbox={"facecolor": PAPER, "edgecolor": "none", "pad": .8})
     dim(ax, (ys[0] - 1.3, base), (ys[0] - 1.3, base + heights[0]), f"{f(heights[0])}", rot=90, off=(-.9, 0))
     dim(ax, (ys[2] - 1.3, base), (ys[2] - 1.3, base + heights[2]), f"{f(heights[2])}", rot=90, off=(-.9, 0))
-    dim(ax, (ys[0], -2.6), (ys[1], -2.6), f"{f(py)}", fs=9)
+    for r in range(len(ys) - 1):
+        dim(ax, (ys[r], -2.6), (ys[r + 1], -2.6), f"{f(pys[r])}", fs=9)
     ext(ax, [lo[1] - 7.4, lo[1]], [r_lo, r_lo]); ext(ax, [lo[1] - 7.4, lo[1]], [r_top, r_top])
     dim(ax, (lo[1] - 6.6, r_lo), (lo[1] - 6.6, r_top), f"{f(r_top - r_lo)} outside", rot=90, off=(-1, 0))
     ext(ax, [lo[1] - 4, lo[1]], [rim_z, rim_z]); ext(ax, [lo[1] - 4, lo[1] + 1], [0, 0])
@@ -453,20 +456,21 @@ def lower(out):
 
     ax = fig.add_subplot(gs[2, :])
     over_x = tape["left"] + tape["right"] + (len(xs) - 1) * px - W
-    over_y = tape["front"] + tape["rear"] + (len(ys) - 1) * py - D
+    over_y = tape["front"] + tape["rear"] + sum(pys) - D
     table(ax, [
-        ("outer rim width x depth", "52.5 x 56.3", f"{f(W)} x {f(D)}", "tape"),
-        ("height, outside", "11.5", f"{f(r_top - r_lo)} from the floor wire underside to the rim top", "tape"),
+        ("outer rim width x depth", "52.5 x 56.1", f"{f(W)} x {f(D)}", "tape"),
+        ("height, outside", "10.8", f"{f(r_top - r_lo)} from the floor wire underside to the rim top", "tape"),
         ("rim wire height", "-", f"{f(rim_z)} rim wire centre above the floor wire centre z = 0 (set so the outside is {f(r_top - r_lo)})", "derived"),
         ("tine grid", "12 columns x 6 rows", f"{len(xs)} x {len(ys)}; {' / '.join(map(str, counts))} per row = {sum(counts)} "
          f"({len(removed)} omitted under the basket)", "tape"),
-        ("tine pitch left-right / front-back", "3.6 / 8", f"{f(px)} / {f(py)}", "tape"),
+        ("tine pitch left-right / row gaps front-back", "3.18 / 8.1, 7.3, 6.7, 7.3, 8.1", f"{f(px)} / {', '.join(f(g) for g in pys)}", "tape"),
         ("tine height", "9.5; middle rows 4.5", f"rows R{short[0]}-R{short[-1]} {f(p['tine_short_height'] * CM)}, "
          f"the others {f(p['tine_height'] * CM)}", "tape"),
-        ("left / right margin", "7.7 / 10.5", f"{f(m['left'])} / {f(m['right'])} ({len(xs) - 1} x {f(px)} = {f(xs[-1] - xs[0])} leaves "
-         f"{f(W - (xs[-1] - xs[0]))} of the {f(W)}, split 7.7:10.5; your margins exceed it by {f(over_x)})", "derived"),
-        ("front / rear margin", "10.5 / 12", f"{f(m['front'])} / {f(m['rear'])} ({len(ys) - 1} x {f(py)} = {f(ys[-1] - ys[0])} leaves "
-         f"{f(D - (ys[-1] - ys[0]))} of the {f(D)}, split 10.5:12; your margins exceed it by {f(over_y)})", "derived"),
+        ("left / front margin", "7.3 / 10.1", f"{f(m['left'])} / {f(m['front'])} (applied as measured)", "tape"),
+        ("right margin", "10.2", f"{f(m['right'])} ({f(m['left'])} + {len(xs) - 1} x {f(px)} = {f(m['left'] + xs[-1] - xs[0])} leaves it of the {f(W)}; "
+         f"your margins exceed the rim by {f(over_x)})", "derived"),
+        ("rear margin", "11.3", f"{f(m['rear'])} ({f(m['front'])} + {' + '.join(f(g) for g in pys)} = {f(m['front'] + ys[-1] - ys[0])} leaves it of the {f(D)}; "
+         f"your margins exceed the rim by {f(over_y)})", "derived"),
         ("tine lean, diameter, base", "-", f"{f(lean)} to the right, Ø{f(dia)}, base {f(base)} above the datum", "estimate"),
         ("basket top rim", "32 x 9.5", f"{f(L)} long x {f(Wb)} wide", "tape"),
         ("basket body / handle top", "13 / 22", f"{f(Hb - b_lo)} / {f(b_top - b_lo)} from the lowest wire (top rim, handle top)", "tape"),

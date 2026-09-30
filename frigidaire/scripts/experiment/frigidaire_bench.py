@@ -38,8 +38,8 @@ KINDS = ("plate", "bowl", "cup")
 # in Isaac goal gates (2026-09-23); without plates an 8-bowl packing exists but first-fit found it once in 300
 # shuffles, so open-track planners could not rack easy at all within 60 s
 TIERS = {"easy": {"inventory": {"bowl": 7}, "slack": 3},
-         "medium": {"inventory": {"plate": 8, "bowl": 7}, "slack": 1},
-         "hard": {"inventory": {"plate": 8, "bowl": 7, "cup": 8}, "slack": 0}}
+         "medium": {"inventory": {"plate": 8, "bowl": 7}, "slack": 2},     # was 1: one parking slot could not unwind the
+         "hard": {"inventory": {"plate": 8, "bowl": 7, "cup": 8}, "slack": 1}}   # plate-bank chains on the 2026-09-28 racks (was 0)
 TIER_INDEX = {name: i for i, name in enumerate(TIERS)}
 COUNTER = {"size_m": (1.8, .6, .04), "center_m": (0., 0., .894), "top_z_m": .914}
 CELL_PITCH_M = .25                  # parking cells: a 229 mm plate fits one cell
@@ -116,7 +116,10 @@ def tub_clear(points, position, quaternion, margin=0.):
 
 
 def family_ok(c, points):
-    """The benchmark's family filters: no mid-zone bowl, front-right bowls at x <= 0.165, tub-wall clear."""
+    """The benchmark's family filters: no mid-zone bowl, front-right bowls at x <= 0.165, tub-wall clear. Every plate
+    gap stays allowed: an every-second-gap plate rule (tried 2026-09-28) left no rack room for the 7th bowl (8 plates
+    spill into the rear bank, the rear bowl zone vanishes; --capacity failed medium/hard at bowl_07), so unsequenceable
+    plate chains are handled by the counter allowance (n + 2 / n + 1) and the certificate gate in stage_finalize."""
     if c["slot"] in DROPPED_SLOTS:
         return False
     if c["slot"] == "lower_frontright" and c["position"][0] > FRONT_RIGHT_MAX_X_M + 1e-9:
@@ -233,6 +236,10 @@ def hotec_world(parts, points):
 GOAL_CLEARANCE_M = .003   # goal dishes keep >= 3 mm apart (planner.md asks 5 mm; 5 mm leaves every tier a bowl short)
 
 
+_BOUNDS_CACHE, _MANAGER_CACHE, _MANAGER_CACHE_MAX = {}, {}, 3000   # per-process pose caches (DishSet)
+_XY_CACHE = {}
+
+
 class DishSet:
     """FCL of placed dishes only (no appliance): AABB prefilter, then a pair counts as colliding below
     GOAL_CLEARANCE_M -- goals built one dish at a time must not touch their neighbours."""
@@ -242,8 +249,24 @@ class DishSet:
         self.fcl, self.parts, self.points = fcl, parts, points
         self.items = {}                                    # id -> (manager, lo, hi, entry)
 
+    def _bounds(self, c):
+        """AABB of a pose's visual points (+3 mm), cached per pose (2026-09-29: MCTS rollouts re-test the same
+        catalogue poses thousands of times; the AABB now gates the FCL build)."""
+        key = (c["kind"], c["rack"], tuple(np.round(c["position"], 7)), tuple(np.round(c["quaternion_xyzw"], 7)))
+        b = _BOUNDS_CACHE.get(key)
+        if b is None:
+            from dishsim_frigidaire.asset import BODY_POSITIONS
+            rot = quat_matrix(c["quaternion_xyzw"])
+            pts = self.points[c["kind"]] @ rot.T + (np.asarray(c["position"], dtype=float) + BODY_POSITIONS[c["rack"]])
+            b = _BOUNDS_CACHE[key] = (pts.min(0) - .003, pts.max(0) + .003)
+        return b
+
     def _manager(self, c):
         from dishsim_frigidaire.asset import BODY_POSITIONS
+        key = (c["kind"], c["rack"], tuple(np.round(c["position"], 7)), tuple(np.round(c["quaternion_xyzw"], 7)))
+        hit = _MANAGER_CACHE.get(key)
+        if hit is not None:
+            return hit
         fcl = self.fcl
         rot = quat_matrix(c["quaternion_xyzw"])
         pos = np.asarray(c["position"], dtype=float) + BODY_POSITIONS[c["rack"]]
@@ -252,8 +275,11 @@ class DishSet:
         m = fcl.DynamicAABBTreeCollisionManager()
         m.registerObjects(objs)
         m.setup()
-        pts = self.points[c["kind"]] @ rot.T + pos
-        return m, pts.min(0) - .003, pts.max(0) + .003, objs
+        lo, hi = self._bounds(c)
+        if len(_MANAGER_CACHE) >= _MANAGER_CACHE_MAX:
+            _MANAGER_CACHE.pop(next(iter(_MANAGER_CACHE)))
+        hit = _MANAGER_CACHE[key] = (m, lo, hi, objs)
+        return hit
 
     def add(self, oid, c):
         m, lo, hi, objs = self._manager(c)
@@ -263,11 +289,14 @@ class DishSet:
         self.items.pop(oid, None)
 
     def collides(self, c, skip=(), clearance=GOAL_CLEARANCE_M):
-        m, lo, hi, _ = self._manager(c)
+        lo, hi = self._bounds(c)
+        near = [other for oid, (other, olo, ohi, _, _) in self.items.items()
+                if oid not in skip and not (np.any(hi + clearance < olo) or np.any(ohi + clearance < lo))]
+        if not near:
+            return False
+        m = self._manager(c)[0]
         fcl = self.fcl
-        for oid, (other, olo, ohi, _, _) in self.items.items():
-            if oid in skip or np.any(hi + clearance < olo) or np.any(ohi + clearance < lo):
-                continue
+        for other in near:
             data = fcl.DistanceData(request=fcl.DistanceRequest(), result=fcl.DistanceResult())
             m.distance(other, data, fcl.defaultDistanceCallback)
             if data.result.min_distance < clearance:
@@ -283,8 +312,12 @@ def nests(points, c, o, others):
     o = quat_matrix(c["quaternion_xyzw"]) if o is None else o          # keep-in-place candidates carry no matrix
 
     def xy(e):
-        P = posed_points(points["bowl"], e["position"], e["quaternion_xyzw"])
-        return P[:, :2].min(0), P[:, :2].max(0)
+        key = (e["rack"], tuple(np.round(e["position"], 7)), tuple(np.round(e["quaternion_xyzw"], 7)))
+        b = _XY_CACHE.get(key)
+        if b is None:
+            P = posed_points(points["bowl"], e["position"], e["quaternion_xyzw"])
+            b = _XY_CACHE[key] = (P[:, :2].min(0), P[:, :2].max(0))
+        return b
     lo, hi = xy(c)
     for e in others:
         if e["kind"] != "bowl" or e["rack"] != c["rack"]:
@@ -313,7 +346,8 @@ def cand_keys(c):
 def load_bans(out=OUT):
     """Candidate pairs that penetrated together in an Isaac goal gate (one bans.json per failed attempt)."""
     bans = set()
-    paths = [*(Path(out) / "instances" / "attempts").glob("*/bans.json"), *(Path(out) / "bans").glob("*.json")]
+    paths = [*(Path(out) / "instances" / "attempts").glob("*/bans.json"), *(Path(out) / "bans").glob("*.json"),
+             *(Path(out) / "plans" / "open").glob("*/*.bans.json")]      # own loads that failed --sequence-plan
     for path in paths:                                      # bans/ keeps those of attempts moved aside
         data = json.loads(path.read_text())
         if data.get("outcome") in ("solo", "solo_overlap"):  # the retired any-order rule: those bans are wrong
@@ -428,6 +462,18 @@ def keep_clear(c):
     f = base[c["rack"]]
     p, q = compose_pose(f["position_m"], f["quaternion_xyzw"], list(c["position"]), list(c["quaternion_xyzw"]))
     return bool(checker.against_components(checker._body(c["kind"], {"position_m": p.tolist(), "quaternion_xyzw": q.tolist()}, "keep"))["valid"])
+
+
+def pooling_entries(entries):
+    """Ids of the entries whose commanded rack-local pose pools (the score's puddle rule), racks in."""
+    from dishsim_frigidaire import exposure as E
+    from dishsim_frigidaire.asset import BODY_POSITIONS
+    out = []
+    for e in entries:
+        p, q = E.compose_pose(BODY_POSITIONS[e["rack"]], E.IDENTITY, e["position"], e["quaternion_xyzw"])
+        if E.pools(HX().SCORER_KIND[e["kind"]], p, q):
+            out.append(e["id"])
+    return out
 
 
 def entry_of(oid, c, keep=False):
@@ -618,15 +664,17 @@ def make_bench_world(instance, checker=None):
                 self._buffer[kind] = [P.make_T((cx + x, cy + y, z), (0., 0., 0., 1.)) for y in ys for x in xs]
             return self._buffer[kind]
 
-        def mark_goals(self, targets, centroids=None):
-            """Goal poses were certified together (jointly settled on track A, mutually FCL-free as planned on
-            track B) and may touch: a command to a goal pose skips the pair check against a dish that rests at
-            ITS goal -- its last executed command was that goal (it may have settled up to ~4 cm off a lifted
-            family pose), or it lies within the at-goal tolerance. The per-move Isaac settle stays the arbiter
-            (a real intrusion ends as `disturbed`)."""
+        def mark_goals(self, targets, centroids=None, certified=True):
+            """Goal poses. When ``certified`` (built one dish at a time in Isaac: the instance goal, or an own
+            load that passed --sequence-plan) they may touch, so a command to a goal pose skips the pair check
+            against a dish that rests at ITS goal -- its last executed command was that goal, or it lies within
+            the at-goal tolerance -- and the appliance check; the per-move Isaac settle stays the arbiter (a real
+            intrusion ends as `disturbed`). Uncertified goals get no exemption at all (2026-09-28: the pilot's
+            open-track loads were exempted as planned, up to 4 cm off their settled poses)."""
             for oid, T in targets.items():
-                self.certify(T)
-                self.goal_keys.add(P._key(T))
+                if certified:
+                    self.certify(T)
+                    self.goal_keys.add(P._key(T))
                 self.goal_of[oid] = np.asarray(T, dtype=float)
             self.centroids.update(centroids or {})
 
@@ -741,19 +789,20 @@ class FixedGoalSequencer:
 
 
 class Replay:
-    """Replays a Kit-free plan file (the open-track planner pair: the scorer needs Warp, not Kit)."""
+    """Replays a Kit-free plan file (the open-track planner pair: the scorer needs Warp, not Kit). A certified
+    plan's moves target the poses its load built to in Isaac (--sequence-plan, then --resequence)."""
 
     def __init__(self, plan):
         self.moves, self.planned_s = list(plan["moves"]), plan.get("planning_time_s")
+        self.certified = bool(plan.get("certified"))
 
     def reset(self, instance, world):
         final = {}
         for m in self.moves:
             T = np.asarray(m["T_base_obj"], dtype=float)
-            world.certify(T)
             if not world.in_counter(T):
                 final[m["item_id"]] = T
-        world.mark_goals(final)                                 # the plan's own load is this episode's goal
+        world.mark_goals(final, certified=self.certified)      # the plan's own load is this episode's goal
 
     def next_move(self, obs):
         if not self.moves:
@@ -763,28 +812,77 @@ class Replay:
         return Move(m["item_id"], np.asarray(m["T_base_obj"], dtype=float))
 
 
-def plan_open(instance, algorithm, scorer, fam, masks, parts, points, budget_s=60., seed=0, log=print):
+def load_key(entries):
+    """A load as the frozenset of its (dish, pose) keys: two attempts proposing it are the same plan."""
+    return frozenset((e["id"], cand_key(e)) for e in entries)
+
+
+def plan_open(instance, algorithm, scorer, fam, masks, parts, points, budget_s=60., seed=0, log=print, attempt=0,
+              previous=()):
     """Open-track plan (Kit-free): choose a complete load, then sequence it on the counter cap.
 
-    planner: keeps + first-fit + coordinate ascent within the budget (15 s kept for sequencing);
-    baseline: first-fit in family order, no keeps, no ranking. Returns a plan dict (moves as world 4x4)."""
+    mcts: move-level Monte Carlo tree search (dishsim_frigidaire.mcts) within the budget: moves of single dishes
+    to top-ranked free catalogue poses, keeps or counter parks; first-fit rollouts scored at low resolution; the
+    best load's tree prefix + greedy completion is the plan (``search`` holds the statistics). Replaced the
+    coordinate-ascent "planner" on 2026-09-29 (it ended on first-fit's load on 3 of 5 medium/hard instances);
+    baseline: first-fit in family order, no keeps, no ranking. A re-plan (``attempt`` > 0, after a failed Isaac
+    build banned what it blamed) is the same deterministic first-fit under the accumulated bans (the blamed pose
+    or pair is excluded, so the load changes); only when that no longer packs, or repeats a load of an earlier
+    attempt (``previous``: a failure that banned nothing, e.g. a certified load that is not sequenceable under
+    the counter cap, would otherwise be rebuilt in Isaac unchanged), does it fall back to a few seeded shuffles
+    of the family order (2026-09-28 live run: shuffling first was 20 failed packs per attempt on medium,
+    scattered plates take the bowls' space). Returns a plan dict (moves as world 4x4)."""
     P = _planner()
     t0, c0 = time.monotonic(), time.process_time()
     world = make_bench_world(instance)
     rinst = P.to_rearrange_instance(instance)
     world.sync({it["item_id"]: it["T_base_init"] for it in rinst.items}, {it["item_id"]: it["object_class"] for it in rinst.items})
     ids = [(o["object_id"], o["kind"]) for o in instance["objects"]]
-    tries = []
-    if algorithm == "planner":
+    tries, shuffled = [], False
+    search_stats, mcts_moves = None, None
+    if algorithm == "mcts":                                  # move-level MCTS (dishsim_frigidaire.mcts), 2026-09-29
+        from types import SimpleNamespace
+        from dishsim_frigidaire import mcts as M
+        bench = SimpleNamespace(**globals())                 # this module's library, however it was loaded
+        ans, search_stats = M.plan(bench, instance, world, fam, masks, parts, points, scorer, load_bans(),
+                                   deadline=t0 + budget_s, seed=seed, exclude=set(previous), log=log)
+        if ans is not None:
+            entries, mv, s_low, n_prefix = ans
+            S = scorer.score(entries)
+            search_stats.update(S_low=s_low, prefix_moves=n_prefix, S_full=S["score"])
+            if S["feasible"]:
+                mcts_moves = [{"item_id": oid, "T_base_obj": np.asarray(T).tolist(), "kind": k} for k, oid, T in mv]
+                chosen_mcts = (entries, S["score"])
+    elif algorithm == "planner":                             # retired 2026-09-29 (history_planner_20260929/)
         g = goal_search(instance, scorer, fam, masks, parts, points, seed=seed, deadline=t0 + budget_s - 15., log=log, bans=load_bans())
         if g is not None:
             tries.append((g["entries"], g["S_planned"]))
     else:
-        e = first_fit(ids, fam, masks, parts, points, bans=load_bans())
+        bans = load_bans()
+        previous = set(previous)
+        e = first_fit(ids, fam, masks, parts, points, bans=bans)      # deterministic, the accumulated bans excluded
+        if e is not None and load_key(e) in previous:
+            log(f"[INFO] {algorithm}: the deterministic load repeats attempt(s) before {attempt}; shuffling")
+            e = None
+        if e is None and attempt > 0:                                 # fallback: a few seeded shuffles (a shuffled pack
+            rng = np.random.default_rng(seed)                         # scatters plates into the bowls' space and mostly fails)
+            for _ in range(SHUFFLE_TRIES):
+                e = first_fit(ids, fam, masks, parts, points, rng=rng, bans=bans)
+                if e is not None and load_key(e) not in previous:
+                    shuffled = True
+                    break
+                e = None
         if e is not None:
             tries.append((e, None))
     moves, chosen = None, None
-    for entries, S in tries:
+    if mcts_moves is not None:
+        from dishsim.rearrange import Move
+        moves, chosen = [Move(m["item_id"], np.asarray(m["T_base_obj"])) for m in mcts_moves], chosen_mcts
+    for entries, S in (tries if chosen is None else ()):
+        pooling = pooling_entries(entries)
+        if pooling:                                          # the puddle rule is a gate for every load, not only the goal's
+            log(f"[INFO] {algorithm}: load rejected, pooling {pooling}")
+            continue
         targets = {}
         for e in entries:
             T = P.goal_T(world, e["rack"], {"position_m": e["position"], "quaternion_xyzw": e["quaternion_xyzw"]})
@@ -795,10 +893,12 @@ def plan_open(instance, algorithm, scorer, fam, masks, parts, points, budget_s=6
             chosen = (entries, S)
             break
     return {"instance": instance["instance_id"], "track": "open", "algorithm": algorithm, "seed": seed,
+            "shuffled": shuffled,
             "budget_s": budget_s, "planning_time_s": time.monotonic() - t0, "planning_cpu_s": time.process_time() - c0,
-            "moves": [{"item_id": m.item_id, "T_base_obj": np.asarray(m.T_base_obj).tolist()} for m in (moves or [])],
+            "moves": mcts_moves if mcts_moves is not None else
+                     [{"item_id": m.item_id, "T_base_obj": np.asarray(m.T_base_obj).tolist()} for m in (moves or [])],
             "goal": None if chosen is None else chosen[0], "S_planned": None if chosen is None else chosen[1],
-            "sequenced": moves is not None}
+            "sequenced": moves is not None, **({"search": search_stats} if search_stats is not None else {})}
 
 
 # --------------------------------------------------------------------------- capacity check (gate G2)
@@ -938,8 +1038,11 @@ def stage_finalize(attempt_dir, out=OUT):
     world.mark_goals(targets, kind_centroids(points))
     world.goal_order = [tuple(e) for e in inst["goal"]["order"]]          # the certificate honours the build order
     plan = P.sequence(world, targets, P.item_order(inst), inst["counter"]["cap"])
-    inst["certificate"] = {"sequenceable": plan is not None, "moves": None if plan is None else len(plan),
-                           "method": "planner.sequence on the FCL mirror (greedy with buffering), not gated"}
+    if plan is None:                                       # gated since 2026-09-28: three medium instances had been accepted
+        print("[RESULT] REROLL goal not sequenceable under the counter cap", flush=True)   # unreachable for the greedy sequencer
+        return 1
+    inst["certificate"] = {"sequenceable": True, "moves": len(plan),
+                           "method": "planner.sequence on the FCL mirror (greedy with buffering); an instance is accepted only when it exists"}
     path = Path(out) / "instances" / inst["tier"] / f"{inst['instance_id']}.json"
     if path.exists():
         raise SystemExit(f"[RESULT] FAIL refusing to overwrite {path}")
@@ -950,24 +1053,290 @@ def stage_finalize(attempt_dir, out=OUT):
     return 0
 
 
-def stage_plan(instance_path, out=OUT, device=None):
-    """Open-track plans for the planner and the first-fit baseline (Kit-free, one pinned job per instance)."""
+PLAN_ATTEMPTS = 6          # own-load certification: plan -> Isaac build; a failed build bans the pose/pair and re-plans
+SHUFFLE_TRIES = 5          # baseline re-plan fallback when the banned deterministic pack fails (each try ~15 s of FCL)
+
+
+def plan_attempt_path(inst, algorithm, attempt, out=OUT):
+    return Path(out) / "plans" / "open" / inst["tier"] / f"{inst['instance_id']}__{algorithm}.a{attempt}.json"
+
+
+def stage_plan(instance_path, out=OUT, device=None, algorithms=("baseline", "mcts"), attempt=0):
+    """Open-track plan attempt ``attempt`` of each algorithm (Kit-free): the load and a first move sequence, to
+    <id>__<algorithm>.a<attempt>.json. The Kit --sequence-plan build then certifies the load (bans from earlier
+    failed builds are in force through load_bans), and --resequence writes the final <id>__<algorithm>.json."""
     inst = json.loads(Path(instance_path).read_text())
     fam, parts, points = families()
     masks = family_masks(fam, parts, points)
     scorer = Scorer(device)
-    for name in ("planner", "baseline"):
-        path = Path(out) / "plans" / "open" / inst["tier"] / f"{inst['instance_id']}__{name}.json"
+    for name in algorithms:
+        path = plan_attempt_path(inst, name, attempt, out)
         if path.exists():
             continue
-        seed = int(hashlib.sha256(f"0|{inst['instance_id']}|{name}".encode()).hexdigest()[:8], 16)
-        plan = plan_open(inst, name, scorer, fam, masks, parts, points, seed=seed, log=lambda *a: None)
+        seed = int(hashlib.sha256(f"{attempt}|{inst['instance_id']}|{name}".encode()).hexdigest()[:8], 16)
+        previous = []
+        for k in range(attempt):                             # the loads of the earlier attempts (none of them certified)
+            q = plan_attempt_path(inst, name, k, out)
+            if q.is_file():
+                goal = json.loads(q.read_text()).get("goal")
+                if goal:
+                    previous.append(load_key(goal))
+        plan = plan_open(inst, name, scorer, fam, masks, parts, points, seed=seed, log=print, attempt=attempt, previous=previous)
+        plan.update(attempt=attempt, certified=False)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(plan, indent=1) + "\n")
+        if plan.get("goal"):                                 # the joint Isaac gate's manifest, as for the goal (stage_goal)
+            manifest = {"objects": [{"object_id": e["id"], "kind": e["kind"], "rack": e["rack"],
+                                     "rack_local_pose": {"position_m": e["position"], "quaternion_xyzw": e["quaternion_xyzw"]}}
+                                    for e in plan["goal"]],
+                        "baseline": inst["baseline"], "tableware": tableware()}
+            path.with_name(path.name[:-len(".json")] + ".gate_manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
         print(f"[INFO] {path.name}: {len(plan['moves'])} moves, sequenced {plan['sequenced']}, "
               f"S_planned {plan['S_planned']}, {plan['planning_time_s']:.1f} s wall / {plan['planning_cpu_s']:.1f} s CPU", flush=True)
     print("[RESULT] PASS plans", flush=True)
     return 0
+
+
+def sequence_record_of(plan_path):
+    plan_path = Path(plan_path)
+    p = plan_path.with_name(plan_path.name[:-len(".json")] + ".sequence.json")
+    return json.loads(p.read_text()) if p.is_file() else None
+
+
+def penetration_bans(gate, entries):
+    """The pose/pair a gate's penetration event blames (stage_ban's rule) among ``entries``."""
+    from dishsim_frigidaire.random_poses import LIMITS
+    goal = {e["id"]: e for e in entries}
+    event = gate.get("maximum_settle_penetration_event") or {}
+    pairs = []
+    for name, depth in (event.get("contact_pair_penetration_m") or {}).items():
+        a, b = name.split("|")
+        if depth < LIMITS["peak_penetration_m"]:
+            continue
+        if a in goal and b in goal:
+            pairs.append(sorted((cand_key(goal[a]), cand_key(goal[b]))))
+        elif (a in goal) != (b in goal):                 # a dish into the appliance: the pose alone is bad
+            dish = goal[a if a in goal else b]
+            if dish.get("variant") != "keep":
+                pairs.append([cand_key(dish)])
+    return pairs
+
+
+def stage_ban_plan(plan_path):
+    """After an own load failed its joint gate or its sequence build: ban the pose/pair blamed (global, like the
+    goal gate's bans, so no later plan of any instance proposes it again)."""
+    plan_path = Path(plan_path)
+    plan = json.loads(plan_path.read_text())
+    stem = plan_path.name[:-len(".json")]
+    seq = sequence_record_of(plan_path) or {}
+    pairs = list(seq.get("bans") or [])
+    gate_path = plan_path.with_name(stem + ".gate") / "result.json"
+    gate = json.loads(gate_path.read_text()) if gate_path.is_file() else {}
+    if gate.get("outcome") == "penetration_failure":
+        pairs += penetration_bans(gate, plan.get("goal") or [])
+    out = plan_path.with_name(stem + ".bans.json")
+    out.write_text(json.dumps({"outcome": "sequence_plan", "gate": gate.get("outcome"), "status": seq.get("status"), "pairs": pairs},
+                              indent=1) + "\n")
+    print(f"[RESULT] PASS ban {len(pairs)} pair(s): {pairs}", flush=True)
+    return 0
+
+
+def own_order(world, planned, targets, cap):
+    """A planner's own move order re-targeted to the BUILT poses, if every move is legal on the mirror under the
+    build's goal order and the counter cap and the load ends complete; else None. Rack moves go to the dish's
+    built target, counter parks keep their planned pose. Returns Move objects (the world is restored)."""
+    from dishsim.rearrange import Move
+    saved, kinds = world.snapshot(), dict(world.classes)
+    out = []
+    try:
+        for m in planned:
+            oid, T = m["item_id"], np.asarray(m["T_base_obj"], dtype=float)
+            if not world.in_counter(T):
+                T = targets[oid]
+            elif sum(world.in_counter(v) for k, v in world._poses.items() if k != oid) >= cap:
+                return None
+            if world.move_collides(oid, T):
+                return None
+            out.append(Move(oid, T.copy()))
+            world.sync({oid: T}, kinds)
+        if not all(np.allclose(world._poses[oid], T, atol=1e-6) for oid, T in targets.items()):
+            return None
+        return out
+    finally:
+        world.sync(saved, kinds)
+
+
+def stage_resequence(plan_path, instance_path, out=OUT, final=False):
+    """Turn a certified own load into the final open-track plan <id>__<algorithm>.json: targets = the poses the
+    load BUILT to in Isaac (+ the goal hover), goal order = the build's support edges + learned pairs + the
+    neighbour order, moves re-sequenced under that order on the FCL mirror. Planning time = the sum over the
+    attempts. With ``final``, a failed certification still writes the file (certified False, no moves) so the
+    episode records the algorithm's failure instead of replaying an uncertified load."""
+    P = _planner()
+    from dishsim_frigidaire.loading import visual_points
+    plan_path, inst = Path(plan_path), json.loads(Path(instance_path).read_text())
+    plan = json.loads(plan_path.read_text())
+    seq = sequence_record_of(plan_path) or {"status": "missing", "reason": "no sequence record"}
+    target = Path(out) / "plans" / "open" / inst["tier"] / f"{inst['instance_id']}__{plan['algorithm']}.json"
+    if target.exists():
+        raise SystemExit(f"[RESULT] FAIL refusing to overwrite {target}")
+    attempts = sorted(plan_path.parent.glob(f"{inst['instance_id']}__{plan['algorithm']}.a*.json"))
+    times = [json.loads(p.read_text()) for p in attempts]
+    plan["planning_time_s"] = sum(t.get("planning_time_s") or 0. for t in times)
+    plan["planning_cpu_s"] = sum(t.get("planning_cpu_s") or 0. for t in times)
+    plan["planning_attempts"] = len(times)
+
+    def write(reason, ok):
+        plan.update(certified=ok, certification={"status": seq.get("status"), "reason": reason, "attempt": plan.get("attempt"),
+                                                 "builds": len(seq.get("builds") or [])})
+        if not ok:
+            plan["moves_planned"], plan["moves"] = plan["moves"], []
+        target.write_text(json.dumps(plan, indent=1) + "\n")
+
+    gate_path = plan_path.with_name(plan_path.name[:-len(".json")] + ".gate") / "result.json"
+    gate = json.loads(gate_path.read_text()) if gate_path.is_file() else None
+    if gate is not None:
+        plan["gate"] = {"outcome": gate.get("outcome"), "reason": gate.get("reason"), "wall_seconds": gate.get("wall_seconds"),
+                        "maximum_cycle_penetration_m": gate.get("maximum_cycle_penetration_m")}
+    if seq.get("status") != "ok":
+        if final:
+            write(seq.get("reason"), False)
+        print(f"[RESULT] REROLL resequence {plan_path.name}: {seq.get('reason')}", flush=True)
+        return 1
+    points = {kind: visual_points(ASSETS / f"{kind}.usda") for kind in KINDS}
+    kinds = {o["object_id"]: o["kind"] for o in inst["objects"]}
+    frames = {r: inst["initial_snapshot"]["poses"][r] for r in ("LowerRack", "UpperRack")}
+    built = seq["poses_world"]
+    entries = [dict(e) for e in plan["goal"]]
+    for e in entries:                                       # the built pose, rack-local, is what the load scores as
+        rack = racked_in(points[e["kind"]], built[e["id"]], frames)
+        local = None if rack is None else P.local_from_world(frames[rack], built[e["id"]])
+        if rack is None or not tub_clear(points[e["kind"]], local["position_m"], local["quaternion_xyzw"]):
+            reason = f"{e['id']} built {'outside the racks' if rack is None else 'across the tub wall'}"
+            if final:
+                write(reason, False)
+            print(f"[RESULT] REROLL resequence {plan_path.name}: {reason}", flush=True)
+            return 1
+        e.update(rack=rack, position=local["position_m"], quaternion_xyzw=local["quaternion_xyzw"])
+    world = make_bench_world(inst)
+    rinst = P.to_rearrange_instance(inst)
+    world.sync({it["item_id"]: it["T_base_init"] for it in rinst.items}, {it["item_id"]: it["object_class"] for it in rinst.items})
+    targets = {}
+    for e in entries:
+        T = P.pose_T(built[e["id"]])
+        T[2, 3] += GOAL_HOVER_M
+        targets[e["id"]] = T
+    world.mark_goals(targets, kind_centroids(points))
+    world.goal_order = goal_order_of(seq, entries)
+    moves, plan["order_source"] = None, "resequenced"
+    if plan.get("algorithm") == "mcts":                     # the search's own move order, when the build allows it
+        moves = own_order(world, plan["moves"], targets, inst["counter"]["cap"])
+        if moves is not None:
+            plan["order_source"] = "mcts"
+    if moves is None:
+        moves = P.sequence(world, targets, P.item_order(inst), inst["counter"]["cap"])
+    if moves is None:
+        reason = "the certified load is not sequenceable under its build order on the counter cap"
+        if final:
+            write(reason, False)
+        print(f"[RESULT] REROLL resequence {plan_path.name}: {reason}", flush=True)
+        return 1
+    plan["moves_planned"], plan["goal_planned"] = plan["moves"], plan["goal"]
+    plan["moves"] = [{"item_id": m.item_id, "T_base_obj": np.asarray(m.T_base_obj).tolist()} for m in moves]
+    plan["goal"], plan["goal_order"], plan["build_order"] = entries, [list(e) for e in world.goal_order], seq["order"]
+    plan["built_poses_world"] = {e["id"]: built[e["id"]] for e in entries}
+    write(seq.get("reason"), True)
+    print(f"[RESULT] PASS resequence {target.name}: {len(plan['moves'])} moves, {len(plan['goal_order'])} order constraints, "
+          f"attempt {plan.get('attempt')}", flush=True)
+    return 0
+
+
+def plan_unit(sched, instance_path, max_attempts=PLAN_ATTEMPTS, out=OUT, log=print):
+    """One instance: for each open-track algorithm, plan -> Isaac build of the load -> resequence; a failed build
+    bans what it blamed and re-plans, up to ``max_attempts``; the last failure is recorded as the plan."""
+    inst = json.loads(Path(instance_path).read_text())
+    results = {}
+    for name in TRACK_ALGORITHMS["open"]:
+        final = Path(out) / "plans" / "open" / inst["tier"] / f"{inst['instance_id']}__{name}.json"
+        if final.exists():
+            results[name] = "exists"
+            continue
+        for attempt in range(max_attempts):
+            last = attempt == max_attempts - 1
+            p = plan_attempt_path(inst, name, attempt, out)
+            stem = p.name[:-len(".json")]
+            line = sched.run("py", ["frigidaire/scripts/experiment/frigidaire_bench.py", "--plan", rel(instance_path),
+                                    "--algorithm", name, "--attempt", str(attempt)], f"plan_{stem}")
+            log(f"[INFO] {stem} plan: {line}")
+            manifest, gate_dir = p.with_name(stem + ".gate_manifest.json"), p.with_name(stem + ".gate")
+            ok, outcome = (gate_unit(sched, manifest, gate_dir, stem) if manifest.exists() else (False, "no load"))
+            log(f"[INFO] {stem} gate: {outcome}")
+            if ok:                                           # the joint gate's settled poses are the build's targets
+                seq_rec = p.with_name(stem + ".sequence.json")
+                if seq_rec.is_file():                         # a resumed run: the build already ran
+                    line = f"[RESULT] {'PASS' if json.loads(seq_rec.read_text()).get('status') == 'ok' else 'REROLL'} build (exists)"
+                else:
+                    line = sched.run("kit", ["frigidaire/scripts/experiment/frigidaire_bench_kit.py", "--sequence-plan", rel(p),
+                                             "--instance", rel(instance_path), "--gate", rel(gate_dir), "--headless"], f"sequence_{stem}")
+                log(f"[INFO] {stem} build: {line}")
+            else:
+                line = ""
+            if "PASS" not in line and not p.with_name(stem + ".bans.json").is_file():
+                sched.run("py", ["frigidaire/scripts/experiment/frigidaire_bench.py", "--ban-plan", rel(p)], f"ban_{stem}")
+            line = sched.run("py", ["frigidaire/scripts/experiment/frigidaire_bench.py", "--resequence", rel(p),
+                                    "--instance", rel(instance_path), *(["--final"] if last else [])], f"resequence_{p.stem}")
+            log(f"[INFO] {p.stem} resequence: {line}")
+            if "PASS" in line:
+                results[name] = f"certified (attempt {attempt})"
+                break
+        else:
+            results[name] = "not buildable"
+    return f"[RESULT] {'PASS' if all(v != 'not buildable' for v in results.values()) else 'FAIL'} plan {inst['instance_id']} {results}"
+
+
+def episode_records(instance_path, out=OUT):
+    """The episode records of one instance (both tracks), analysis files excluded."""
+    inst = Path(instance_path)
+    return [e for track in ("goal", "open") for e in sorted((Path(out) / "episodes" / track / inst.parent.name).glob(f"{inst.stem}__*.json"))
+            if not e.name.endswith(".analysis.json")]
+
+
+def video_argv(instance_path, episode_path, media=MEDIA):
+    return ["frigidaire/scripts/evaluation/frigidaire_planner_video.py", "--instance", rel(instance_path), "--episode", rel(episode_path),
+            "--out-dir", rel(Path(media) / "video" / Path(instance_path).parent.name), "--video-width", "640", "--headless", "--enable_cameras"]
+
+
+def full_unit(sched, tier, seed, max_attempts=6, cameras=True, video=False, out=OUT, log=print):
+    """One (tier, seed) end to end through the shared slots: generate -> own-load plans -> the four episodes ->
+    score detail of each record (-> stop-motion videos when ``video``). Every stage is skipped when its output
+    exists, so a stopped run resumes. Returns {"tier", "seed", "result", "stages"}."""
+    stages = {}
+    g = generate_unit(sched, tier, seed, max_attempts, out=out, log=log)
+    stages["generate"] = g["result"]
+    if g["result"] not in ("accepted", "exists"):
+        return {"tier": tier, "seed": seed, "result": f"generate: {g['result']}", "stages": stages}
+    inst = Path(out) / "instances" / tier / f"{tier}_s{seed}.json"
+    stages["plan"] = plan_unit(sched, inst, max_attempts=PLAN_ATTEMPTS, out=out, log=log)
+    expected = sum(len(v) for v in TRACK_ALGORITHMS.values())
+    if len(episode_records(inst, out)) < expected:          # --run skips the episodes already recorded (a resumed run)
+        line = sched.run("kit", ["frigidaire/scripts/experiment/frigidaire_bench_kit.py", "--run", "--instance", rel(inst), "--headless",
+                                 *(["--enable_cameras"] if cameras else [])], f"run_{inst.stem}")
+        stages["run"] = line
+        log(f"[INFO] {inst.stem} run: {line}")
+    else:
+        stages["run"] = "exists"
+    records = episode_records(inst, out)
+    analyses = [sched.run("py", ["frigidaire/scripts/experiment/frigidaire_bench.py", "--analyze", rel(e)],
+                          f"analyze_{e.parent.parent.name}_{e.stem}") for e in records if not e.with_suffix(".analysis.json").exists()]
+    stages["analyze"] = f"{sum('PASS' in a for a in analyses)}/{len(analyses)} new, {len(records)} records"
+    if video:                                                # an existing video is kept (the script refuses to overwrite)
+        todo = [e for e in records if not (Path(MEDIA) / "video" / inst.parent.name /
+                                           f"{inst.stem}__{e.parent.parent.name}__{e.stem.split('__', 1)[1]}.mp4").is_file()]
+        videos = [sched.run("kit", video_argv(inst, e), f"video_{e.parent.parent.name}_{e.stem}") for e in todo]
+        stages["video"] = f"{sum('PASS' in v for v in videos)}/{len(videos)}"
+    ran_ok = stages["run"] == "exists" or "PASS" in stages["run"]
+    ok = ran_ok and len(records) == expected and all("PASS" in a for a in analyses)
+    return {"tier": tier, "seed": seed, "result": "complete" if ok else "incomplete", "stages": stages}
 
 
 def racked_entries(poses, frames, kinds, points):
@@ -1173,8 +1542,48 @@ def rel(path):
     raise ValueError(f"path not visible inside the container: {path}")
 
 
+def gate_unit(sched, manifest, gate_dir, tag):
+    """The joint Isaac gate of a load (frigidaire_initial_state_validate.py: settle, retract both racks, contain);
+    a rack-speed flake (closure_failure) is retried lower-first once. Returns (accepted, outcome)."""
+    argv = ["frigidaire/scripts/experiment/frigidaire_initial_state_validate.py", "--manifest", rel(manifest),
+            "--out-dir", rel(gate_dir), "--max-wall-seconds", "600", "--headless", "--device", "cpu"]
+    gate = Path(gate_dir) / "result.json"
+    if gate.is_file():                                       # a resumed run: the gate already ran
+        outcome = json.loads(gate.read_text()).get("outcome")
+        return outcome == "accepted", outcome
+    sched.run("kit", argv, f"{tag}_gate")
+    outcome = json.loads(gate.read_text()).get("outcome") if gate.exists() else None
+    ok = outcome == "accepted"
+    if not ok and outcome == "closure_failure":
+        alt_dir = Path(str(gate_dir) + "_lower_first")
+        argv2 = argv[:-3] + ["--order", "lower_first", "--headless", "--device", "cpu"]
+        argv2[argv2.index("--out-dir") + 1] = rel(alt_dir)
+        sched.run("kit", argv2, f"{tag}_gate_lower_first")
+        alt = alt_dir / "result.json"
+        if alt.exists() and json.loads(alt.read_text()).get("outcome") == "accepted":
+            g = str(Path(gate_dir).resolve())                       # root-owned: moved inside the container
+            sched.container_sh(["mv", g, g + "_upper_first"])
+            sched.container_sh(["cp", "-a", str(alt_dir.resolve()), g])
+            ok, outcome = True, "accepted"
+    return ok, outcome
+
+
+def done_step(name, adir):
+    """The verdict of an attempt step whose output already exists (a resumed run), else None. Every stage refuses
+    to overwrite its output, so without this a restart would abandon the in-flight attempt (2026-09-29)."""
+    if name == "start" and (adir / "start.json").is_file():
+        return "[RESULT] PASS start (exists)"
+    if name == "goal" and (adir / "goal.json").is_file() and (adir / "gate_manifest.json").is_file():
+        return "[RESULT] PASS goal (exists)"
+    if name == "sequence" and (adir / "sequence.json").is_file():
+        seq = json.loads((adir / "sequence.json").read_text())
+        return f"[RESULT] {'PASS' if 'poses_world' in seq else 'REROLL'} sequence (exists)"
+    return None
+
+
 def generate_unit(sched, tier, seed, max_attempts=6, out=OUT, log=print):
-    """One (tier, seed): attempts until an instance is accepted (start -> goal -> gate -> finalize)."""
+    """One (tier, seed): attempts until an instance is accepted (start -> goal -> gate -> finalize). Steps whose
+    output exists are not re-run (a resumed run continues the attempt it was in)."""
     final = Path(out) / "instances" / tier / f"{tier}_s{seed}.json"
     if final.exists():
         return {"tier": tier, "seed": seed, "result": "exists"}
@@ -1191,12 +1600,14 @@ def generate_unit(sched, tier, seed, max_attempts=6, out=OUT, log=print):
                  ("py", ["frigidaire/scripts/experiment/frigidaire_bench.py", "--finalize", rel(adir)], "finalize")]
         verdicts = []
         for kind, argv, name in steps:
-            line = sched.run(kind, argv, f"{tag}_{name}")
+            line = done_step(name, adir)
+            if line is None and not (name == "gate" and (adir / "gate" / "result.json").is_file()):
+                line = sched.run(kind, argv, f"{tag}_{name}")
             if name == "gate":
                 gate = adir / "gate" / "result.json"
                 outcome = json.loads(gate.read_text()).get("outcome") if gate.exists() else None
                 ok = outcome == "accepted"
-                if not ok and outcome == "closure_failure":         # the rack-speed flake: the other order once
+                if not ok and outcome == "closure_failure" and not (adir / "gate_lower_first").exists():   # the rack-speed flake
                     argv2 = argv[:-3] + ["--order", "lower_first", "--headless", "--device", "cpu"]   # drops --headless --device cpu
                     argv2[argv2.index("--out-dir") + 1] = rel(adir / "gate_lower_first")
                     sched.run(kind, argv2, f"{tag}_gate_lower_first")
@@ -1206,7 +1617,7 @@ def generate_unit(sched, tier, seed, max_attempts=6, out=OUT, log=print):
                         sched.container_sh(["mv", g, g + "_upper_first"])
                         sched.container_sh(["cp", "-a", str((adir / "gate_lower_first").resolve()), g])
                         ok = True
-                if outcome == "penetration_failure":
+                if outcome == "penetration_failure" and not (adir / "bans.json").is_file():
                     sched.run("py", ["frigidaire/scripts/experiment/frigidaire_bench.py", "--ban", rel(adir)], f"{tag}_ban")
                 line = f"[RESULT] {'PASS' if ok else 'REROLL'} gate {outcome}"
             verdicts.append((name, line))
@@ -1236,27 +1647,47 @@ def ensure_baseline(sched, out=OUT):
 
 # --------------------------------------------------------------------------- tables
 
-ALGORITHMS = ("greedy_offline", "rrt_connect", "planner", "baseline")
+# One row per Isaac episode, no copies (2026-09-28): track A compares the executors given the sampled goal, track B
+# the algorithms that choose their own load. (Until then the planner/baseline shared one goal-track run and the
+# Bosch pair's goal-track runs were re-scored as open rows: half of each table was the other table.)
+TRACK_ALGORITHMS = {"goal": ("greedy_offline", "rrt_connect"), "open": ("baseline", "mcts")}   # planner -> mcts 2026-09-29
+ALGORITHMS = tuple(dict.fromkeys(a for t in TRACK_ALGORITHMS.values() for a in t))
+
+
+def failure_of(rec):
+    """Why a row is not a success, in priority order: a fatal abort, then the end-check outcome, then (open
+    track) a pooling dish in the final load, then (goal track) the goal not reached. None for a success."""
+    abort = rec.get("abort")
+    if abort not in (None, "give-up"):                     # an open-track replay "gives up" when its plan ends
+        return abort
+    end = (rec.get("end_check") or {}).get("outcome")
+    if end != "accepted":
+        return end or "no-end-check"
+    if rec["track"] == "open" and rec.get("feasible_final") is False:
+        return "pooling"
+    if rec["track"] == "goal" and not rec.get("solved"):
+        return "give-up" if abort == "give-up" else "not-solved"
+    return None
 
 
 def episode_rows(out=OUT):
-    """Every table row's episode, per track: the 5 Isaac episodes of an instance fill 8 rows -- on track A the
-    planner and the baseline are the same fixed-goal sequencer (one run), and on track B the Bosch pair's input
-    is the sampled goal, so their track-A runs are scored again as open-track rows (success = all racked)."""
+    """Every table row's episode record (+ S_final, feasible_final from its analysis), per track. Track-B success
+    additionally needs a pooling-free final load (the puddle rule of the score; the pilot's only open-track
+    'success' left two bowls holding water)."""
     rows = {"goal": [], "open": []}
     for path in sorted((Path(out) / "episodes").glob("*/*/*.json")):
         if path.parent.parent.name not in rows or path.name.endswith(".analysis.json"):
             continue
         rec = json.loads(path.read_text())
+        if rec["algorithm"] not in TRACK_ALGORITHMS[rec["track"]]:
+            continue
         analysis = path.with_suffix(".analysis.json")
-        rec["S_final"] = json.loads(analysis.read_text())["S_final"] if analysis.is_file() else None
+        a = json.loads(analysis.read_text()) if analysis.is_file() else {}
+        rec["S_final"], rec["feasible_final"] = a.get("S_final"), a.get("feasible_final")
         rec["source_episode"] = f"{rec['track']}/{rec['tier']}/{path.stem}"
+        rec["failure"] = failure_of(rec)
+        rec["success"] = rec["failure"] is None
         rows[rec["track"]].append(rec)
-        if rec["track"] == "goal" and rec["algorithm"] == "planner":
-            rows["goal"].append({**rec, "algorithm": "baseline", "shared_from": "planner"})
-        if rec["track"] == "goal" and rec["algorithm"] in ("greedy_offline", "rrt_connect"):
-            rows["open"].append({**rec, "track": "open", "shared_from": "goal track",
-                                 "success": rec["end_check"].get("outcome") == "accepted"})
     return rows
 
 
@@ -1267,9 +1698,7 @@ def summarize(recs):
     ratios = [r["S_final"] / r["S_ref"] for r in ok if r.get("S_final") is not None and r.get("S_ref")]
     aborts = {}
     for r in recs:
-        if r["success"]:                                     # an open-track replay "gives up" when its plan ends
-            continue
-        a = r.get("abort") or r.get("end_check", {}).get("outcome")
+        a = r.get("failure") if "failure" in r else failure_of(r)
         if a:
             aborts[a] = aborts.get(a, 0) + 1
     mean = lambda v: float(np.mean(v)) if v else None
@@ -1282,18 +1711,18 @@ def summarize(recs):
 def collect(out=OUT):
     """The two result tables (tier x algorithm per track) as summary.json and summary.md."""
     rows = episode_rows(out)
-    table = {track: [{"tier": tier, "algorithm": algo, "shared_from": next((r.get("shared_from") for r in g if r.get("shared_from")), None),
-                      **summarize(g)}
-                     for tier in TIERS for algo in ALGORITHMS
+    table = {track: [{"tier": tier, "algorithm": algo, **summarize(g)}
+                     for tier in TIERS for algo in TRACK_ALGORITHMS[track]
                      for g in [[r for r in rows[track] if r["tier"] == tier and r["algorithm"] == algo]] if g]
              for track in ("goal", "open")}
     f = lambda v, d=1: "-" if v is None else f"{v:.{d}f}"
     lines = []
-    for track, title in (("goal", "Track A: reach the sampled goal"), ("open", "Track B: open (every dish racked, scored by S)")):
-        lines += [f"## {title}", "", "| tier | algorithm | success | moves | gap | planning s (wall / CPU) | S | S / S_ref | aborts |",
+    for track, title in (("goal", "Track A: reach the sampled goal"),
+                         ("open", "Track B: open (every dish racked, no dish pooling, scored by S)")):
+        lines += [f"## {title}", "", "| tier | algorithm | success | moves | gap | planning s (wall / CPU) | S | S / S_ref | failures |",
                   "|---|---|---|---|---|---|---|---|---|"]
         for t in table[track]:
-            lines.append(f"| {t['tier']} | {t['algorithm']}{' (shared run)' if t['shared_from'] else ''} | {t['solved']}/{t['n']} | "
+            lines.append(f"| {t['tier']} | {t['algorithm']} | {t['solved']}/{t['n']} | "
                          f"{f(t['moves'])} | {f(t['gap'])} | {f(t['planning_wall_s'])} / {f(t['planning_cpu_s'])} | "
                          f"{f(t['S_final'], 3)} | {f(t['S_over_S_ref'], 3)} | "
                          f"{', '.join(f'{k} {v}' for k, v in sorted(t['aborts'].items())) or '-'} |")
@@ -1311,15 +1740,25 @@ def main(argv=None):
     ap.add_argument("--capacity", action="store_true", help="gate G2: first-fit racks 8, 16 and 24 dishes")
     ap.add_argument("--goal", type=Path, metavar="ATTEMPT_DIR")
     ap.add_argument("--finalize", type=Path, metavar="ATTEMPT_DIR")
-    ap.add_argument("--plan", type=Path, metavar="INSTANCE")
+    ap.add_argument("--plan", type=Path, metavar="INSTANCE", help="one open-track plan attempt (--algorithm, --attempt)")
+    ap.add_argument("--algorithm", choices=TRACK_ALGORITHMS["open"], nargs="*", default=list(TRACK_ALGORITHMS["open"]))
+    ap.add_argument("--attempt", type=int, default=0)
+    ap.add_argument("--resequence", type=Path, metavar="PLAN", help="certified own load -> final open-track plan (needs --instance)")
+    ap.add_argument("--instance", type=Path)
+    ap.add_argument("--final", action="store_true", help="--resequence: record a failed certification as the plan")
+    ap.add_argument("--ban-plan", type=Path, metavar="PLAN", help="ban the pose/pair a failed --sequence-plan build blamed")
     ap.add_argument("--analyze", type=Path, metavar="EPISODE", help="score detail of one episode record (+ figure)")
     ap.add_argument("--ban", type=Path, metavar="ATTEMPT_DIR", help="ban the pair that penetrated in a failed goal gate")
     ap.add_argument("--reorder", type=Path, metavar="INSTANCE", help="upgrade an instance's goal order (neighbour order)")
     ap.add_argument("--collect", action="store_true")
+    ap.add_argument("--full", action="store_true",
+                    help="host: every instance end to end (generate -> plans -> episodes -> analysis) through one scheduler, "
+                         "chains overlapping; videos for the first seed of each tier; then --collect")
     ap.add_argument("--generate", action="store_true", help="host: generate instances (parallel)")
     ap.add_argument("--plan-all", action="store_true", help="host: open-track plans for every instance (parallel)")
     ap.add_argument("--run-all", action="store_true", help="host: episodes for every instance (parallel)")
     ap.add_argument("--analyze-all", action="store_true", help="host: score detail of every episode record (parallel)")
+    ap.add_argument("--video-seed", type=int, default=0, help="--full: the seed whose episodes get stop-motion videos")
     ap.add_argument("--videos", action="store_true", help="host: stop-motion videos of the first instance per tier (parallel)")
     ap.add_argument("--tiers", nargs="*", default=list(TIERS))
     ap.add_argument("--seeds", nargs="*", type=int, default=[0])
@@ -1327,7 +1766,16 @@ def main(argv=None):
     ap.add_argument("--kit-jobs", type=int, default=3)
     ap.add_argument("--py-jobs", type=int, default=2)
     ap.add_argument("--cameras", action="store_true", help="--run-all: render the initial/finished/goal stills")
+    ap.add_argument("--kit-cores", nargs="*", default=None, help='host: Kit core sets (a partition next to another scheduler; '
+                    'total Kit jobs on GPU 1 stay <= 3), e.g. "0-7" "8-15"')
+    ap.add_argument("--py-cores", nargs="*", default=None, help='host: Kit-free core sets, e.g. "24-27"')
     args = ap.parse_args(argv)
+    global KIT_CORES, PY_CORES
+    if args.kit_cores:
+        KIT_CORES = tuple(args.kit_cores)
+    if args.py_cores:
+        PY_CORES = tuple(args.py_cores)
+    args.kit_jobs, args.py_jobs = min(args.kit_jobs, len(KIT_CORES)), min(args.py_jobs, len(PY_CORES))
     if args.capacity:
         return 0 if capacity() else 1
     if args.goal:
@@ -1335,7 +1783,13 @@ def main(argv=None):
     if args.finalize:
         return stage_finalize(args.finalize)
     if args.plan:
-        return stage_plan(args.plan)
+        return stage_plan(args.plan, algorithms=args.algorithm, attempt=args.attempt)
+    if args.resequence:
+        if not args.instance:
+            raise SystemExit("[RESULT] FAIL --resequence needs --instance")
+        return stage_resequence(args.resequence, args.instance, final=args.final)
+    if args.ban_plan:
+        return stage_ban_plan(args.ban_plan)
     if args.analyze:
         return stage_analyze(args.analyze)
     if args.ban:
@@ -1369,6 +1823,22 @@ def main(argv=None):
         print("\n".join(f"{e.parent.parent.name}/{e.stem}: {r}" for (_, e), r in zip(eps, res)), flush=True)
         print(f"[RESULT] {'PASS' if eps and all('PASS' in r for r in res) else 'FAIL'} videos ({len(eps)})", flush=True)
         return 0
+    if args.full:
+        sched = Scheduler(args.kit_jobs, args.py_jobs)
+        if not ensure_baseline(sched):
+            print("[RESULT] FAIL empty baseline", flush=True)
+            return 1
+        units = [(t, s) for s in args.seeds for t in args.tiers]          # seed-major: the first seed of every tier completes first
+        res = orchestrate(units, lambda u: full_unit(sched, u[0], u[1], args.max_attempts, cameras=True, video=u[1] == args.video_seed),
+                          jobs=args.kit_jobs + args.py_jobs)
+        for r in res:
+            print(f"{r['tier']}_s{r['seed']}: {r['result']} {json.dumps(r['stages'])}", flush=True)
+        try:
+            collect()
+        except Exception as exc:                              # a root-owned compare/ from an older run: rerun --collect in the container
+            print(f"[INFO] collect failed ({exc}); run --collect inside the container", flush=True)
+        print(f"[RESULT] {'PASS' if all(r['result'] == 'complete' for r in res) else 'FAIL'} full ({len(res)} instances)", flush=True)
+        return 0
     if args.generate or args.plan_all or args.run_all:
         sched = Scheduler(args.kit_jobs, args.py_jobs)
         if args.generate:
@@ -1383,8 +1853,7 @@ def main(argv=None):
         paths = sorted(p for t in args.tiers for p in (OUT / "instances" / t).glob(f"{t}_s*.json")
                        if int(p.stem.split("_s")[1]) in args.seeds)
         if args.plan_all:
-            res = orchestrate(paths, lambda p: sched.run("py", ["frigidaire/scripts/experiment/frigidaire_bench.py", "--plan", rel(p)],
-                                                         f"plan_{p.stem}"), jobs=args.py_jobs)
+            res = orchestrate(paths, lambda p: plan_unit(sched, p), jobs=args.kit_jobs + args.py_jobs)
         else:
             extra = ["--enable_cameras"] if args.cameras else []
             res = orchestrate(paths, lambda p: sched.run("kit", ["frigidaire/scripts/experiment/frigidaire_bench_kit.py", "--run",

@@ -87,7 +87,7 @@ def measurements(component):
                     "right": float(rim_max[0] - xs[-1]),
                     "rear": float(rim_max[1] - ys[-1]),
                     "front": float(ys[0] - rim_min[1])},
-        "margin_status": "derived from the outer rim, column pitch, tine count and pitch; not tape-measured",
+        "margin_status": "front margin as tape-measured (2026-09-28); side and rear margins are the rim's leftover after the tape column gaps and pitch",
         "derived_margins_mm": {"side": p["tine_side_margin"] * 1000,
                                "front": p["tine_front_margin"] * 1000,
                                "rear": p["tine_rear_margin"] * 1000},
@@ -195,13 +195,13 @@ def overhead(component, report, bases, rim_min, rim_max, out_dir):
         ax.plot([-336, rim_min[0] - 8], [y, y], color=PALE, lw=.7)
     tape = report["user_margins_tape_mm"]
     for a, b in [(rim_min[0], xs[0]), (xs[-1], rim_max[0])]:
-        dimension(ax, (a, -214), (b, -214), "%.2f mm\n(derived; tape %g)" % (b - a, tape["side"]))
+        dimension(ax, (a, -214), (b, -214), "%.2f mm\n(leftover; tape %g)" % (b - a, tape["side"]))
     for y in [rim_min[1], ys[0], ys[-1], rim_max[1]]:
         ax.plot([rim_max[0] + 8, 303], [y, y], color=PALE, lw=.7)
     dimension(ax, (291, rim_min[1]), (291, ys[0]),
-              "%.2f mm front (derived; tape %g)" % (report["margins"]["front"], tape["front"]), rotation=90)
+              "%.2f mm front (tape)" % report["margins"]["front"], rotation=90)
     dimension(ax, (291, ys[-1]), (291, rim_max[1]),
-              "%.2f mm rear (derived; tape %g)" % (report["margins"]["rear"], tape["rear"]), (22, 0), rotation=90)
+              "%.2f mm rear (leftover; tape %g)" % (report["margins"]["rear"], tape["rear"]), (22, 0), rotation=90)
     pitch_i = len(ys) // 2
     dimension(ax, (200, ys[pitch_i - 1]), (200, ys[pitch_i]),
               "%g mm pitch" % (ys[pitch_i] - ys[pitch_i - 1]), (54, 0))
@@ -216,7 +216,7 @@ def overhead(component, report, bases, rim_min, rim_max, out_dir):
         report["columns_left_to_right"], report["positions_front_to_back"],
         report["tine_count"], len(report["absent_positions"])), fontsize=12, color=MUTED, va="top")
     fig.text(.065, .063, "All dimensions: mm. Margins: tine base center to outer wire-rim edge, "
-             "derived from the tape outer size, counts and pitch (tape margins in brackets).",
+             "front margin, column gaps and pitch as taped; side and rear margins are the rim's leftover (tape in brackets).",
              fontsize=9, color=INK)
     fig.text(.065, .042, "Generated wire paths and authored wheel solids · source geometry preview · no Isaac validation",
              fontsize=8, color=MUTED)

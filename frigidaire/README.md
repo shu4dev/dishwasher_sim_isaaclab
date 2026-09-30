@@ -7,9 +7,11 @@ belong with that collection.
 
 The current source combines the tape-measured **48-tine upper rack**, **64-tine lower
 rack** and **1x4 basket** (320 x 95 x 130 mm body, 220 mm handle, seated rear-right)
-with the complete dishwasher (revisions `upper_tines_4x13_v4`, `lower_tines_6x12_v3`,
-`basket_1x4_320x95_v4`, 2026-09-23; heights measured outside, bottom to top). See [geometry and dimensions](docs/geometry.md).
-The photo-fitted build is archived as `build/frigidaire_collection/history/v3` and the first tape build as `history/v4`;
+with the complete dishwasher (revisions `upper_tines_4x13_v5`, `lower_tines_6x12_v4`,
+`basket_1x4_320x95_v4`; racks re-measured 2026-09-28 with non-uniform column and row gaps, heights measured
+outside, bottom to top). See [geometry and dimensions](docs/geometry.md).
+The photo-fitted build is archived as `build/frigidaire_collection/history/v3`, the first tape build as `history/v4`
+and the 2026-09-23 outside-height build as `history/v5`;
 older loading results describe older geometry and are preserved in the collection's
 `history/` directories.
 
@@ -18,29 +20,26 @@ older loading results describe older geometry and are preserved in the collectio
 The organized collection is staged at
 [build/frigidaire_collection](../build/frigidaire_collection/README.md), with the
 supplied references, regenerated rack diagrams, manufacturer dimension image,
-and checksum-verified v1 to v4 history. Source and host checks have run.
+and checksum-verified v1 to v5 history. Source and host checks have run.
 
 The current USD assembly and tableware are built in the stage's `usd/` directory,
-and the Isaac runtime is accessible. The single-dish random-pose experiment
-completed all **600 proposals**, with **176 accepted drops (29.3%)**, two
-numerically unresolved trials and none untested. The saved physics-evidence and
-geometry audits pass all 176 accepted records; 168 meet zero-tolerance containment.
-See the [experiment report](../results/random_poses/frigidaire/complete_20260910_seed0/experiment_report.md)
-and [protocol and results](docs/random_pose_experiment.md).
+and the Isaac runtime is accessible. The v3-era single-dish random-pose experiment
+(600 proposals, 176 accepted drops) was retired on 2026-09-29 with the other v3-era experiments
+(see "Retired experiments" below); its numbers were measured on the v3 photo-fitted racks,
+archived on 2026-09-22 under `history/v3`, and are stale for the tape-measured racks.
 Assembly-wide physics/render evidence, the release archive and final installation
 are separate delivery gates. The read-only package check reports the remaining
 requirements explicitly; the random-pose experiment does not certify a full release.
-Those random-pose numbers were measured on the v3 photo-fitted racks, archived on
-2026-09-22 under `history/v3`; they are stale for the tape-measured racks.
 
 ## Source layout and API
 
 - `src/dishsim_frigidaire/`: geometry, USD authoring/loading, optional dish-loading
   utilities, candidate data and canonical collection paths.
 - `scripts/setup/`: stage references/history, build USD and package the collection.
-- `scripts/evaluation/`: rack diagrams, geometry clearance, USD inspection,
-  assembly evidence and retained loading diagnostics.
-- `scripts/experiment/`: scripted/passive appliance demonstration.
+- `scripts/evaluation/`: rack diagrams, geometry clearance, USD inspection, assembly
+  and claims evidence, HOTEC loads and top-5 loads, the benchmark results page.
+- `scripts/experiment/`: scripted/passive appliance demonstration, the HOTEC benchmark
+  (`frigidaire_bench*.py`), the Isaac gate and the robot episode.
 - `tests/`: Frigidaire tests, discovered by the repository pytest configuration.
 - `docs/`: current geometry notes, collection README template and historical notes.
 
@@ -123,45 +122,16 @@ root into the new `usd/` directory; its `full_load*` files and capacity reports
 belong in `history/`. The single asset archive contains images and references;
 there is no separate current gallery product.
 
-## Random dish pose experiment
+## Retired experiments (2026-09-29)
 
-Stale (2026-09-22): this experiment ran on the v3 racks and basket; its records carry the
-v3 usdc hashes and have not been regenerated on the tape-measured v4 geometry.
-
-The [random dish pose experiment](docs/random_pose_experiment.md) independently
-samples a dinner plate, bowl and mug in both racks, allows settling, and measures
-physical rack retraction. On 2026-09-10 the seed-0 scan completed **100 raw
-proposals per combination, 600 total**, after continuing the 30-minute pilot.
-It recorded **176 accepted drops (29.3%)**, two numerically unresolved bowl
-trials and no untested proposals. Accepted lower/upper counts were 15/10 for
-plates, 44/32 for bowls and 46/29 for mugs. These are sampled drops, not distinct
-arrangements or a count of all possible poses.
-
-Read the [experiment report](../results/random_poses/frigidaire/complete_20260910_seed0/experiment_report.md),
-view [accepted-pose examples](../results/random_poses/frigidaire/complete_20260910_seed0/accepted_pose_examples.png),
-or use the [accepted replay records](../results/random_poses/frigidaire/complete_20260910_seed0/accepted_poses.json).
-The [saved-evidence analysis](../results/random_poses/frigidaire/complete_20260910_seed0/analysis.md)
-and [geometry audit](../results/random_poses/frigidaire/complete_20260910_seed0/independent_geometry_audit.json)
-both pass all 176 accepted records. Of these, **168 meet strict containment** in
-both world and measured Cabinet coordinates; eight rely on the protocol's 1 mm
-numerical tolerance. The two unresolved bowls had excessive settled contact
-penetration before retraction began; they do not establish physical infeasibility.
-Saved status `complete` means the scan finished, while `[RESULT] INCOMPLETE`
-retains the unresolved numerical evidence.
-
-The continuation took 44.8 minutes, with 74.8 minutes cumulative wall time. Its
-provenance audit verifies 260 unchanged inherited records and 340 new evaluations.
-There were 601 cumulative evaluation attempts because the pilot's interrupted
-proposal was retried at its original pose and accepted. The
-[prior pilot report](../results/random_poses/frigidaire/pilot_20260910_seed0/experiment_report.md)
-remains unchanged as history: 82 accepted out of 261 proposals, 339 untested and
-one interrupted. The separate smoke accepted 3/6 proposals. Neither prior result
-should be added to the completed scan's counts.
-
-The [experiment documentation](docs/random_pose_experiment.md#read-the-results)
-contains the complete finalized-run reporting, geometry-audit, visualization and
-verified packaging pipeline, along with launch commands, acceptance gates,
-runtime versions and replay conventions.
+The v3-era experiments (single-dish random poses, multi-dish packing, organized counterparts, exposure
+demos, the pool-search planner) ran on the v3 photo-fitted racks and were retired on 2026-09-29: their
+scripts, tests and protocol docs are in git history (last present at commit 4455813) and their result
+folders wait in `dishsim/_trash_20260929/` until 2026-10-29 (`MANIFEST.txt` inside; undo = `mv` back).
+Their headline numbers (600 random-pose proposals with 176 accepted, packing loads up to 35 dishes,
+7 of 11 organized inventories) are history and were never regenerated on the tape-measured racks.
+Modules that keep v3-sounding names are live: `random_pose_{experiment,runtime,assets}.py`,
+`initial_state_runtime.py`, `initial_state_candidates.py` (collision checker only), `organization.py`.
 
 ## Tests without Isaac
 
@@ -179,10 +149,13 @@ paths and loading certifications are historical context.
 
 ## Exposure scorer
 
-`src/dishsim_frigidaire/exposure.py` and `scripts/evaluation/frigidaire_exposure_*.py` score
-arrangements of the same objects by ray-cast exposure of food-contact surfaces to the spray
-arms (Kit-free, Warp on the CPU). Reference: [docs/exposure.md](docs/exposure.md); quickstart:
-[docs/exposure_quickstart.md](docs/exposure_quickstart.md). Results under
-`results/exposure/frigidaire/`.
+`src/dishsim_frigidaire/exposure.py` scores arrangements of the same objects by ray-cast exposure of
+food-contact surfaces to the spray arms (Kit-free, Warp on the CPU); the HOTEC benchmark and the
+top-5 loads use it. The demo/search/summary scripts and their v3-rack results were retired
+2026-09-29. Reference: [docs/exposure.md](docs/exposure.md); quickstart:
+[docs/exposure_quickstart.md](docs/exposure_quickstart.md). Live results (pre-2026-09-28 racks, history):
+`results/exposure/frigidaire/{hotec,hotec_heightfix}`.
 
-Arrangement planner over the exposure objective (messy counter + unorganized racks -> best-exposure load): [docs/planner.md](docs/planner.md).
+Planner helpers used by the HOTEC benchmark (FCL world, support gate, sequencer): [docs/planner.md](docs/planner.md);
+the pool-search planner was retired 2026-09-29. Benchmark: [docs/hotec_bench.md](docs/hotec_bench.md);
+geometry: [docs/geometry.md](docs/geometry.md); robot bring-up (in progress): [docs/robot.md](docs/robot.md).

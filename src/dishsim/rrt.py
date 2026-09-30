@@ -52,13 +52,14 @@ def _same_pose(Ta, Tb, tol=1e-6):
 
 
 class _Node:
-    __slots__ = ("poses", "parent", "move", "cost")
+    __slots__ = ("poses", "parent", "move", "cost", "codes")
 
     def __init__(self, poses, parent=None, move=None, cost=0):
         self.poses = poses          # {item_id: T (4x4)} — commanded poses
         self.parent = parent
         self.move = move            # (item_id, T) that produced this node
         self.cost = cost
+        self.codes = None           # int32 per item: which candidate pose (nearest-neighbour matrix row)
 
 
 class RRT:
@@ -82,6 +83,8 @@ class RRT:
         self.candidates = self._candidates(instance, world)
         self.plan: list = []
         self.expected: tuple | None = None  # (item_id, T) of the last returned move
+        self._codes: dict = {}              # (item, quantized position) -> small int, for the NN matrix
+        self._mats: dict = {}               # id(tree) -> [int32 matrix (capacity x items), rows filled]
 
     def next_move(self, obs):
         from .rearrange import MOVE_DEV_MAX_M, Move  # local: avoids an import cycle
@@ -163,24 +166,61 @@ class RRT:
         return not self.world.move_collides(item, T_dest,
                                             object_class=self.cls_of[item])
 
-    def _extend(self, tree, keys, sample, goal, counter_cap):
+    # ---- nearest neighbour: one int per (item, pose), a matrix per tree ------------------
+    def _codes_of(self, poses):
+        out = np.empty(len(self.items), dtype=np.int32)
+        for n, i in enumerate(self.items):
+            k = (i, tuple(np.round(_pos(poses[i]) / 1e-4).astype(np.int64)))   # _same_pose(tol=1e-4)
+            c = self._codes.get(k)
+            if c is None:
+                c = self._codes[k] = len(self._codes)
+            out[n] = c
+        return out
+
+    def _matrix(self, tree):
+        """The tree's code matrix (rows = nodes, in tree order), grown in place as the tree grows."""
+        mat, filled = self._mats.get(id(tree), (None, 0))
+        if mat is None or len(tree) > len(mat):
+            grown = np.empty((max(64, 2 * len(tree)), len(self.items)), dtype=np.int32)
+            if mat is not None:
+                grown[:filled] = mat[:filled]
+            mat = grown
+        for r in range(filled, len(tree)):
+            node = tree[r]
+            if node.codes is None:
+                node.codes = self._codes_of(node.poses)
+            mat[r] = node.codes
+        self._mats[id(tree)] = (mat, len(tree))
+        return mat[:len(tree)]
+
+    def _extend(self, tree, keys, sample, goal, counter_cap, reverse=False):
         """One extend toward ``sample``: nearest node by differing-item count, move one
-        differing item to its sampled pose. Returns the new node or None."""
+        differing item to its sampled pose. Returns the new node or None.
+
+        ``reverse``: the tree grows from the GOAL and its edges replay backwards (an edge that
+        moved ``item`` from P to Q replays as Q -> P), so feasibility is judged on the
+        replayed move: from the child arrangement, ``item`` back to its pose in the parent.
+        That is where the counter cap, the support rule and the goal-order constraints bite.
+        (Before 2026-09-28 both trees were checked forwards, so the goal tree could put more
+        dishes on the counter than the cap allows and command a dish's goal before the
+        dishes it leans on were home: hard_s0's rrt_connect burnt its 60 s and gave up.)"""
         self._stats["extends"] += 1
-        best, best_d = None, None
-        for node in tree:
-            d = len(self._diff(node.poses, sample))
-            if best_d is None or d < best_d:
-                best, best_d = node, d
-        if best is None or best_d == 0:
+        if not tree:
+            return None
+        d = (self._matrix(tree) != self._codes_of(sample)[None, :]).sum(axis=1)   # differing items per node
+        r = int(np.argmin(d))
+        best, best_d = tree[r], int(d[r])
+        if best_d == 0:
             return None
         diff = self._diff(best.poses, sample)
         order = [diff[k] for k in self.rng.permutation(len(diff))[:EXTEND_TRIES]]
         for item in order:
             T_dest = sample[item]
-            if self._move_ok(best.poses, item, T_dest, counter_cap):
-                child_poses = dict(best.poses)
-                child_poses[item] = np.asarray(T_dest)
+            child_poses = dict(best.poses)
+            child_poses[item] = np.asarray(T_dest)
+            ok = (self._move_ok(child_poses, item, best.poses[item], counter_cap) if reverse
+                  else self._move_ok(best.poses, item, T_dest, counter_cap))
+            if ok:
                 key = self._key(child_poses)
                 if key in keys:
                     continue
@@ -257,13 +297,13 @@ class RRTConnect(RRT):
         for _ in range(MAX_ITERS):
             if time.perf_counter() > deadline:
                 return None
-            new = self._extend(a, keys_a, self._sample(), self.goal, counter_cap)
+            new = self._extend(a, keys_a, self._sample(), self.goal, counter_cap, reverse=not a_is_start)
             if new is not None:
                 # CONNECT: greedily extend the other tree toward the new arrangement
                 while True:
                     if time.perf_counter() > deadline:
                         return None
-                    got = self._extend(b, keys_b, new.poses, self.goal, counter_cap)
+                    got = self._extend(b, keys_b, new.poses, self.goal, counter_cap, reverse=a_is_start)
                     if got is None:
                         break
                     if not self._diff(got.poses, new.poses):

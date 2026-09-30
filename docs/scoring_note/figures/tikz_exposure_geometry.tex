@@ -1,0 +1,36 @@
+% Fig. 2 (c): one dot and lines to 8 of the K spray points, side view: open, blocked, behind.
+% Hand-computed (cm): n_j at -20 deg; lines start at s_j = p_j + eps n_j (eps exaggerated, 0.35);
+% tangent plane through p_j meets the disc at x = -0.6, so points at x <= -1.0 are behind;
+% the neighboring dish (x = 1.4..1.6, z = 0.6..3.0) blocks the lines to x = 1.9 and 2.6
+% at z = 0.759 and 1.205.
+\begin{tikzpicture}[x=1cm,y=1cm,>={Stealth[length=4pt]},font=\footnotesize]
+  % tangent plane of the dot
+  \draw[gray,dashed] (-0.6,0) -- (0.542,3.14);
+  \node[gray,anchor=south,font=\scriptsize] at (0.62,3.12) {tangent plane};
+  % blocker: a neighboring dish
+  \draw[fill=orange!25,draw=orange!60!black,rounded corners=1pt] (1.4,0.6) rectangle (1.6,3.0);
+  \node[anchor=west] at (1.62,2.75) {$\mathcal{G}(X)$};
+  \node[anchor=west,font=\scriptsize,align=left] at (1.62,2.3) {(a neighboring\\ dish)};
+  % behind the tangent plane: gamma = 0
+  \foreach \x in {-2.6,-1.8,-1.0} \draw[gray!70,densely dotted,thick] (0.529,2.080) -- (\x,0);
+  % open lines: v = 1
+  \foreach \x in {0.0,0.6,1.2} \draw[blue!60!black,thick] (0.529,2.080) -- (\x,0);
+  % blocked lines: v = 0, drawn up to the hit
+  \draw[red!70!black,thick,dashed] (0.529,2.080) -- (1.4,0.759);
+  \draw[red!70!black,thick,dashed] (0.529,2.080) -- (1.4,1.205);
+  \fill[red!70!black] (1.4,0.759) circle (1.3pt);
+  \fill[red!70!black] (1.4,1.205) circle (1.3pt);
+  % disc, edge-on, with its spray points
+  \draw[line width=1.6pt,blue!60!black] (-2.9,0) -- (2.9,0);
+  \foreach \x in {-2.6,-1.8,-1.0,0.0,0.6,1.2,1.9,2.6} \fill[blue!60!black] (\x,0) circle (1.6pt);
+  \node[anchor=south west] at (-2.95,0.08) {$\mathcal{D}_a$};
+  \node[gray!60!black,font=\scriptsize] at (-1.8,-0.32) {$\gamma_{jk}=0$};
+  \node[blue!60!black,font=\scriptsize] at (0.6,-0.32) {$v_{jk}=1$};
+  \node[red!70!black,font=\scriptsize] at (2.25,-0.32) {$v_{jk}=0$};
+  % surface patch, dot, normal
+  \draw[line width=2.4pt,brown!70!black] (-0.074,1.448) -- (0.474,2.952);
+  \fill (0.2,2.2) circle (1.5pt);
+  \node[anchor=east] at (0.05,2.32) {$\vp_j$};
+  \draw[->,thick] (0.2,2.2) -- (1.093,1.875) node[anchor=south,inner sep=2pt] {$\vn_j$};
+  \fill[white,draw=black] (0.529,2.080) circle (1.2pt);
+\end{tikzpicture}

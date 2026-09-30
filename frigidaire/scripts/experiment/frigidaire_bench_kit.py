@@ -44,8 +44,8 @@ SEQUENCE_BUILDS, SEQUENCE_NEIGHBOUR_M = 8, .15          # sequence gate: rebuild
                                                         # that does not land goes in after its neighbours (< 15 cm)
 BUILD_TICKS = 120                                       # 1 s settle after each dish while the start is built
 DEV_MAX_M = .08                                         # measured HOTEC drops reach 66.5 mm (the Bosch limit is 0.06)
-EPISODES = (("goal", "greedy_offline"), ("goal", "rrt_connect"), ("goal", "planner"),
-            ("open", "planner"), ("open", "baseline"))
+EPISODES = (("goal", "greedy_offline"), ("goal", "rrt_connect"), ("open", "baseline"), ("open", "mcts"))
+# (the goal-track "planner" row, the fixed-goal sequencer, was dropped 2026-09-28: track A compares the executors)
 
 
 def pose_distance(a, b):
@@ -141,14 +141,25 @@ def still(backend, rig, path, title, detail):
 
 # --------------------------------------------------------------------------- --start
 
-def unstack_rehearsal(backend, ids, P, tries_per_step=3):
+def unstack_rehearsal(backend, ids, P, B=None, points=None, kinds=None, tries_per_step=3):
     """Clear the settled start top-down (user, 2026-09-23): repeatedly lift away a dish nothing rests on --
-    dishes resting on another first -- park it off-scene, settle the per-move 150 + 60 ticks and require every
-    remaining dish within the Bosch disturbance gates (10 mm / 20 deg). A removal that disturbs a neighbour is
-    undone (every dish teleported back to the pre-removal state and re-settled, which must reproduce it) and the
-    next free dish is tried, up to ``tries_per_step``: accepted = some clearing order exists. Returns (ok, record)."""
+    dishes resting on another first -- park it off-scene, settle the per-move 150 + 60 ticks and judge the
+    remaining dishes by the EPISODE's rule (2026-09-28): a dish displaced > 10 mm / 20 deg is a recorded nudge
+    unless it leaves the counter band and the racks, which is what would abort an episode ("disturbed"; nothing
+    is at its goal during generation). A removal that disturbs a neighbour is undone (every dish teleported back
+    to the pre-removal state and re-settled, which must reproduce it) and the next free dish is tried, up to
+    ``tries_per_step``: accepted = some clearing order exists. Returns (ok, record). Before, any displaced dish
+    failed the rehearsal, so starts the episode would accept were re-rolled."""
     from dishsim.rearrange import DISTURB_POS_M, DISTURB_ROT_DEG, INIT_MATCH_POS_M, INIT_MATCH_ROT_DEG
-    remaining, order, worst, undone = list(ids), [], (0., 0.), []
+
+    def off_scene(oid, pose):
+        """Left the counter and the racks (the episode's fatal displacement); any displacement when no geometry."""
+        if B is None or points is None or kinds is None:
+            return True
+        now = backend.poses()
+        frames = {r: now[r] for r in ("LowerRack", "UpperRack")}
+        return not P.in_counter_band(P.pose_T(pose), B.COUNTER) and B.racked_in(points[kinds[oid]], pose, frames) is None
+    remaining, order, worst, undone, nudged = list(ids), [], (0., 0.), [], []
     for step in range(len(ids)):
         snap = backend.snapshot()
         support = P.support_edges(sorted(backend.latest_contact["pairs"]), snap["poses"], remaining)
@@ -164,9 +175,12 @@ def unstack_rehearsal(backend, ids, P, tries_per_step=3):
                 backend.tick()
             post = backend.poses()
             moved = {i: pose_distance(pre[i], post[i]) for i in pre if i != oid}
-            bad = sorted(i for i, (dp, dr) in moved.items() if dp > DISTURB_POS_M or dr > DISTURB_ROT_DEG)
+            displaced = sorted(i for i, (dp, dr) in moved.items() if dp > DISTURB_POS_M or dr > DISTURB_ROT_DEG)
+            bad = [i for i in displaced if off_scene(i, post[i])]
             top = max(moved.values(), key=lambda d: d[0] + d[1] / 2000, default=(0., 0.))
             if not bad:
+                nudged += [{"step": step, "lifted": oid, "nudged": i, "mm": round(moved[i][0] * 1e3, 1), "deg": round(moved[i][1], 1)}
+                           for i in displaced]
                 break
             undone.append({"step": step, "lifted": oid, "disturbed": bad, "max_mm": round(max(moved[i][0] for i in bad) * 1e3, 1)})
             for i in remaining:                          # undo: the whole pre-removal state, then re-settle
@@ -185,7 +199,8 @@ def unstack_rehearsal(backend, ids, P, tries_per_step=3):
         order.append({"removed": oid, "was_resting": oid in supported, "max_neighbour_mm": round(top[0] * 1e3, 1),
                       "max_neighbour_deg": round(top[1], 1)})
         remaining.remove(oid)
-    return True, {"order": order, "undone": undone, "max_neighbour_mm": round(worst[0] * 1e3, 1), "max_neighbour_deg": round(worst[1], 1)}
+    return True, {"order": order, "undone": undone, "nudged": nudged, "rule": "episode: displaced and off the counter/racks",
+                  "max_neighbour_mm": round(worst[0] * 1e3, 1), "max_neighbour_deg": round(worst[1], 1)}
 
 
 def start(args, B, report):
@@ -390,7 +405,7 @@ def start(args, B, report):
         report.update(result="REROLL", reason=f"{band} dishes in the counter band, drew n = {n}")
         return
     support = P.support_edges(snap["contact_pairs"], snap["poses"], [o["object_id"] for o in objects])
-    ok, unstack = unstack_rehearsal(backend, [oid for oid, _ in ids], P)     # mutates the scene: snap is kept above
+    ok, unstack = unstack_rehearsal(backend, [oid for oid, _ in ids], P, B, points, kinds)   # mutates the scene: snap kept above
     report["unstack"] = unstack
     if not ok:
         report.update(result="REROLL", reason=f"unstack rehearsal: {unstack['reason']}")
@@ -416,35 +431,20 @@ def start(args, B, report):
 
 # --------------------------------------------------------------------------- --sequence
 
-def sequence_gate(args, B, report):
-    """Build the goal in Isaac one dish at a time, lowest centre first (a valid order for "rests on"), each at its
-    jointly settled pose + the goal hover and settled like a move (150 + 60 ticks): every dish must land within the
-    at-goal tolerance with < 2 mm contact depth, and no dish already placed may move > 10 mm / 20 deg. Dense HOTEC
-    loads lean on each other (shingled plates, tilted upper bowls), so "any order" is impossible (a solo-clearance
-    rule banned the standard upper bowl pair and adjacent plates); this certifies ONE order. The built poses become
-    the targets, and their support edges become the goal-order constraints the planners see."""
+def build_sequence(backend, B, P, by_id, targets, centroids, landing):
+    """Build a load in Isaac one dish at a time, lowest centre first (a valid order for "rests on"), each commanded
+    at its target pose + the goal hover and settled like a move (150 + 60 ticks): every dish must pass ``landing``
+    (the goal: within the at-goal tolerance of its jointly settled pose; an own load: within the episode's settle
+    deviation of its commanded pose), with < 2 mm contact depth, and no dish already placed may move
+    > 10 mm / 20 deg. Dense HOTEC loads lean on each other (shingled plates, tilted upper bowls), so "any order" is
+    impossible (a solo-clearance rule banned the standard upper bowl pair and adjacent plates); this certifies ONE
+    order. The built poses become the targets, and their support edges become the goal-order constraints the
+    planners see. ``targets`` = {id: world pose dict}; returns (status, record, bans)."""
     import numpy as np
     from dishsim import rearrange as R
-    from dishsim_frigidaire import planner as P
-    from dishsim_frigidaire.loading import visual_points
     from dishsim_frigidaire.random_poses import LIMITS
-    adir = Path(args.attempt_dir)
-    goal = json.loads((adir / "goal.json").read_text())
-    gate = json.loads((adir / "gate" / "result.json").read_text())
-    start_rec = json.loads((adir / "start.json").read_text())
-    joint = gate["initial_snapshot"]["poses"]
-    points = {kind: visual_points(B.ASSETS / f"{kind}.usda") for kind in B.KINDS}
-    centroids = B.kind_centroids(points)
-    park = {"position_m": [3., 0., .3], "quaternion_xyzw": [0., 0., 0., 1.]}
-    entries = [{"object_id": e["id"], "kind": e["kind"], "rack": e["rack"], "pose_world": park} for e in goal["entries"]]
-    backend, _ = make_backend(args, B, entries, adir / "sequence_scene")
-    if backend.prepare_baseline(start_rec["baseline"])["result"] != "PASS":
-        report.update(result="REROLL", reason="the extended baseline did not hold")
-        return
-    backend.loaded = True
-    by_id = {e["id"]: e for e in goal["entries"]}
-    height = {i: float(joint[i]["position_m"][2]) for i in by_id}
-    centre = {i: np.asarray(joint[i]["position_m"], dtype=float) for i in by_id}
+    height = {i: float(targets[i]["position_m"][2]) for i in by_id}
+    centre = {i: np.asarray(targets[i]["position_m"], dtype=float) for i in by_id}
     near = {i: [j for j in by_id if j != i and by_id[j]["rack"] == by_id[i]["rack"]
                 and float(np.linalg.norm(centre[j] - centre[i])) < SEQUENCE_NEIGHBOUR_M] for i in by_id}
 
@@ -475,7 +475,7 @@ def sequence_gate(args, B, report):
         placed, steps = [], []
         for oid in order:
             e = by_id[oid]
-            T_goal = P.pose_T(joint[oid])
+            T_goal = P.pose_T(targets[oid])
             T_cmd = T_goal.copy()
             T_cmd[2, 3] += B.GOAL_HOVER_M
             pre = {i: P.pose_T(backend.poses()[i]) for i in placed}
@@ -484,13 +484,15 @@ def sequence_gate(args, B, report):
                 backend.tick()
             now = backend.poses()
             dist = B.goal_distance(centroids[e["kind"]], P.pose_T(now[oid]), T_goal)
+            dev = float(np.linalg.norm(np.asarray(now[oid]["position_m"]) - T_cmd[:3, 3]))
             deep = max((d for name, d in backend.latest_contact["depths_m"].items() if oid in name.split("|")), default=0.)
             moved = R.disturbed_items({**pre, oid: T_goal}, {i: P.pose_T(now[i]) for i in [*placed, oid]}, oid)
             steps.append({"id": oid, "lateral_mm": round(dist[0] * 1e3, 1), "dz_mm": round(dist[1] * 1e3, 1),
-                          "tilt_deg": round(dist[2], 1), "contact_mm": round(deep * 1e3, 2), "disturbed": moved})
+                          "tilt_deg": round(dist[2], 1), "settle_dev_mm": round(dev * 1e3, 1),
+                          "contact_mm": round(deep * 1e3, 2), "disturbed": moved})
             if moved:
                 return "moved", oid, moved, steps
-            if not B.within_goal(e["kind"], dist) or deep >= LIMITS["peak_penetration_m"]:
+            if not landing(e["kind"], dist, dev) or deep >= LIMITS["peak_penetration_m"]:
                 return "landing", oid, None, steps
             placed.append(oid)
         return "ok", None, None, steps
@@ -512,7 +514,7 @@ def sequence_gate(args, B, report):
         order = topo(learned)
         if order is None:
             break
-    record = {"builds": builds, "learned": sorted(learned)}
+    record = {"status": status, "builds": builds, "learned": sorted(learned)}
     if status == "ok":
         pairs = set()
         for _ in range(60):                                  # contacts flicker: the union over 0.5 s
@@ -522,9 +524,9 @@ def sequence_gate(args, B, report):
         pos = {i: n for n, i in enumerate(order)}
         contact = [tuple(e) for e in P.support_edges(sorted(pairs), final, order) if pos[e[0]] < pos[e[1]]]
         record.update(order=order, poses_world={oid: final[oid] for oid in order},
-                      goal_order=sorted(set(contact) | learned))
-        report.update(result="PASS", reason=f"built in {len(builds)} build(s), {len(record['goal_order'])} order constraints "
-                                            f"({len(learned)} learned), max lateral {max(s['lateral_mm'] for s in steps)} mm")
+                      goal_order=sorted(set(contact) | learned),
+                      reason=f"built in {len(builds)} build(s), {len(set(contact) | learned)} order constraints "
+                             f"({len(learned)} learned), max lateral {max(s['lateral_mm'] for s in steps)} mm")
     else:
         last = builds[-1]
         e = by_id[last["dish"]] if last["dish"] else None
@@ -532,14 +534,95 @@ def sequence_gate(args, B, report):
             bans += [sorted((B.cand_key(e), B.cand_key(by_id[m]))) for m in last["moved"] if not by_id[m].get("keep") and not e.get("keep")]
         elif e is not None and not e.get("keep"):
             bans.append([B.cand_key(e)])
-        report.update(result="REROLL", reason=f"no order built the goal in {len(builds)} build(s): last {last['status']} "
-                                              f"at {last['dish']} {last['moved'] or ''}")
+        record["reason"] = (f"no order built the load in {len(builds)} build(s): last {last['status']} "
+                            f"at {last['dish']} {last['moved'] or ''}")
+    return status, record, bans
+
+
+def _sequence_scene(args, B, entries, baseline, scene_dir, report):
+    """Every dish parked apart in an extended, empty baseline; None when the baseline does not hold."""
+    park = {"position_m": [3., 0., .3], "quaternion_xyzw": [0., 0., 0., 1.]}
+    backend, _ = make_backend(args, B, [{"object_id": e["id"], "kind": e["kind"], "rack": e["rack"], "pose_world": park}
+                                        for e in entries], scene_dir)
+    if backend.prepare_baseline(baseline)["result"] != "PASS":
+        report.update(result="REROLL", reason="the extended baseline did not hold")
+        return None
+    backend.loaded = True
+    return backend
+
+
+def sequence_gate(args, B, report):
+    """--sequence ATTEMPT_DIR: certify the instance GOAL (the goal gate's jointly settled poses are the targets;
+    landing = the at-goal tolerance). Writes sequence.json and, on failure, the banned poses/pairs (bans.json)."""
+    from dishsim_frigidaire import planner as P
+    from dishsim_frigidaire.loading import visual_points
+    adir = Path(args.attempt_dir)
+    goal = json.loads((adir / "goal.json").read_text())
+    gate = json.loads((adir / "gate" / "result.json").read_text())
+    start_rec = json.loads((adir / "start.json").read_text())
+    joint = gate["initial_snapshot"]["poses"]
+    centroids = B.kind_centroids({kind: visual_points(B.ASSETS / f"{kind}.usda") for kind in B.KINDS})
+    backend = _sequence_scene(args, B, goal["entries"], start_rec["baseline"], adir / "sequence_scene", report)
+    if backend is None:
+        return
+    by_id = {e["id"]: e for e in goal["entries"]}
+    status, record, bans = build_sequence(backend, B, P, by_id, {i: joint[i] for i in by_id}, centroids,
+                                          lambda kind, dist, dev: B.within_goal(kind, dist))
+    report.update(result="PASS" if status == "ok" else "REROLL", reason=record["reason"])
     (adir / "sequence.json").write_text(json.dumps(record, indent=1) + "\n")
     if bans:
         path = adir / "bans.json"
         data = json.loads(path.read_text()) if path.is_file() else {"outcome": "sequence", "pairs": []}
         data["pairs"] += bans
         path.write_text(json.dumps(data, indent=1) + "\n")
+
+
+def sequence_plan(args, B, report):
+    """--sequence-plan PLAN --instance INSTANCE: certify an open-track algorithm's OWN load the way the goal is
+    certified (2026-09-28): its commanded rack-local poses are built one dish at a time in the instance's
+    extended racks; landing = the episode's settle deviation (DEV_MAX_M) and contact depth, since a commanded
+    family pose (lifted up to 60 mm) settles well past the at-goal tolerance. The built poses and the learned
+    order go to <plan>.sequence.json; the Kit-free --resequence stage turns them into the certified plan. Before
+    this, own loads were scored on paper and replayed blind: a plate leaning 24 deg was pulled through a placed
+    neighbour and every medium/hard open-track row failed 'disturbed' (pilot, 2026-09-23)."""
+    from dishsim_frigidaire import planner as P
+    from dishsim_frigidaire.loading import visual_points
+    plan_path = Path(args.sequence_plan)
+    plan = json.loads(plan_path.read_text())
+    inst = json.loads(Path(args.instance).read_text())
+    out = plan_path.with_name(plan_path.name[:-len(".json")] + ".sequence.json")
+    entries = plan.get("goal") or []
+    if not entries or not plan.get("sequenced"):
+        record = {"status": "no_load", "reason": f"{plan['algorithm']} found no complete, sequenceable load"}
+        out.write_text(json.dumps(record, indent=1) + "\n")
+        report.update(result="REROLL", reason=record["reason"])
+        return
+    if args.gate:                        # the load passed the joint Isaac gate: build from its SETTLED poses, like the goal
+        gate = json.loads((Path(args.gate) / "result.json").read_text())
+        if gate.get("outcome") != "accepted":
+            record = {"status": "gate", "reason": f"the load's joint gate was {gate.get('outcome')}: {gate.get('reason')}"}
+            out.write_text(json.dumps(record, indent=1) + "\n")
+            report.update(result="REROLL", reason=record["reason"])
+            return
+        joint = gate["initial_snapshot"]["poses"]
+        targets = {e["id"]: joint[e["id"]] for e in entries}
+        landing, rule = (lambda kind, dist, dev: B.within_goal(kind, dist)), "at-goal tolerance of the jointly settled pose"
+    else:                                # no joint gate: the commanded family poses themselves (a lifted pose drops)
+        frames = {r: inst["initial_snapshot"]["poses"][r] for r in ("LowerRack", "UpperRack")}
+        targets = {e["id"]: P.world_from_local(frames[e["rack"]], {"position_m": e["position"], "quaternion_xyzw": e["quaternion_xyzw"]})
+                   for e in entries}
+        landing, rule = (lambda kind, dist, dev: dev <= DEV_MAX_M), "settle deviation <= DEV_MAX_M of the commanded pose"
+    centroids = B.kind_centroids({kind: visual_points(B.ASSETS / f"{kind}.usda") for kind in B.KINDS})
+    backend = _sequence_scene(args, B, entries, inst["baseline"], args.out / "plans" / "_kit" / plan_path.stem, report)
+    if backend is None:
+        return
+    by_id = {e["id"]: e for e in entries}
+    status, record, bans = build_sequence(backend, B, P, by_id, targets, centroids, landing)
+    record.update(plan=plan_path.name, instance=inst["instance_id"], algorithm=plan["algorithm"], bans=bans,
+                  gate=str(args.gate) if args.gate else None,
+                  landing=f"{rule}, contact depth < 2 mm; no placed dish moved > 10 mm / 20 deg")
+    out.write_text(json.dumps(record, indent=1) + "\n")
+    report.update(result="PASS" if status == "ok" else "REROLL", reason=record["reason"], sequence=str(out))
 
 
 # --------------------------------------------------------------------------- --run
@@ -565,6 +648,10 @@ class Timed:
 
     def next_move(self, obs):
         return self._timed(self.algo.next_move, obs)
+
+    def stats(self):
+        """The wrapped planner's search statistics (rrt: nodes, samples, extends, replans) reach the record."""
+        return self.algo.stats() if hasattr(self.algo, "stats") else {}
 
 
 class BenchOracle:
@@ -797,16 +884,28 @@ def run(args, B, report):
         for it in rinst.items:
             it["target"] = {"T_base_obj": targets[it["item_id"]]}
         world.mark_goals(targets, centroids)
-        world.goal_order = [tuple(e) for e in inst["goal"].get("order", [])] if track == "goal" else []
         seed = int(__import__("hashlib").sha256(f"0|{iid}|{name}".encode()).hexdigest()[:8], 16)
         plan = None
         if track == "open":
             plan_path = args.out / "plans" / "open" / tier / f"{iid}__{name}.json"
             plan = json.loads(plan_path.read_text())
+            if not plan.get("certified"):                   # the load never built one dish at a time in Isaac:
+                rec = {"solved": False, "abort": "load-not-buildable", "moves": [], "moves_used": 0,   # the algorithm failed
+                       "reason": plan.get("certification", {}).get("reason"), "planning_time_total_s": plan.get("planning_time_s"),
+                       "planning_cpu_s": plan.get("planning_cpu_s"), "plan_goal": plan.get("goal"), "end_check": {"ran": False, "outcome": "aborted"}}
+                rec.update(track=track, tier=tier, instance=iid, algorithm=name, seed=seed, counter_cap=inst["counter"]["cap"],
+                           lower_bound=inst["goal"]["lower_bound"], S_ref=inst["goal"]["S_ref"], success=False, nudges=0)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(json.dumps(rec, indent=1) + "\n")
+                report["episodes"].append({"track": track, "algorithm": name, "success": False, "abort": rec["abort"]})
+                continue
+            world.goal_order = [tuple(e) for e in plan.get("goal_order", [])]   # the certified build's order
             algo = B.Replay(plan)
         elif name == "planner":
+            world.goal_order = [tuple(e) for e in inst["goal"].get("order", [])]
             algo = B.FixedGoalSequencer()
         else:
+            world.goal_order = [tuple(e) for e in inst["goal"].get("order", [])]
             cls = algorithms[name]
             try:
                 algo = cls(seed=seed)
@@ -852,6 +951,8 @@ def main():
     mode.add_argument("--start", action="store_true")
     mode.add_argument("--run", action="store_true")
     mode.add_argument("--sequence", type=Path, metavar="ATTEMPT_DIR", help="build the goal one dish at a time, certify the order")
+    mode.add_argument("--sequence-plan", type=Path, metavar="PLAN", help="build an open-track plan's own load one dish at a time (needs --instance)")
+    parser.add_argument("--gate", type=Path, metavar="DIR", help="--sequence-plan: the load's joint gate (frigidaire_initial_state_validate.py --out-dir)")
     parser.add_argument("--tier", choices=("easy", "medium", "hard"))
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--attempt", type=int, default=0)
@@ -868,10 +969,13 @@ def main():
     args = parser.parse_args()
     args.cameras = bool(getattr(args, "enable_cameras", False))     # AppLauncher consumes its own flags at boot
     started = time.monotonic()
-    report = {"result": "REROLL" if (args.start or args.sequence) else "FAIL", "reason": None, "started_utc": datetime.now(timezone.utc).isoformat()}
+    reroll = bool(args.start or args.sequence or args.sequence_plan)
+    report = {"result": "REROLL" if reroll else "FAIL", "reason": None, "started_utc": datetime.now(timezone.utc).isoformat()}
     app = None
     if args.sequence:
         args.attempt_dir = args.sequence
+    if args.sequence_plan and not args.instance:
+        raise SystemExit("[RESULT] FAIL --sequence-plan needs --instance")
     if args.start:
         args.attempt_dir = args.out / "instances" / "attempts" / f"{args.tier}_s{args.seed}_a{args.attempt}"
         if (args.attempt_dir / "start.json").exists():
@@ -882,13 +986,14 @@ def main():
         args.app = app
         sys.path[:0] = [str(ROOT / "src"), str(ROOT / "frigidaire/src"), str(ROOT / "frigidaire/scripts/experiment")]
         import frigidaire_bench as B
-        (start if args.start else sequence_gate if args.sequence else run)(args, B, report)
+        (start if args.start else sequence_gate if args.sequence else sequence_plan if args.sequence_plan else run)(args, B, report)
     except Exception as exc:                                   # noqa: BLE001
         traceback.print_exc()
-        report.update(result="REROLL" if (args.start or args.sequence) else "FAIL", reason=f"exception {exc!r}")
+        report.update(result="REROLL" if reroll else "FAIL", reason=f"exception {exc!r}")
     finally:
         report.update(wall_seconds=time.monotonic() - started, finished_utc=datetime.now(timezone.utc).isoformat())
         target = (args.attempt_dir / "generation.json") if args.start else (args.attempt_dir / "sequence_report.json") if args.sequence \
+            else args.sequence_plan.with_name(args.sequence_plan.name[:-len(".json")] + ".sequence_report.json") if args.sequence_plan \
             else (args.out / "episodes" / "_kit" / f"{Path(args.instance).stem}.json")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(report, indent=2, default=str) + "\n")

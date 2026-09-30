@@ -4,7 +4,9 @@ Measured on the **corallab workstation** (2026-08-30), where the `plan` branch n
 the Brev launchable was retired. This is the **canonical home of the launcher landmines** —
 the README and `CLAUDE.md` link here rather than restating them.
 
-> The benchmark is teleport-only (no robot, no motion planning on this branch); the FCL
+> The Bosch benchmark is teleport-only (no robot arm, no arm motion planning); an arm is being
+> brought up separately in the Frigidaire twin
+> ([frigidaire/docs/robot.md](../frigidaire/docs/robot.md), in progress 2026-09-29). The FCL
 > planning stack is CPU-bound, so the core count below matters more than the GPU.
 
 ## Hardware (host)
@@ -14,7 +16,7 @@ the README and `CLAUDE.md` link here rather than restating them.
 | CPU | 36 threads (i9-10980XE) |
 | RAM | 125 GiB |
 | GPU | 3× NVIDIA GeForce RTX 3090, 24 GB (Ampere), driver **535.230.02**, CUDA 12.2 |
-| Disk | root NVMe ~99 % full — bulk data lives on `/media/corallab-s1/2tbhdd/brianshu/dishsim` |
+| Disk | root NVMe 928 GiB, 80 % used with about 182 GiB free (2026-09-29) — bulk data lives on `/media/corallab-s1/2tbhdd/brianshu/dishsim` |
 | OS | Ubuntu 20.04.6 (glibc 2.31) — too old for any native Isaac install; Docker mandatory |
 
 This is a **shared machine**: labmates' jobs move between the three GPUs. Pick the
@@ -142,10 +144,17 @@ Kit's python, no venv:
 
 | Location | Contents |
 |---|---|
-| `/` (root disk) | the `dishsim-isaac:4.5.0` image (~24 GB) — the only root-disk artifact |
-| `2tbhdd …/dishsim/repo_data/` | `assets/ media/ results/ logs/ outputs/` — the repo's dirs are symlinks here |
-| `2tbhdd …/dishsim/kit_cache/ ov_data/ pip_cache/` | Kit shader/extension/pip caches (compose mounts) |
+| `/` (root disk) | the `dishsim-isaac:4.5.0` image (~24 GB) plus the container's writable layer (0.93 GiB on 2026-09-29: the isaaclab and pytest installs the entrypoint re-applies at every start) |
+| `2tbhdd …/dishsim/repo_data/` | `assets/ build/ media/ results/ logs/ outputs/` — the repo's dirs are symlinks here; `build/` holds the only copy of the current Frigidaire twin build (no archive tarball contains it) |
+| `2tbhdd …/dishsim/kit_cache/ ov_data/ pip_cache/` | Kit shader/extension caches and the pip cache mount (compose mounts; `pip_cache/` stays empty, see below) |
 | `2tbhdd …/dishsim/hf_home/` | `HF_HOME` (asset-archive downloads) |
+| `2tbhdd …/dishsim/_trash_20260917/`, `_trash_20260929/` | 30-day hold folders of retired data, each with a `MANIFEST.txt` (delete after 2026-10-17 / 2026-10-29) |
+| `2tbhdd …/dishsim/robot_era_evidence/` | robot-era `results/` and `media/` kept outside the repo roots (includes `results/plate_settle/`, the settle-reliability probe records) |
+
+**The pip cache is disabled** (2026-09-29): `pip_cache/` is mounted at `/root/.cache/pip` and
+is owned by uid 1029, and pip run as root refuses a cache directory it does not own, so every
+`pip install` in the container warns `The cache has been disabled`, `pip cache info` errors
+out, and the folder stays empty.
 
 The 2tbhdd mount appears at the identical path inside the container so the symlinks resolve
 on both sides. Python-3.10 note: `tarfile`'s `data` filter refuses extraction through those

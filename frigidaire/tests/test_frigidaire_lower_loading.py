@@ -21,12 +21,12 @@ class LowerLoadingTests(unittest.TestCase):
         patterns = self.patterns()
         xs, ys = lower_tine_positions()
         mids = (xs[:-1]+xs[1:])/2
-        # 12 columns give 11 front gaps, 2 of which (gaps 9-10) are reserved for the bowls beside the
-        # basket's left face; the basket bay leaves the rear bank 9 gaps.
+        # 12 columns at 31.8 mm give 11 front gaps, 1 of which (gap 10) is reserved for the bowls beside the
+        # basket's left face (2 at the 36 mm pitch); the basket bay leaves the rear bank 9 gaps.
         bowl_zone_x = lower_basket_footprint()["x"][0]-.020
         front_gaps = [g for g in lower_plate_gaps("front") if mids[g] <= bowl_zone_x]
         rear_gaps = lower_plate_gaps("rear")
-        self.assertEqual((len(front_gaps), len(rear_gaps)), (9, 9))
+        self.assertEqual((len(front_gaps), len(rear_gaps)), (10, 9))
         inset = {"front": .025, "rear": -.015}
         for kind in ("dinner_plate", "salad_plate"):
             plates = patterns[kind]

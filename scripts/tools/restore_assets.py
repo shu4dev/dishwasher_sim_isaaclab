@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Restore archived assets/media on a fresh instance (counterpart of the retired archive_assets.py, git history).
+"""Restore archived assets/media on a fresh instance (counterpart of archive_assets.py).
 
 Downloads the tarballs from the public HF dataset (or takes local paths), safe-extracts
 them into the project root, verifies every extracted file's sha256 against the tarball's

@@ -66,6 +66,57 @@ def test_rrt_star_is_no_worse_than_rrt_on_the_swap():
     assert star["moves_used"] <= base["moves_used"]
 
 
+class OrderedWorld(ToyWorld):
+    """ToyWorld plus one goal-order constraint: B's goal (x = 0) waits until A is at its goal (x = 1)."""
+
+    def goal_waits(self, item_id, T_cmd):
+        if item_id == "B" and abs(np.asarray(T_cmd)[0, 3]) < 1e-6:
+            a = self.poses.get("A")
+            return [] if a is not None and abs(a[0, 3] - 1.0) < 1e-6 else ["A"]
+        return []
+
+    def blockers(self, item_id, T_cmd, object_class=None):
+        return sorted(set(super().blockers(item_id, T_cmd)) | set(self.goal_waits(item_id, T_cmd)))
+
+
+def ordered_instance():
+    items = [{"item_id": "A", "object_class": "toy", "T_base_init": T(5), "target": {"T_base_obj": T(1)}},
+             {"item_id": "B", "object_class": "toy", "T_base_init": T(6), "target": {"T_base_obj": T(0)}}]
+    from dishsim.rearrange import Instance
+    return Instance(name="ordered", machine="toy", base_placement="toy", state="toy", items=items, meta={})
+
+
+def test_rrt_connect_honours_the_goal_order_on_the_goal_tree():
+    """The goal tree's edges replay backwards, so a constraint 'B's goal waits for A' must be checked on the
+    replayed move: every found plan sends A home before B (2026-09-28; before, the goal tree was checked
+    forwards and could emit B first)."""
+    for seed in range(6):
+        inst = ordered_instance()
+        planner = rrt.RRTConnect(seed=seed)
+        planner.reset(inst, OrderedWorld())
+        start = {it["item_id"]: np.asarray(it["T_base_init"]) for it in inst.items}
+        path = planner._grow(start, None, __import__("time").perf_counter() + 5.0)
+        assert path, f"seed {seed}: no plan"
+        a_home = [k for k, (item, T_) in enumerate(path) if item == "A" and abs(np.asarray(T_)[0, 3] - 1.0) < 1e-6]
+        b_home = [k for k, (item, T_) in enumerate(path) if item == "B" and abs(np.asarray(T_)[0, 3]) < 1e-6]
+        assert a_home and b_home and max(a_home) < b_home[-1], f"seed {seed}: {[(i, float(np.asarray(t)[0, 3])) for i, t in path]}"
+
+
+def test_nearest_neighbour_matrix_matches_the_item_count_distance():
+    inst = swap_instance()
+    planner = rrt.RRTConnect(seed=1)
+    planner.reset(inst, ToyWorld())
+    start = {it["item_id"]: np.asarray(it["T_base_init"]) for it in inst.items}
+    tree = [rrt._Node(dict(start))]
+    keys = {planner._key(start)}
+    for _ in range(30):
+        planner._extend(tree, keys, planner._sample(), planner.goal, None)
+    sample = planner._sample()
+    d = (planner._matrix(tree) != planner._codes_of(sample)[None, :]).sum(axis=1)
+    assert [int(x) for x in d] == [len(planner._diff(n.poses, sample)) for n in tree]
+    assert len(tree) > 1 and planner._matrix(tree).shape == (len(tree), 2)
+
+
 def test_mirror_is_restored_after_planning():
     """The planner must hand the FCL mirror back at the observed arrangement — the driver's
     own pre-check depends on it."""

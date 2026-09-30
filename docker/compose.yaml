@@ -7,7 +7,8 @@
 #   scripts/run_kit.sh <script> --headless ...        # host-side entry; forwards in here
 #   scripts/run_py.sh -m pytest tests/                # Kit-free python the same way
 #
-# Storage contract (root disk is 95% full): the image is the ONLY root-disk artifact.
+# Storage contract (root disk: 99% full in August, 80% on 2026-09-29): the image and the container's
+# ~1 GiB writable layer are the only root-disk artifacts.
 # Everything mutable lives on the 2 TB drive under /media/corallab-s1/2tbhdd/brianshu/dishsim,
 # which is mounted at its host path so the repo's assets/media/results/logs/outputs symlinks
 # resolve identically on both sides. Kit's shader/data/pip caches are redirected there too.

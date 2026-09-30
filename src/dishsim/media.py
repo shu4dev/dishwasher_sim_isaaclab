@@ -2,12 +2,12 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Visual-evidence capture: fixed camera rig, PNG stills, MP4 clips, contact sheets.
+"""Visual-evidence capture: fixed camera rig, PNG stills, MP4 clips.
 
 The cameras (poses in :data:`dishsim.config.CAMERAS`) are FIXED across all phases so shots stay
 comparable. :class:`CameraRig` is Kit-only (imports ``isaaclab.sensors`` lazily); requires the
 app to run with ``--headless --enable_cameras`` — without the flag camera sensors return
-nothing. :func:`contact_sheet` and :class:`VideoWriter` are Kit-free (PIL/imageio/numpy).
+nothing. :class:`VideoWriter` is Kit-free (imageio/numpy).
 """
 
 import os
@@ -166,26 +166,3 @@ class VideoWriter:
 
     def close(self) -> None:
         self._writer.close()
-
-
-def contact_sheet(images: list[np.ndarray], labels: list[str], out_png: str, cols: int = 4) -> str:
-    """Tile images into a labeled grid PNG (labels drawn in a strip above each tile)."""
-    from PIL import Image, ImageDraw  # noqa: PLC0415
-
-    assert len(images) == len(labels)
-    if not images:
-        raise ValueError("no images for contact sheet")
-    h, w = images[0].shape[:2]
-    strip = 28
-    cols = max(1, min(cols, len(images)))
-    rows = (len(images) + cols - 1) // cols
-    sheet = Image.new("RGB", (cols * w, rows * (h + strip)), (20, 20, 20))
-    draw = ImageDraw.Draw(sheet)
-    for i, (img, label) in enumerate(zip(images, labels)):
-        r, c = divmod(i, cols)
-        x, y = c * w, r * (h + strip)
-        draw.text((x + 8, y + 6), label, fill=(240, 240, 240))
-        sheet.paste(Image.fromarray(img), (x, y + strip))
-    os.makedirs(os.path.dirname(out_png), exist_ok=True)
-    sheet.save(out_png)
-    return out_png

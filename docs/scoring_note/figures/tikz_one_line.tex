@@ -1,0 +1,31 @@
+% Fig. 2 (b): one dot and ONE line, with every symbol of Step 2. Hand-computed (cm):
+% p = (0, 2.0), n at -20 deg drawn from p (s lies on it); s = p + eps n with eps drawn exaggerated (0.45) -> (0.423, 1.846);
+% the line to q_k = (0.6, 0) points at -84.5 deg, so theta = 64.5 deg; tangent plane at 70 deg through p.
+\begin{tikzpicture}[x=1cm,y=1cm,>={Stealth[length=4pt]},font=\footnotesize]
+  % tangent plane and the dish surface around the dot
+  \draw[gray,dashed] (-0.728,0) -- (0.342,2.94);
+  \draw[line width=2.4pt,brown!70!black] (-0.274,1.248) -- (0.274,2.752);
+  \node[anchor=east,text=brown!70!black,font=\scriptsize] at (0.2,2.85) {dish surface};
+  % the disc, edge-on
+  \draw[line width=1.6pt,blue!60!black] (-1.6,0) -- (1.6,0);
+  \foreach \x in {-1.2,-0.6,0.0,0.6,1.2} \fill[blue!60!black] (\x,0) circle (1.6pt);
+  \node[anchor=south west] at (-1.65,0.05) {$\mathcal{D}_a$};
+  \node[anchor=north] at (0.6,-0.05) {$\vq_k$};
+  % the line from s_j to q_k: length and unit direction
+  \draw[blue!60!black,thick] (0.423,1.846) -- (0.6,0);
+  \node[blue!60!black,anchor=west] at (0.58,0.7) {$\ell_{jk}$};
+  \draw[->,very thick,blue!40!black] (0.423,1.846) -- (0.490,1.149);
+  \node[anchor=east] at (0.44,1.45) {$\vd_{jk}$};
+  % angle between the normal and the line
+  \draw (0.423,1.846) ++(-20:0.45) arc[start angle=-20,end angle=-84.5,radius=0.45];
+  \node at (0.83,1.33) {$\theta$};
+  \node[anchor=west,font=\scriptsize] at (0.98,1.18) {$\gamma_{jk}=\cos\theta$};
+  % dot, lifted start, normal
+  \fill (0,2.0) circle (1.5pt);
+  \node[anchor=east] at (-0.1,2.05) {$\vp_j$};
+  \draw[->,thick] (0,2.0) -- (1.034,1.624) node[anchor=west,inner sep=1pt] {$\vn_j$};
+  \fill[white,draw=black] (0.423,1.846) circle (1.3pt);
+  \node[anchor=south west,inner sep=1pt] at (0.46,1.88) {$\vs_j$};
+  \draw[decorate,decoration={brace,amplitude=2pt}] (0,2.0) -- (0.423,1.846);
+  \node[anchor=south,inner sep=1pt] at (0.29,2.13) {$\epsilon$};
+\end{tikzpicture}

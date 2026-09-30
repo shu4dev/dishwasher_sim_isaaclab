@@ -223,24 +223,6 @@ class ArrangementWorld:
         #: planner that simply asked fewer questions.
         self.n_queries = 0
 
-    def snapshot(self) -> dict:
-        """Copy of the mirrored arrangement, for cheap search rollback.
-
-        ``sync`` stores pose arrays BY REFERENCE, so the copy has to be deep in the arrays or
-        a later in-place write would corrupt the snapshot.
-        """
-        return {"poses": {k: np.array(v) for k, v in self._poses.items()},
-                "classes": dict(self._cls)}
-
-    def restore(self, snap: dict) -> None:
-        """Return the mirror to a :meth:`snapshot` state, dropping anything added since."""
-        for item_id in list(self._poses):
-            if item_id not in snap["poses"]:
-                self.world.remove_object(item_id)
-                self._poses.pop(item_id, None)
-                self._cls.pop(item_id, None)
-        self.sync(snap["poses"], snap["classes"])
-
     def clear(self) -> None:
         """Drop every mirrored item (a generator starts each instance from the empty machine)."""
         for item_id in list(self._poses):

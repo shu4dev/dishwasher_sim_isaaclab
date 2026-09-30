@@ -1,50 +1,57 @@
 # Exposure scorer: quickstart
 
-Run this first (10 seconds, Kit-free; rays run on the GPU when Warp sees one):
+> **Status 2026-09-29.** The scorer is live (the HOTEC search, top-5 and benchmark code use it),
+> but the demo scene, pair demo, seven-pair summary and pool search this page used to run were
+> retired on 2026-09-29 (in git history at HEAD 4455813), and their result folders are in the hold
+> folder `/media/corallab-s1/2tbhdd/brianshu/dishsim/_trash_20260929/` until 2026-10-29. The
+> numbers below come from the v3 racks (2026-09-20) and are history; the HOTEC figure comes from
+> racks built before 2026-09-28. Reference: [exposure.md](exposure.md).
+
+Run this first (Kit-free; rays run on the GPU when Warp sees one):
 
 ```
-scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_exposure_scene.py --pair random_06
+scripts/run_py.sh -m pytest frigidaire/tests/test_exposure.py
 ```
 
-Then open `results/exposure/frigidaire/scene/random_06_plus_method.png` next to the Isaac
-still `random_06_plus_initial.png` and the orbit video `random_06_plus_orbit.mp4` (made once
-with the Kit command below).
+Then open `results/exposure/frigidaire/hotec/heatmap.png`, the one method figure still in the
+tree: the HOTEC set (8 plates, 8 bowls, 8 cups) before and after the exposure search.
 
 ## What you are looking at
 
-- The Isaac still: the settled organized random_06 load (9 bowls, 9 mugs) plus one dinner
-  plate standing on edge in the lower rack and a fork, a knife and a tablespoon head-down in
-  the basket. The plate and cutlery are posed, not settled.
-- The method figure, left: every food-contact sample coloured by exposure. Bright = water
-  from the spray arm can reach it. Dark = something is in the way. The black discs are the
-  sources (where each arm sweeps). One ray fan per added kind: green rays reach the disc,
-  red rays are blocked by the load.
-- The method figure, right: mean exposure per object; orange = the added kinds. A red
-  marker over a bar = a vessel or plate that holds water; one of those makes the whole
-  arrangement infeasible.
+The HOTEC figure (made 2026-09-22, on the pre-2026-09-28 racks):
+
+- Left, two rows: every food-contact sample coloured by exposure, top-down, one panel per rack
+  (LowerRack, UpperRack). Bright = water from the spray arm can reach it. Dark = something is in
+  the way. Top row: the start load (run v8, S 0.159); bottom row: the best load of the search
+  (S 0.212).
+- Right: mean exposure per piece for each load (bowls orange, cups green, plates blue); the panel
+  title gives the worst piece.
 - `score` = area-weighted mean exposure over all food-contact surfaces. `worst` = the
   single worst object. Higher is better. Compare only arrangements of the same objects.
+- The retired demo-scene figure (2026-09-20, pictures in the hold folder) also drew the spray-arm
+  discs and one ray fan per added kind (green rays reach the disc, red rays are blocked by the
+  load), and put a red marker over the bar of a vessel or plate that holds water; one of those
+  makes the whole arrangement infeasible.
 
 ## The commands
 
-1. Demo scene (10 s): the command above. Isaac still plus a 12 s orbit video of the same scene (4 min, GPU):
-   `scripts/run_kit.sh frigidaire/scripts/evaluation/frigidaire_exposure_scene_render.py --headless --enable_cameras --state results/exposure/frigidaire/scene/random_06_plus.json --out-dir results/exposure/frigidaire/scene --orbit-seconds 12`
-   → `random_06_plus_initial.png`, `random_06_plus_orbit.mp4` (refuses to overwrite; remove the old
-   PNG, MP4 and evidence JSON via `docker exec dishsim-isaac rm` first).
-2. One pair, all pictures (3 min, GIFs dominate):
-   `scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_exposure_demo.py --pair random_06`
-   → `results/exposure/frigidaire/demo_random_06/evidence.png`, `rays.gif` (the spray arm
-   rotating under one bowl with green open and red blocked rays).
-3. All seven pairs, one chart (under a minute):
-   `scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_exposure_summary.py --ceiling-sweep --convergence random_06`
-   → `results/exposure/frigidaire/summary/summary.png`, `ceiling_sweep.md`, `convergence.md`.
-4. Find a better arrangement (under a minute):
-   `scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_exposure_search.py --pair random_06`
-   → `results/exposure/frigidaire/search/hist.png` and `best.png`. Proposals that hold
-   water are dropped before ranking. Proposals are not settled; settling the best takes
-   4 min in Isaac (steps in `docs/exposure.md`).
+1. Scorer tests (22 tests): the command above.
+2. The HOTEC exposure search (Kit-free, CUDA; 34 min for three sweeps on 2026-09-22):
+   `scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_hotec_exposure_search.py --sweeps 3 --seed 0 --out <new folder>`
+   → `search.json` and `best_layout.json` in the new folder. Always pass a new `--out`: the
+   default is `results/exposure/frigidaire/hotec/`, which holds the 2026-09-22 records.
+3. The method figure of two loads (Kit-free):
+   `scripts/run_py.sh frigidaire/scripts/evaluation/frigidaire_hotec_exposure_figure.py --start <start layout.json> --best <best_layout.json> --out <heatmap.png>`
+4. Retired 2026-09-29, see git history at HEAD 4455813: the demo scene with its Isaac still and
+   12 s orbit video, the one-pair demo, the seven-pair chart and the pool search of random_06
+   (`frigidaire_exposure_{scene,scene_render,demo,summary,search}.py`), and the Isaac settle of a
+   search proposal that went with them.
 
-## Numbers to remember
+## Numbers to remember (v3 racks, 2026-09-20; history)
+
+Computed on the v3 racks with arm radii 0.245 / 0.205, before the 2026-09-22 and 2026-09-28
+rebuilds; the folders behind them are in the hold folder. Do not compare them with a score on the
+current racks.
 
 | | score |
 |---|---|
@@ -58,16 +65,18 @@ nozzle is given up to half of the upper rack's water.
 
 ## What the number assumes
 
-Water travels in straight lines from a disc under each rack (where the arm sweeps), hits
-harder when it hits squarely, and nothing else. No splash. The ceiling nozzle is off by
-default because nobody has inspected it (`--ceiling-weight` turns it on); the ranking above
-holds for any weight up to 0.5 and only flips at 1.0, which switches the middle arm off.
+Water travels in straight lines from a disc under each rack (where the arm sweeps: radius
+0.233 m under the lower rack, 0.191 m under the upper rack), hits harder when it hits squarely,
+and nothing else. No splash. The ceiling nozzle is off by default because nobody has inspected
+it (the `ceiling_weight` argument of `score_arrangement` turns it on); the ranking above holds
+for any weight up to 0.5 and only flips at 1.0, which switches the middle arm off.
 Food contact is the inside of vessels, the top of plates, the spoon bowl, the fork tines and
 the knife blade; handles never count. A flat plate holds water and is infeasible; on edge it
 drains.
 
 ## Next
 
-The scorer is closed at revision 5 and is the objective the arrangement planner uses. If
-the chart reads right, the next big step is a real wash test of the two random_06
-arrangements (two afternoons).
+The scorer is closed at revision 5 and is the objective of the HOTEC search, top-5 and
+benchmark code. If the chart reads right, the next big step is a real wash test of the two
+random_06 arrangements (two afternoons; the 2026-09-20 plan: the tree keeps those two states as
+test fixtures, the full runs are in the hold folder).

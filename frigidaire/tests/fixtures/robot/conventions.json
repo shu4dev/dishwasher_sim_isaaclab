@@ -1,0 +1,349 @@
+{
+ "run_id": "p0_conventions",
+ "started_utc": "2026-09-30T02:04:26.834998+00:00",
+ "label": "ANALYSIS (arms and bowl teleported into place; not a counted trial)",
+ "args": {
+  "effort": 8.0,
+  "stiffness": 400.0,
+  "insert_mm": 25.0
+ },
+ "joint_names": [
+  "shoulder_pan_joint",
+  "shoulder_lift_joint",
+  "elbow_joint",
+  "wrist_1_joint",
+  "wrist_2_joint",
+  "wrist_3_joint",
+  "finger_joint",
+  "right_outer_knuckle_joint",
+  "left_inner_finger_joint",
+  "right_inner_finger_joint",
+  "left_inner_finger_knuckle_joint",
+  "right_inner_finger_knuckle_joint"
+ ],
+ "deinstanced": {
+  "A_gripper": 9,
+  "B_robot": 23
+ },
+ "pad_colliders": {
+  "A": 2,
+  "B": 2
+ },
+ "tcp": {
+  "axes_world": [
+   [
+    1.0,
+    0.0,
+    -0.0
+   ],
+   [
+    0.0,
+    -1.0,
+    -0.0
+   ],
+   [
+    -0.0,
+    0.0,
+    -1.0
+   ]
+  ],
+  "commanded_axes": [
+   [
+    1.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.0,
+    -1.0,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    -1.0
+   ]
+  ],
+  "position_base_frame": [
+   0.45,
+   0.0,
+   0.3
+  ],
+  "wrist3_to_tcp_world": [
+   -0.0,
+   -0.0,
+   -0.13
+  ],
+  "z_dot_wrist3_to_tcp": 0.13
+ },
+ "pads": {
+  "open": {
+   "left": {
+    "centroid_mm": [
+     0.04,
+     -52.23,
+     -1.37
+    ],
+    "min_mm": [
+     -11.0,
+     -62.71,
+     -19.58
+    ],
+    "max_mm": [
+     11.0,
+     -43.55,
+     18.42
+    ],
+    "face_normal_tcp": [
+     0.0,
+     0.9999,
+     -0.0111
+    ],
+    "face_area_mm2": 1248.96
+   },
+   "right": {
+    "centroid_mm": [
+     -0.04,
+     52.23,
+     -1.37
+    ],
+    "min_mm": [
+     -11.0,
+     43.55,
+     -19.58
+    ],
+    "max_mm": [
+     11.0,
+     62.71,
+     18.42
+    ],
+    "face_normal_tcp": [
+     -0.0,
+     -0.9999,
+     -0.0111
+    ],
+    "face_area_mm2": 1248.96
+   }
+  },
+  "closed": {
+   "left": {
+    "centroid_mm": [
+     0.04,
+     -9.8,
+     12.12
+    ],
+    "min_mm": [
+     -11.0,
+     -20.28,
+     -6.1
+    ],
+    "max_mm": [
+     11.0,
+     -1.12,
+     31.91
+    ],
+    "face_normal_tcp": [
+     0.0,
+     0.9999,
+     -0.0111
+    ],
+    "face_area_mm2": 1248.96
+   },
+   "right": {
+    "centroid_mm": [
+     -0.04,
+     9.8,
+     12.12
+    ],
+    "min_mm": [
+     -11.0,
+     1.12,
+     -6.1
+    ],
+    "max_mm": [
+     11.0,
+     20.28,
+     31.91
+    ],
+    "face_normal_tcp": [
+     -0.0,
+     -0.9999,
+     -0.0111
+    ],
+    "face_area_mm2": 1248.96
+   }
+  },
+  "gap_mm": 19.6
+ },
+ "unloaded_close": {
+  "finger_joint": 0.8,
+  "ratios": {
+   "right_outer_knuckle_joint": 1.0,
+   "left_inner_finger_joint": -1.0,
+   "right_inner_finger_joint": 1.0,
+   "left_inner_finger_knuckle_joint": -1.0,
+   "right_inner_finger_knuckle_joint": -1.0
+  },
+  "expected_from_mimic": {
+   "right_outer_knuckle_joint": 1.0,
+   "right_inner_finger_joint": 1.0,
+   "right_inner_finger_knuckle_joint": -1.0,
+   "left_inner_finger_knuckle_joint": -1.0,
+   "left_inner_finger_joint": -1.0
+  },
+  "code_inner_finger_signs": {
+   "left_inner_finger_joint": -1.0,
+   "right_inner_finger_joint": 1.0
+  },
+  "signs_match": true
+ },
+ "loaded_close": {
+  "finger_joint": 0.60581,
+  "ratios": {
+   "right_outer_knuckle_joint": 0.9995,
+   "left_inner_finger_joint": -0.9999,
+   "right_inner_finger_joint": 0.9997,
+   "left_inner_finger_knuckle_joint": -0.9998,
+   "right_inner_finger_knuckle_joint": -0.9997
+  },
+  "pad_sensor_N": [
+   7.46,
+   11.174
+  ],
+  "pad_monitor_N": {
+   "RobotB:pad_L": 0.0,
+   "RobotB:pad_R": 11.205
+  },
+  "bowl_contact_N_by_robot_part": {
+   "RobotB:pad_R": 11.205,
+   "RobotB:left_inner_finger": 7.46,
+   "RobotB:pad_L": 0.0,
+   "RobotB:left_inner_knuckle": 0.0
+  },
+  "note": "pad_sensor_N = Isaac Lab ContactSensor on the whole inner-finger BODY (pad + finger side) vs the bowl; pad_monitor_N = contact reports on the fingertip-pad COLLIDER only",
+  "monitor_vs_sensor_total": [
+   11.205,
+   18.634
+  ]
+ },
+ "press": {
+  "A": {
+   "plate": {
+    "size_m": [
+     0.3,
+     0.3,
+     0.01
+    ],
+    "mass_kg": 0.5,
+    "drop_z_m": 1.0,
+    "fall_s": 1.5,
+    "caught_above_m": 0.3,
+    "centre_xy": [
+     0.1363,
+     0.0667
+    ],
+    "forearm_mid_z_m": 0.5833,
+    "gripper_offset_xy_m": 0.2958,
+    "gripper_under_plate": false
+   },
+   "hits": {
+    "RobotA:forearm_link": {
+     "first_tick": 843,
+     "peak_N": 135.28,
+     "cats": [
+      "other",
+      "arm"
+     ]
+    },
+    "RobotA:wrist_1_link": {
+     "first_tick": 844,
+     "peak_N": 62.32,
+     "cats": [
+      "other",
+      "arm"
+     ]
+    },
+    "RobotA:upper_arm_link": {
+     "first_tick": 845,
+     "peak_N": 54.22,
+     "cats": [
+      "other",
+      "arm"
+     ]
+    }
+   },
+   "arm_links_touching": [
+    "RobotA:forearm_link",
+    "RobotA:upper_arm_link",
+    "RobotA:wrist_1_link"
+   ],
+   "gripper_links_touching": [],
+   "plate_rest_z_m": 0.635,
+   "caught_by_arm": true,
+   "verdict": "contact",
+   "config": "gripper de-instanced, arm colliders instanced (the episode before D12)"
+  },
+  "B": {
+   "plate": {
+    "size_m": [
+     0.3,
+     0.3,
+     0.01
+    ],
+    "mass_kg": 0.5,
+    "drop_z_m": 1.0,
+    "fall_s": 1.5,
+    "caught_above_m": 0.3,
+    "centre_xy": [
+     3.1363,
+     0.0667
+    ],
+    "forearm_mid_z_m": 0.5833,
+    "gripper_offset_xy_m": 0.2958,
+    "gripper_under_plate": false
+   },
+   "hits": {
+    "RobotB:forearm_link": {
+     "first_tick": 843,
+     "peak_N": 135.28,
+     "cats": [
+      "other",
+      "arm"
+     ]
+    },
+    "RobotB:wrist_1_link": {
+     "first_tick": 844,
+     "peak_N": 62.29,
+     "cats": [
+      "other",
+      "arm"
+     ]
+    },
+    "RobotB:upper_arm_link": {
+     "first_tick": 845,
+     "peak_N": 54.02,
+     "cats": [
+      "other",
+      "arm"
+     ]
+    }
+   },
+   "arm_links_touching": [
+    "RobotB:forearm_link",
+    "RobotB:upper_arm_link",
+    "RobotB:wrist_1_link"
+   ],
+   "gripper_links_touching": [],
+   "plate_rest_z_m": 0.6351,
+   "caught_by_arm": true,
+   "verdict": "contact",
+   "config": "whole robot de-instanced (D12 candidate)"
+  }
+ },
+ "source": {
+  "file": "artifacts/p0_conventions/conventions.json",
+  "sha256": "8a07f316691bcc5a01ae299dd5235766abe73ca1d9bb47524c38460d4da057d3",
+  "producer": "frigidaire/scripts/setup/frigidaire_robot_conventions.py (Kit, live asset)",
+  "trimmed": "trajectories and contact-pair lists dropped; every other value copied verbatim"
+ }
+}

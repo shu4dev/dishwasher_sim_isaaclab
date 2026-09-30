@@ -12,6 +12,9 @@
 # Logs and outputs
 /logs
 /outputs
+# Per-run experiment artifacts (videos, frames, plots, trial JSONL, index.html): a SYMLINK
+# onto the 2 TB drive like the roots above (user decision 2026-09-29: root disk gains nothing).
+/artifacts
 wandb/
 
 # build/ is a SYMLINK onto the 2 TB drive since 2026-09-17 (holds the Frigidaire
