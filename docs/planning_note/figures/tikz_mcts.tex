@@ -1,0 +1,29 @@
+% Fig. 7 (a): one MCTS simulation. Nodes are (arrangement, committed set); the thick path is the UCT descent, the
+% dashed child the one expansion, the wavy arrow the rollout (local repair to a complete load), the grey arrows the
+% back-up of its value to every node on the path.
+\begin{tikzpicture}[x=1cm,y=1cm,>={Stealth[length=4pt]},font=\footnotesize,
+                    n/.style={circle,draw=#1,fill=#1!25,inner sep=2.2pt}]
+  \node[n=blue!60!black,label={[font=\scriptsize]left:root $s_0$}] (r) at (1.6,3.2) {};
+  \node[n=gray] (c1) at (0.6,2.3) {};
+  \node[n=blue!60!black] (c2) at (1.6,2.3) {};
+  \node[n=gray] (c3) at (2.6,2.3) {};
+  \node[n=gray] (d1) at (1.0,1.4) {};
+  \node[n=blue!60!black,label={[font=\scriptsize]left:$s$}] (d2) at (2.1,1.4) {};
+  \node[circle,draw=orange!80!black,dashed,thick,inner sep=2.2pt,label={[font=\scriptsize]below:$s'$}] (e) at (2.1,0.5) {};
+  \draw (r)--(c1) (r)--(c3) (c2)--(d1);
+  \draw[blue!60!black,line width=1.4pt] (r)--(c2) (c2)--(d2);
+  \draw[orange!80!black,dashed,thick] (d2)--(e);
+  \node[anchor=east,orange!80!black,font=\scriptsize] at (2.0,0.95) {one move};
+  % back-up, beside the path
+  \draw[->,gray,thick] (2.32,0.62) to[bend right=30] (2.32,1.28);
+  \draw[->,gray,thick] (2.25,1.6) to[bend right=30] (1.82,2.2);
+  \draw[->,gray,thick] (1.78,2.48) to[bend right=30] (1.78,3.05);
+  % rollout to a complete load
+  \draw[->,decorate,decoration={snake,amplitude=1.2pt,segment length=5pt,post length=3pt},thick] (2.35,0.4) -- (3.25,0.4);
+  \node[draw,rounded corners=2pt,font=\scriptsize,align=left,anchor=west] at (3.3,0.4) {complete load $L(s')$\\ $V=S_{\rm low}(L)$};
+  % step labels
+  \node[anchor=west,font=\scriptsize] at (3.3,3.2) {\textbf{1 select}: UCT down the tree};
+  \node[anchor=west,font=\scriptsize] at (3.3,2.7) {\textbf{2 expand}: add one child};
+  \node[anchor=west,font=\scriptsize] at (3.3,2.2) {\textbf{3 roll out}: repair, score};
+  \node[anchor=west,font=\scriptsize] at (3.3,1.7) {\textbf{4 back up}: $N{+}{=}1$, $W{+}{=}V$};
+\end{tikzpicture}

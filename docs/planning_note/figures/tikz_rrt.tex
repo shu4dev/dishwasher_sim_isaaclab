@@ -1,0 +1,33 @@
+% Fig. 5: RRT-Connect in arrangement space. Every node is a whole arrangement (one pose per dish), every edge
+% one legal teleport of one dish. Left tree from the start X_0, right tree from the goal G; one extend toward a
+% sample (X_new lies on the way from X_near to the sample), then the other tree's connect steps toward X_new.
+\begin{tikzpicture}[x=1cm,y=1cm,>={Stealth[length=4pt]},font=\footnotesize,
+                    n/.style={circle,fill=#1,inner sep=1.6pt}]
+  \draw[gray!50,rounded corners=6pt] (-0.2,-0.1) rectangle (8.6,3.5);
+  \node[anchor=north west,gray!60!black,font=\scriptsize] at (-0.15,3.45) {arrangement space: one pose per dish};
+  % start tree
+  \node[n=blue!60!black,label={[font=\scriptsize]below:$X_0$}] (a0) at (0.6,1.4) {};
+  \node[n=blue!60!black] (a1) at (1.4,0.7) {};
+  \node[n=blue!60!black] (a2) at (1.5,2.0) {};
+  \node[n=blue!60!black,label={[font=\scriptsize]above:$X_{\rm near}$}] (a3) at (2.6,2.3) {};
+  \node[n=blue!60!black] (a4) at (2.5,0.4) {};
+  \draw[blue!60!black] (a0)--(a1) (a0)--(a2) (a2)--(a3) (a1)--(a4);
+  % sample and the extend step
+  \node[star,star points=5,fill=gray!70,inner sep=1.4pt,label={[font=\scriptsize]right:$\tilde X$ (sample)}] (s) at (5.6,3.0) {};
+  \draw[gray,densely dotted] (a3)--(s);
+  \node[n=blue!60!black,label={[font=\scriptsize]above:$X_{\rm new}$}] (an) at (3.7,2.557) {};
+  \draw[blue!60!black,very thick,->] (a3)--(an);
+  \node[anchor=north,blue!60!black,font=\scriptsize] at (3.1,2.3) {move $o$};
+  % goal tree
+  \node[n=orange!80!black,label={[font=\scriptsize]below:$G$}] (b0) at (7.8,1.4) {};
+  \node[n=orange!80!black] (b1) at (6.8,0.6) {};
+  \node[n=orange!80!black] (b2) at (6.7,1.9) {};
+  \node[n=orange!80!black] (b3) at (5.6,1.6) {};
+  \draw[orange!80!black] (b0)--(b1) (b0)--(b2) (b2)--(b3);
+  % connect steps of the goal tree toward X_new
+  \node[n=orange!80!black] (c1) at (4.6,2.0) {};
+  \draw[orange!80!black,very thick,->] (b3)--(c1);
+  \draw[orange!80!black,very thick,->,dashed] (c1)--(an);
+  \node[anchor=north east,orange!80!black,font=\scriptsize] at (4.55,1.92) {connect};
+  \node[anchor=north,font=\scriptsize,align=center] at (4.2,1.0) {nearest = fewest dishes\\ at a different pose};
+\end{tikzpicture}

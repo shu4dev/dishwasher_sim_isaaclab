@@ -1,33 +1,21 @@
-# <experiment title>
-Slug: <date>-<slug> | Status: draft / approved / done
+# <title>
+Slug: <date>-<slug> | From: research/<slug>.md
 
-## 0. Decisions (from grilling)
-- <decision> — rejected: <alternative>, because <reason>
+## Goal
+One sentence: what works when this is done.
 
-## 1. Hypothesis
-One sentence: what we expect to see and why.
+## Decisions (from grilling)
+- <decision>. Rejected <alternative> because <reason>.
 
-## 2. Baseline
-What this is compared against (config, commit, or number).
+## Change
+- <path/file.py>: <what to add or change>
 
-## 3. Metrics and decision rules
-- Primary metric: <name> on <split/env>
-- Success: <metric> >= <number> (or baseline + <delta>)
-- Kill: stop early if <condition>
+## Run
+<one command, smallest setting that shows it works>
 
-## 4. Setup
-- Data / env / simulator:
-- Config file(s):
-- Seeds: (3 unless stated)
-- Compute budget: <GPUs> x <hours>, hard cap <hours>
+## Works when
+<one observable check>
 
-## 5. Code changes
-- <path/file.py> — <function>: <change>
-
-## 6. Run
-<exact commands>
-
-## 7. Logging and results
-- Log to: <wandb project / dir>
-- Save checkpoints, plots, tables to: <path>
-- Write-up: results/<date>-<slug>.md
+## Assumed / skipped
+- Assumed: <default picked instead of asking>
+- Skipped this round: <tests, sweeps, polish>

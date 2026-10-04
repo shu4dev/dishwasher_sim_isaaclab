@@ -53,13 +53,111 @@ def read_jsonl(path):
     return out
 
 
+def _episode_module():
+    """The episode script's pure helpers (failure_class); importing it boots nothing (Kit imports live in main())."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("frigidaire_robot_episode", ROOT / "frigidaire/scripts/experiment/frigidaire_robot_episode.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def summarize_cause(text):
+    """(class, short text) of a failure cause. A pick failure lists every candidate it tried
+    ('... (tried N: [why, ...])'): the class is the most frequent tried kind and the text counts the kinds."""
+    import ast
+    import re
+    fc = _episode_module().failure_class
+    if not text:
+        return None, None
+    m = re.search(r"\(tried (\d+): (\[.*\])\)\s*$", text, re.S)
+    if not m:
+        return fc(text), text
+    try:
+        tried = ast.literal_eval(m.group(2))
+    except (ValueError, SyntaxError):
+        return fc(text), text
+    kinds = defaultdict(int)
+    for why in tried:
+        kinds[fc(why)] += 1
+    if not kinds:
+        return fc(text), text
+    top = max(kinds, key=kinds.get)
+    parts = "; ".join(f"{k} x{n}" for k, n in sorted(kinds.items(), key=lambda kv: -kv[1]))
+    first = {}
+    for why in tried:
+        first.setdefault(fc(why), why[:110])
+    return top, f"{len(tried)} candidates tried: {parts} (e.g. {first[top]})"
+
+
+def summarize_move(m):
+    """(class, text) over EVERY attempt of a failed move (the record's `cause` quotes the last attempt only)."""
+    import ast
+    import re
+    fc = _episode_module().failure_class
+    kinds, parts = defaultdict(int), []
+    for a in m.get("attempts", []):
+        texts = []
+        if a.get("invariants"):
+            texts.append("invariant: " + ", ".join(a["invariants"]))
+        if a.get("pick") is None and a.get("why"):
+            texts.append(a["why"])
+        elif a.get("place_why"):
+            texts.append(a["place_why"])
+        elif a.get("physical_cause") and not a.get("ok_physical"):
+            texts.append(a["physical_cause"])
+        sub = defaultdict(int)
+        for t in texts:
+            mm = re.search(r"\(tried (\d+): (\[.*\])\)\s*$", t, re.S)
+            tried = None
+            if mm:
+                try:
+                    tried = ast.literal_eval(mm.group(2))
+                except (ValueError, SyntaxError):
+                    tried = None
+            for why in (tried if tried else [t]):
+                k = fc(why)
+                sub[k] += 1
+                kinds[k] += 1
+        if sub:
+            parts.append(f"attempt {a.get('attempt', 0) + 1}: " + ", ".join(f"{k} x{n}" for k, n in sorted(sub.items(), key=lambda kv: -kv[1])))
+    if not kinds:
+        c = m.get("cause")
+        return (fc(c) if c else None), c
+    top = max(kinds, key=kinds.get)
+    return top, "; ".join(parts)
+
+
+def reclassify(record):
+    """Re-derive every failure class with the CURRENT classifier over every attempt (older records carry the label the
+    classifier of their day wrote, and the record's cause quotes the last attempt only)."""
+    if not record:
+        return record
+    by_dish = {}
+    for m in record.get("moves", []):
+        if not m.get("ok"):
+            if m.get("attempts"):
+                m["failure_class"], m["cause_summary"] = summarize_move(m)
+            elif m.get("cause"):
+                m["failure_class"], m["cause_summary"] = summarize_cause(m["cause"])
+            by_dish.setdefault(m["dish"], m)
+    for oid, b in record.get("per_bowl", {}).items():
+        if b.get("cause"):
+            mv = by_dish.get(oid)
+            if mv is not None and not str(b["cause"]).startswith("not attempted"):
+                b["failure_class"], b["cause_summary"] = mv["failure_class"], mv.get("cause_summary")
+            else:
+                b["failure_class"], b["cause_summary"] = summarize_cause(b["cause"])
+    return record
+
+
 def load_run(run_id):
     """One run: its record(s), trials (trial log rows + media) and paths."""
     rdir = RUNS / run_id
     adir = ARTIFACTS / run_id
     records = sorted(p for p in rdir.glob("*.json")) if rdir.exists() else []
     run = {"run_id": run_id, "record_path": records[0] if records else None,
-           "record": json.loads(records[0].read_text()) if records else None, "trials": [],
+           "record": reclassify(json.loads(records[0].read_text())) if records else None, "trials": [],
            "adir": adir, "rdir": rdir}
     for tdir in sorted(p for p in adir.glob("t*") if p.is_dir()) if adir.exists() else []:
         tl = tdir / "trial.jsonl"
@@ -77,9 +175,15 @@ def load_run(run_id):
 
 
 def rel(path):
-    """Path relative to the repo root (REPORT.md lives there)."""
+    """Path relative to the repo root (REPORT.md lives there); symlinked roots (artifacts/) are kept as written."""
+    path = Path(path)
+    for base in (ROOT, ROOT.resolve()):
+        try:
+            return str(path.relative_to(base))
+        except ValueError:
+            pass
     try:
-        return str(Path(path).resolve().relative_to(ROOT.resolve()))
+        return str(path.resolve().relative_to(ROOT.resolve()))
     except ValueError:
         return str(path)
 
@@ -232,6 +336,21 @@ def plot_trial(trial):
     return out
 
 
+def lag_stats(trial):
+    """Max |measured - commanded| per arm joint [mrad] over the samples, split by whether a dish was carried."""
+    import numpy as np
+    samples = [r for n, r in trial["rows"] if r["event"] == "sample"]
+    if not samples:
+        return None
+    lag = np.abs(np.array([r["payload"]["lag"] for r in samples])) * 1e3
+    carried = np.array([bool(r["payload"].get("carried")) for r in samples])
+    out = {}
+    for label, mask in (("carried", carried), ("free", ~carried)):
+        out[label] = {j: round(float(lag[mask, i].max()), 1) if mask.any() else None for i, j in enumerate(JOINTS)}
+        out[label]["samples"] = int(mask.sum())
+    return out
+
+
 def plot_run_summary(run):
     """k/N by bowl and the in-hand settle-displacement histogram (all trials of the run)."""
     plt = _mpl()
@@ -241,6 +360,7 @@ def plot_run_summary(run):
     out = {}
     per_bowl = defaultdict(lambda: {"reached": 0, "n": 0, "classes": defaultdict(int)})
     settle, drift = [], []
+    rec_pb = (run["record"] or {}).get("per_bowl", {})
     for trial in run["trials"]:
         end = trial["end"]
         if end:
@@ -248,7 +368,8 @@ def plot_run_summary(run):
                 per_bowl[oid]["n"] += 1
                 per_bowl[oid]["reached"] += int(bool(b["reached"]))
                 if not b["reached"]:
-                    per_bowl[oid]["classes"][b.get("failure_class") or "other"] += 1
+                    cls = rec_pb.get(oid, {}).get("failure_class") if len(run["trials"]) == 1 else None
+                    per_bowl[oid]["classes"][cls or (summarize_cause(b["cause"])[0] if b.get("cause") else None) or "other"] += 1
         for n, r in trial["rows"]:
             if r["event"] == "hold":
                 settle.append(r["payload"].get("settle_displacement_mm"))
@@ -261,11 +382,12 @@ def plot_run_summary(run):
         n = [per_bowl[i]["n"] for i in ids]
         ax.bar(ids, n, color="#dddddd", label="trials (N)")
         ax.bar(ids, k, color="#3a9a5b", label="reached its goal (k)")
+        import textwrap
         for i, oid in enumerate(ids):
-            cls = ", ".join(f"{c} x{m}" for c, m in per_bowl[oid]["classes"].items())
+            cls = "\n".join(textwrap.wrap(", ".join(f"{c} x{m}" for c, m in per_bowl[oid]["classes"].items()), 18))
             ax.text(i, n[i] + .05, f"{k[i]}/{n[i]}\n{cls}", ha="center", va="bottom", fontsize=6)
-        ax.set_ylim(0, max(n) * 1.6 + .5); ax.set_ylabel("trials"); ax.legend(fontsize=7)
-        ax.set_title(f"{run['run_id']}: k/N by bowl (failure class of the misses)")
+        ax.set_ylim(0, max(n) * 1.9 + .5); ax.set_ylabel("trials"); ax.legend(fontsize=7, loc="upper right")
+        ax.set_title(f"{run['run_id']}: k/N by bowl, failure class", fontsize=9)
         fig.tight_layout(); fig.savefig(sdir / "k_over_n.png", dpi=110); plt.close(fig)
         out["k_over_n"] = sdir / "k_over_n.png"
     s = [v for v in settle if v is not None]
@@ -316,7 +438,7 @@ def write_index(run, plots, summary, embed_video_max_mb=12.):
                          "<th>distance (lat mm, dz mm, tilt deg)</th><th>racked in</th><th>cause</th><th>class</th><th>invariants</th></tr>")
             for oid, b in pb.items():
                 parts.append(f"<tr><td>{oid}</td><td>{b['start']}</td><td>{b['goal_rack']}</td><td>{b['moves']}</td><td>{b['reached']}</td>"
-                             f"<td>{b.get('distance')}</td><td>{b.get('racked_in')}</td><td>{html.escape(str(b.get('cause')))[:300]}</td>"
+                             f"<td>{b.get('distance')}</td><td>{b.get('racked_in')}</td><td>{html.escape(str(b.get('cause_summary') or b.get('cause')))[:300]}</td>"
                              f"<td>{b.get('failure_class')}</td><td>{b.get('invariants')}</td></tr>")
             parts.append("</table>")
     for name, path in summary.items():
@@ -417,6 +539,35 @@ PROCESS_ERRORS = [
 ]
 
 
+ROBOT_FILES = ("frigidaire/src/dishsim_frigidaire/robot", "frigidaire/scripts/experiment/frigidaire_robot_episode.py",
+               "frigidaire/scripts/setup/frigidaire_robot_conventions.py", "frigidaire/scripts/setup/frigidaire_robot_conventions_fixture.py",
+               "frigidaire/scripts/setup/robot_asset_manifest.py", "frigidaire/scripts/setup/mirror_robot_usd.sh",
+               "frigidaire/scripts/evaluation/frigidaire_robot_report.py", "frigidaire/tests/test_robot_kin.py",
+               "frigidaire/tests/test_robot_conventions.py", "frigidaire/tests/test_robot_flags.py", "frigidaire/tests/test_robot_harness.py",
+               "frigidaire/tests/fixtures/robot", "frigidaire/docs/robot.md", "plans")
+
+DECISIONS_TAKEN = [
+    ("2026-09-29", "D13 commit before Phase 0", "user: continue without a commit (a pre-Phase-0 snapshot went to artifacts/_baseline_pre_phase0/); the user committed the stack later (see the git status row)"),
+    ("2026-09-29", "artifacts/ location", "user: symlink onto the 2 TB drive, gitignored (root disk gains nothing)"),
+    ("2026-09-30", "easy_s0 diagnostic run budget", "user: allow up to 45 min (--max-wall-seconds 2700, the last 5 min for scoring)"),
+    ("2026-09-30", "D4 and the knuckle contacts", "user: keep D4 as decided (knuckle contact = auto-fail; Phase 2's grasps must keep the rim on the pads)"),
+    ("2026-09-30", "D4 and the silverware basket", "user: the basket counts as rack furniture for the carried dish (flagged interpretation kept)"),
+]
+
+
+def git_status():
+    """HEAD and the tracked / modified / untracked state of the robot files (the D13 row is read from git, not typed)."""
+    def run(*a):                       # read-only; safe.directory because the container runs as root in the user's checkout
+        return subprocess.run(["git", "-c", f"safe.directory={ROOT}", *a], cwd=ROOT, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, text=True).stdout.strip()
+    head = run("log", "-1", "--format=%h %ad %s", "--date=short")
+    tracked = run("ls-files", "--", *ROBOT_FILES).splitlines()
+    porcelain = run("status", "--porcelain", "--", *ROBOT_FILES).splitlines()
+    modified = sorted(l[2:].strip() for l in porcelain if "M" in l[:2])
+    untracked = sorted(l[2:].strip() for l in porcelain if l.startswith("??"))
+    return {"head": head, "tracked": len(tracked), "modified": modified, "untracked": untracked}
+
+
 def md_table(header, rows):
     out = ["| " + " | ".join(header) + " |", "|" + "|".join("---" for _ in header) + "|"]
     for r in rows:
@@ -435,11 +586,12 @@ def run_table_row(run):
     v = rec.get("verdicts", {})
     ok = sum(1 for m in rec.get("moves", []) if m.get("ok"))
     att = sum(len(m.get("attempts", [])) for m in rec.get("moves", []))
-    cfg = len({t["meta"]["config_id"] for t in run["trials"] if t["meta"]})
-    return [run["run_id"], rec.get("instance"), f"{rec.get('profile')}{' +diagnostic' if rec.get('flags', {}).get('continue_after_failed_dish') else ''}",
+    cfg = len({t["meta"]["config_id"] for t in run["trials"] if t["meta"]}) or ("-" if not run["trials"] else 0)
+    profile = rec.get("profile") or "(pre-harness code path, old record format)"
+    return [run["run_id"], rec.get("instance"), f"{profile}{' +diagnostic' if rec.get('flags', {}).get('continue_after_failed_dish') else ''}",
             f"**{rec.get('result')}**", f"{ok}/{len(rec.get('moves', []))}", att, cfg,
-            v.get("benchmark_success"), v.get("final_hold"), json.dumps(v.get("invariant_counts")),
-            f"{rec.get('sim_s_moves')} / {rec.get('seconds_wall')}"]
+            v.get("benchmark_success"), v.get("final_hold"), json.dumps(v.get("invariant_counts")) if v else "-",
+            f"{rec.get('sim_s_moves', '-')} / {rec.get('seconds_wall')}"]
 
 
 def per_bowl_rows(run):
@@ -458,7 +610,7 @@ def per_bowl_rows(run):
             if inv:
                 ref += " " + logref(trial, inv[0][0])
         out.append([run["run_id"], oid, b["start"], b["goal_rack"], b["moves"], b["reached"], b.get("distance"),
-                    b.get("racked_in"), (b.get("cause") or "-")[:160], b.get("failure_class"), ", ".join(b.get("invariants", [])), ref])
+                    b.get("racked_in"), (b.get("cause_summary") or b.get("cause") or "-")[:220], b.get("failure_class"), ", ".join(b.get("invariants", [])), ref])
     return out
 
 
@@ -501,23 +653,42 @@ def build_report(args, runs, conventions, pytest_xml, plots, summaries, indexes)
     def status(cond, ok_text, fail_text):
         return f"PASS: {ok_text}" if cond else f"**FAIL**: {fail_text}"
 
-    legacy = next((r for r in runs if r["record"] and r["record"].get("profile") == "legacy_upright3"), None)
-    headline3 = next((r for r in runs if r["record"] and r["record"].get("profile") == "headline" and r["record"].get("flags", {}).get("test_case") == "upright3"
-                      and not r["record"].get("flags", {}).get("continue_after_failed_dish")), None)
-    headline3d = next((r for r in runs if r["record"] and r["record"].get("profile") == "headline" and r["record"].get("flags", {}).get("test_case") == "upright3"
-                       and r["record"].get("flags", {}).get("continue_after_failed_dish")), None)
-    easy = next((r for r in runs if r["record"] and r["record"].get("instance") == "easy_s0" and not r["record"].get("flags", {}).get("continue_after_failed_dish")), None)
-    easyd = next((r for r in runs if r["record"] and r["record"].get("instance") == "easy_s0" and r["record"].get("flags", {}).get("continue_after_failed_dish")), None)
+    def last(pred):                     # runs are listed chronologically: the latest matching run is the evidence
+        return next((r for r in reversed(runs) if r["record"] and pred(r["record"])), None)
+
+    fl = lambda rec: rec.get("flags", {})  # noqa: E731
+    legacy = last(lambda rec: rec.get("profile") == "legacy_upright3" and fl(rec).get("sleep_threshold") is not None)
+    headline3 = last(lambda rec: rec.get("profile") == "headline" and fl(rec).get("test_case") == "upright3" and not fl(rec).get("continue_after_failed_dish"))
+    headline3d = last(lambda rec: rec.get("profile") == "headline" and fl(rec).get("test_case") == "upright3" and fl(rec).get("continue_after_failed_dish"))
+    easy = last(lambda rec: rec.get("instance") == "easy_s0" and not fl(rec).get("continue_after_failed_dish"))
+    easyd = last(lambda rec: rec.get("instance") == "easy_s0" and fl(rec).get("continue_after_failed_dish"))
     pre = ROOT / "results/robot/episodes/robot_upright3.json"
     pre_rec = json.loads(pre.read_text()) if pre.exists() else None
     rows.append(("0.1 audit table", "PASS: section 8 (D20 wording)" if AUDIT_ROWS else "FAIL (not run)"))
+    g = git_status()
+    rows.append(("D13 git state of the robot stack (read from git)",
+                 f"HEAD `{g['head']}`; {g['tracked']} robot files tracked; modified since HEAD: {g['modified'] or 'none'}; untracked: {g['untracked'] or 'none'} "
+                 "(the executor never commits; the user commits from the summary)"))
+    ab = last(lambda rec: rec.get("profile") == "legacy_upright3" and fl(rec).get("sleep_threshold") is None)
     if legacy and pre_rec:
         cmp_ = compare_records(pre_rec, legacy["record"])
-        same = all(ta == tb and oa == ob for _, oa, ob, ta, tb in cmp_["moves"]) and (cmp_["final_pose_max_diff_mm"] is not None and cmp_["final_pose_max_diff_mm"] < 1e-6)
-        rows.append(("0.2 flags: 3-bowl test with the OLD settings reproduces the pre-Phase-0 PASS",
-                     status(same, f"legacy profile run `{legacy['run_id']}`: same per-move jaw angles and final poses to {cmp_['final_pose_max_diff_mm']:.2e} mm vs `{rel(pre)}`"
-                                  f" (record `{rel(legacy['record_path'])}`)",
-                            f"legacy run differs from the PASS: {cmp_}")))
+        verdict_same = all(oa == ob for _, oa, ob, _, _ in cmp_["moves"]) and legacy["record"]["verdicts"]["legacy_rule"] == pre_rec["result"] == "PASS" \
+            and legacy["record"]["end_check"]["outcome"] == pre_rec["end_check"]["outcome"]
+        exact = all(ta == tb for _, _, _, ta, tb in cmp_["moves"]) and cmp_["final_pose_max_diff_mm"] is not None and cmp_["final_pose_max_diff_mm"] < 1e-6
+        jaw = max(abs(ta[0] - tb[0]) for _, _, _, ta, tb in cmp_["moves"] if ta and tb and ta[0] and tb[0])
+        dmm = cmp_["final_pose_max_diff_mm"]
+        numbers = "byte-identical" if exact else f"not byte-identical: jaw angles within {jaw * 1e3:.1f} mrad, final poses within {dmm:.1f} mm"
+        txt = (f"legacy profile run `{legacy['run_id']}` reproduces the PASS verdict (3/3 physically ok, all racked; record `{rel(legacy['record_path'])}`); "
+               f"the numbers are {numbers} of `{rel(pre)}`")
+        if not exact:
+            txt += "; the pre-harness reproduction `results/robot/runs/p0_prerepro_upright3/robot_upright3.json` IS byte-identical, so the harness changed the timeline"
+            if ab:
+                abd = compare_records(pre_rec, ab["record"])["final_pose_max_diff_mm"]
+                cause = "the" if abd < 1e-6 else "NOT the only"
+                txt += f"; A/B `{ab['run_id']}` (sleep authoring off, ANALYSIS): final poses within {abd:.2e} mm of the PASS -> the plan's never-sleep rule (D10) is {cause} cause"
+            else:
+                txt += "; attribution run not available"
+        rows.append(("0.2 flags: 3-bowl test with the OLD settings reproduces the pre-Phase-0 PASS", status(verdict_same, txt, txt)))
     else:
         rows.append(("0.2 flags: 3-bowl test with the OLD settings", "**FAIL (not run)**"))
     rows.append(("0.2 flags: 3-bowl test with the HEADLINE settings",
@@ -614,7 +785,7 @@ def build_report(args, runs, conventions, pytest_xml, plots, summaries, indexes)
             for m in rec["moves"]:
                 att = m.get("attempts", [])
                 mrows.append((m["move"], m["kind"], m["dish"], m.get("ok"), m.get("ok_physical"), len(att), m.get("failure_class"),
-                              (m.get("cause") or "-")[:200], m.get("sim_s"), m.get("seconds_wall")))
+                              (m.get("cause_summary") or m.get("cause") or "-")[:240], m.get("sim_s"), m.get("seconds_wall")))
             L += [md_table(["move", "kind", "dish", "ok", "physically ok", "attempts", "class", "cause", "sim s", "wall s"], mrows), ""]
     # ---------------------------------------------------------------- 6. findings
     L += ["## 6. Measured findings of Phase 0", ""]
@@ -641,6 +812,12 @@ def build_report(args, runs, conventions, pytest_xml, plots, summaries, indexes)
                     f"move {row.get('move')} {row.get('dish')}: settle displacement {row['payload'].get('settle_displacement_mm')} mm / {row['payload'].get('settle_rotation_deg')} deg, "
                     f"{'drift ' + str(row['payload'].get('drift_mm')) + ' mm over ' + str(row['payload'].get('window_s')) + ' s, ' if row['payload'].get('window_s') else ''}"
                     f"held {row['payload'].get('held')} ({logref(t, n)})" for n, row in holds) + "."]
+            st = lag_stats(t)
+            if st and st["carried"]["samples"]:
+                L += [f"- **Arm tracking error** (`{r['run_id']}`, max |measured - commanded| in mrad over 20 Hz samples; plot `{rel(t['dir'] / 'plots' / 'joint_tracking.png')}`): "
+                      f"carrying a dish ({st['carried']['samples']} samples): " + ", ".join(f"{j} {st['carried'][j]}" for j in JOINTS)
+                      + f"; free ({st['free']['samples']} samples): " + ", ".join(f"{j} {st['free'][j]}" for j in JOINTS)
+                      + ". The rig's pre-R7 settled limit is 30 mrad, the legacy carry limit 80 mrad (Phase 1a measures the static error per posture)."]
             inv = find_rows(t, "invariant")
             if inv:
                 L += [f"- **Invariants fired** (`{r['run_id']}`): " + "; ".join(
@@ -667,13 +844,19 @@ def build_report(args, runs, conventions, pytest_xml, plots, summaries, indexes)
           "- D4: the silverware basket counts as rack furniture for the carried dish (`harness.CARRIED_ALLOWED`), because the benchmark's support rule seats it on the lower rack; "
           "a carried bowl touching the basket is therefore allowed, a bowl touching a finger body or knuckle is not.",
           "- D1: 'at its goal before the move' uses the benchmark tolerance on the pre-move pose plus the dishes this trial already placed at their goals.",
+          "- D10 (sleep threshold 0 on the dish prims and robot links): besides the false-pass guard, it is a precondition of the contact logging: PhysX emits no "
+          "contact reports for sleeping bodies (NVIDIA's RigidContactView test sets `physxRigidBody:sleepThreshold = 0` for that reason, comment "
+          "'disable sleeping, because sleeping bodies don't get contact reports'); the A/B run with the asset thresholds shows the bowls asleep on the counter.",
           "- R3 in the headline: the rack motions are scripted environment actions (logged as `rack` rows); both racks are re-extended before the final hold and the end check.",
           "- Privileged information used by the controller (plan Section 3): " + "; ".join(json.loads(json.dumps(any_trial["meta"]["payload"]["privileged"])) if any_trial else []) + ".", ""]
     # ---------------------------------------------------------------- 8. audit
+    g = git_status()
     L += ["## 8. Audit: fixes 1-13 and R1-R7 -> code (Phase 0.1; D20 wording)", "",
-          "No commit holds any of this work: the robot stack is untracked (the user chose to continue without the D13 commit; a pre-Phase-0 snapshot "
-          "with sha256 sums sits in `artifacts/_baseline_pre_phase0/`). The commits column is therefore empty for every row.", "",
-          md_table(["item", "plan text", "code", "verdict", "correction"], AUDIT_ROWS), ""]
+          f"Commits: none of fixes 1-13 / R1-R7 has a commit of its own (the whole stack was untracked when the audit was made; a pre-Phase-0 snapshot with sha256 "
+          f"sums sits in `artifacts/_baseline_pre_phase0/`). Git now: HEAD `{g['head']}`, {g['tracked']} robot files tracked, modified since HEAD {g['modified'] or 'none'}, "
+          f"untracked {g['untracked'] or 'none'}.", "",
+          md_table(["item", "plan text", "code", "verdict", "correction"], AUDIT_ROWS), "",
+          "### Decisions taken by the user during Phase 0", "", md_table(["date", "item", "decision"], DECISIONS_TAKEN), ""]
     # ---------------------------------------------------------------- 9. hypotheses
     L += ["## 9. Hypotheses H1-H6 (Phase 1 measures; Phase 0 status)", "", md_table(["H", "claim", "status after Phase 0"], HYPOTHESES), ""]
     # ---------------------------------------------------------------- 10. process errors
@@ -694,11 +877,15 @@ def build_report(args, runs, conventions, pytest_xml, plots, summaries, indexes)
         L += [""]
     # ---------------------------------------------------------------- 12. open problems
     L += ["## 12. Open problems and questions for the user", "",
-          "- The plan's D4 invariant fails the only passing grasp: the rim pinch loads the inner knuckles (section 6). Options for Phase 2: a grasp whose "
-          "rim stays on the pads (opening = wall + 10-15 mm per side, as the plan's G1 says) or a widened allowed list (a Section 6 decision).",
+          "- The plan's D4 invariant fails the only passing grasp: the rim pinch loads the inner knuckles (section 6); user ruling 2026-09-30: D4 stays, "
+          "Phase 2's grasps must keep the rim on the pads (opening = wall + 10-15 mm per side, the plan's G1).",
+          "- Under the pre-R7 lag limits (D8) every carry of the 3-bowl case is judged blocked at the top of the rise: wrist_3 lags 46-49 mrad while a bowl is "
+          "held (gravity is off on the links, so it is not sag) against the 30 mrad settled limit; Phase 1a's contact-first blocked detection is the planned remedy.",
+          "- After a failed transport the episode releases the dish where the hand is (up to 30 cm above the counter), as the old episode did; a lowered abort "
+          "release is a control change for Phase 2+, not Phase 0.",
           "- D11 (asset script): `assets/robots/MANIFEST.sha256` is written from the files present; the usd-core version that produced the converted layers is "
           "unrecorded and cannot be verified without a re-download (which D11 forbids).",
-          "- D13: the robot stack is still uncommitted (user's choice this session); `git clean` would destroy it.",
+          f"- D13: git HEAD `{g['head']}`; robot files modified since HEAD {g['modified'] or 'none'}, untracked {g['untracked'] or 'none'} (the user commits; see the summary's suggested message).",
           "- Phase 1 (1a-1e) has not started; every hypothesis row above is a code/asset status, not a measurement, except H2's runtime test.", ""]
     L += ["## Machine constraints", "",
           "Safety: one container (`dishsim-isaac`) on GPU 1, at most two Kit jobs staggered 90 s with a 6 GB free check, jobs stopped by recorded PID only, "

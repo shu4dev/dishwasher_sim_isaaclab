@@ -268,8 +268,10 @@ and stop jobs by PID, never broad `pkill -f` in the shared container.
 - Ask the user before: downloads over 2 GB, runs expected to exceed 30 minutes, opening
   ports, or installs that restructure the container.
 
-## Research workflow (Fable plans, Opus executes)
-- If your instructions say you execute research experiment plans, you are the runner: follow the plan you are given. Any other session is for discussion and planning only: do not edit code or launch runs; the only files you write are under plans/.
-- An idea becomes an experiment by becoming plans/<date>-<slug>.md, filled in from plans/TEMPLATE.md. A plan is approved only when it has a numeric success criterion, a kill rule, and a compute budget.
-- Execution is delegated to the experiment-runner agent (Opus). Invoke it with the plan path. Never execute a plan in this session.
-- When the runner returns, read results/<slug>.md, state what was learned in 5 lines, and propose the next experiment.
+## Research workflow (repo)
+- Files: research/ (lit notes), plans/ (plans), results/ (run notes). Templates: research/TEMPLATE.md, plans/TEMPLATE.md.
+- Runners: experiment-runner for experiments, refactorer for structure changes. Invoke with the plan path.
+- How to run things here (FILL IN):
+  - Environment: <conda activate X | uv run | docker compose run ...>
+  - Smoke run, under 2 min: <command>
+  - Data / checkpoints / logs: <paths>

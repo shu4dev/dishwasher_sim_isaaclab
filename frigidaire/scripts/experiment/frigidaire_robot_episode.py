@@ -178,6 +178,8 @@ def failure_class(text):
     t = (text or "").lower()
     if t.startswith("invariant"):
         return "invariant"
+    if t.startswith("not attempted"):
+        return "not attempted"
     if "counter-full" in t:
         return "counter-full (refused)"
     if "skipped" in t:
@@ -186,6 +188,10 @@ def failure_class(text):
         return "acquire" if "no collision-free grasp" not in t else "unreachable"
     if "not held" in t or "dropped" in t:
         return "in-hand"
+    if "lag_rad" in t or "blocked" in t:                  # the rig's blocked-motion verdict (R7/D8 lag limits)
+        return "transport blocked (lag limit)" if ("safe height" in t or "no path" in t) else "blocked (lag limit)"
+    if "ik branch jump" in t:                             # no branch-continuous IK along a straight TCP line
+        return "IK branch jump (rise to the safe height)" if "safe height" in t else "IK branch jump (insertion)"
     if "no path" in t or "no collision-free ik" in t or "safe height" in t:
         return "transport collision"
     if "line collides" in t or "descending" in t or "lowering" in t or "ik branch jump" in t:

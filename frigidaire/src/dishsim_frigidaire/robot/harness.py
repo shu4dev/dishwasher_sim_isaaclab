@@ -52,6 +52,13 @@ class InvariantAbort(RuntimeError):
     """Raised from the tick hook when an auto-fail invariant fires and the profile aborts on it."""
 
 
+def is_touch(force_N, sep_m):
+    """A reported pair touches when it carries impulse or its separation is <= 0 (PhysX reports pairs inside the
+    contact offset too: +1-2 mm, 0 N, measured on p0_upright3_legacy 2026-09-30); a non-finite separation with no
+    force is not a touch."""
+    return bool(force_N >= TOUCH_FORCE_N or (math.isfinite(sep_m) and sep_m <= 0.))
+
+
 def classify(path, roots=("/World/Robot",)):
     """(label, category) of a collider or rigid-body path. Categories: pad, finger, palm, arm, dish, rack, basket,
     appliance, counter, pedestal, ground, other. Robot labels carry a "<root name>:" prefix unless the root is the
@@ -178,7 +185,7 @@ class ContactMonitor:
             self.counts["points"] += n
             force /= self.dt
             normal /= self.dt
-            if force < TOUCH_FORCE_N and sep > 0.:            # within the contact offset only: not a touch
+            if not is_touch(force, sep):                      # within the contact offset only: not a touch
                 self.counts["near"] = self.counts.get("near", 0) + 1
                 continue
             (x, y) = sorted((a, b), key=lambda t: t[0])

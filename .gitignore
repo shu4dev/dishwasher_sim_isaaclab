@@ -8,7 +8,6 @@
 # copies under docs/figures/ are tracked.
 /media
 /results
-
 # Logs and outputs
 /logs
 /outputs
@@ -23,6 +22,8 @@ wandb/
 
 # experiments/ is a local symlink index over the ignored data roots.
 /experiments
+/plans
+/research
 
 # root-level convenience symlink to the pose viewer
 /index.html

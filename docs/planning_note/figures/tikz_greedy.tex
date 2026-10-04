@@ -1,0 +1,29 @@
+% Fig. 4: the greedy rule on a two-dish example. Dish o waits on the counter; its goal g_o is occupied by dish b,
+% which sits at a non-goal pose in the rack. Pass 1 fails for o, pass 2 parks b, pass 1 then sends o and b home.
+\begin{tikzpicture}[x=1cm,y=1cm,>={Stealth[length=4pt]},font=\footnotesize]
+  % counter slab with its parking cells
+  \fill[gray!12] (0,2.0) rectangle (5.6,2.6);
+  \draw[gray] (0,2.0) rectangle (5.6,2.6);
+  \node[anchor=east,gray!60!black] at (-0.05,2.3) {counter};
+  \foreach \x in {0.5,1.6,2.7,3.8,4.9} \draw[gray,densely dotted] (\x,2.3) circle (0.22);
+  \node[anchor=south,gray!60!black,font=\scriptsize] at (3.8,2.6) {cell $\beta\in\mathcal{B}$};
+  % rack with the two goal poses
+  \draw[gray] (1.0,0) rectangle (5.6,1.2);
+  \node[anchor=east,gray!60!black] at (0.95,0.3) {rack};
+  \draw[dashed,thick] (2.4,0.55) circle (0.25);
+  \node[anchor=north] at (2.4,0.29) {$g_o$};
+  \draw[dashed,thick] (4.8,0.55) circle (0.25);
+  \node[anchor=north] at (4.8,0.29) {$g_b$};
+  % the dishes now
+  \fill[orange!80!black] (0.5,2.3) circle (0.2);
+  \node[white,font=\scriptsize\bfseries] at (0.5,2.3) {$o$};
+  \fill[blue!60!black] (2.62,0.6) circle (0.2);
+  \node[white,font=\scriptsize\bfseries] at (2.62,0.6) {$b$};
+  % the three moves, labels placed clear of the arrows
+  \draw[->,thick,blue!60!black] (2.75,0.8) to[bend left=12] (3.65,2.1);
+  \node[anchor=east,blue!60!black,font=\scriptsize] at (3.0,1.5) {\textcircled{\tiny 1} park $b$};
+  \draw[->,thick,orange!80!black] (0.62,2.1) to[bend right=12] (2.22,0.73);
+  \node[anchor=east,orange!80!black,font=\scriptsize] at (1.2,1.35) {\textcircled{\tiny 2} $o\to g_o$};
+  \draw[->,thick,blue!60!black] (3.98,2.12) to[bend left=12] (4.68,0.8);
+  \node[anchor=west,blue!60!black,font=\scriptsize] at (4.6,1.5) {\textcircled{\tiny 3} $b\to g_b$};
+\end{tikzpicture}
