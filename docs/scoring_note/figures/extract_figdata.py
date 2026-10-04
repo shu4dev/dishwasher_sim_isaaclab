@@ -15,12 +15,12 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT / "frigidaire/scripts/experiment"))
+sys.path.insert(0, str(ROOT / "code/frigidaire/scripts/experiment"))
 import frigidaire_bench as B  # noqa: E402
 
 sc = B.Scorer()
 E, hx = sc.E, sc.hx
-inst = json.loads((ROOT / "results/benchmark/frigidaire_hotec/instances/hard/hard_s0.json").read_text())
+inst = json.loads((ROOT / "data/results/benchmark/frigidaire_hotec/instances/hard/hard_s0.json").read_text())
 kinds = {o["object_id"]: o["kind"] for o in inst["objects"]}
 entries = [{"id": oid, "kind": kinds[oid], "rack": g["rack"],
             "position": g["settled_rack_local_pose"]["position_m"],

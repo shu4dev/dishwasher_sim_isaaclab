@@ -197,7 +197,7 @@ All 14 classes sourced, purchasable, and dishwasher-safe → include.
 | lid | IKEA 365+ square lid (705.779.51) | 152 × 152 × ~13 | 113 published | pairs with container |
 
 Source URLs (dish rows): IKEA/Corelle/Duralex product pages — recorded in the research
-archive (`results/a0_research/`, this session) and inline in the rows' listings above.
+archive (`data/results/a0_research/`, this session) and inline in the rows' listings above.
 
 ## 10 Stage-B caliper checklist
 

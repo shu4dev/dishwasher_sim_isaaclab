@@ -10,14 +10,14 @@ Numbers below trace to recorded runs (see the Results section in the README) or 
 mesh bytes **plus the body's `config.COACD` params**, and `COACD` is absent from the
 `config_hash` payload. Changing a static's decomposition therefore leaves every manifest
 validating green while pointing at a piece directory that does not exist yet. The failure is
-loud at load (`missing CoACD pieces for '<body>' — run scripts/setup/decompose_meshes.py
+loud at load (`missing CoACD pieces for '<body>' — run code/scripts/setup/decompose_meshes.py
 first`) but the staleness check cannot see it coming, and a restore-only box hits it because
 the shipped archive predates the change.
 
 Practical consequences: the archive was re-cut from this box on 2026-09-10
-(`scripts/tools/archive_assets.py`), so `assets` tags dated 2026-09-10 or later ship the exact
+(`code/scripts/tools/archive_assets.py`), so `assets` tags dated 2026-09-10 or later ship the exact
 E_door_4 pieces and need no post-restore step. Restoring an OLDER tag still requires
-`scripts/run_py.sh scripts/setup/decompose_meshes.py` once per context (Kit-free, seconds),
+`code/scripts/run_py.sh code/scripts/setup/decompose_meshes.py` once per context (Kit-free, seconds),
 with `--machine/--placement/--scenario/--object` matching the restore log's `[OK] ... @
 <placement>` line. The upside of the same asymmetry is that re-decomposing a static invalidates
 **nothing** — it is the cheapest honest fix available in this codebase. Any future static-CoACD

@@ -13,9 +13,9 @@ The object/mode/state extension workflows.
    It downloads/generates the source mesh, prints the *measured* dimensions and fails if they
    disagree with the registry by >2 mm — freeze the printed block into the spec.
 3. Rebuild that object's caches:
-   `scripts/run_kit.sh scripts/setup/extract_geometry.py --headless --machine bosch800
+   `code/scripts/run_kit.sh code/scripts/setup/extract_geometry.py --headless --machine bosch800
    --placement side_winner --scenario <state> --object <name>` then the same flags to
-   `scripts/run_py.sh scripts/setup/decompose_meshes.py`. Slots derive live from the
+   `code/scripts/run_py.sh code/scripts/setup/decompose_meshes.py`. Slots derive live from the
    cached rack geometry (`placement.derive_slots`).
 
 > **Note:** never eyeball-edit a measured value. Every dimension in `config.py` traces to a
@@ -25,7 +25,7 @@ The object/mode/state extension workflows.
 
 ## Add a placement mode
 
-In `src/dishsim/placement.py`: write a `derive_<mode>_slots()` returning `SlotFrame`s, add a
+In `code/src/dishsim/placement.py`: write a `derive_<mode>_slots()` returning `SlotFrame`s, add a
 branch to `object_pose_for_mode()` for the release-pose geometry, and a branch to
 `evaluate_placement()` for the success criteria. Register the mode name in the object's
 `PlacementSpec`, and document the criteria in `docs/success_criteria.md`.

@@ -22,8 +22,8 @@ from PIL import Image  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
-R = ROOT / "results/benchmark/frigidaire_hotec"
-MEDIA = ROOT / "media/benchmark/frigidaire_hotec"
+R = ROOT / "data/results/benchmark/frigidaire_hotec"
+MEDIA = ROOT / "data/media/benchmark/frigidaire_hotec"
 
 plt.rcParams.update({"font.family": "serif", "font.serif": ["DejaVu Serif"], "mathtext.fontset": "cm",
                      "font.size": 8, "axes.linewidth": 0.6, "savefig.dpi": 300, "pdf.fonttype": 42})
@@ -83,7 +83,7 @@ def fig_stills():
 
 # ------------------------------------------------------------------ Fig. 2: catalogue
 def fig_catalogue():
-    D = np.load(ROOT / "build/planning_note/catalogue.npz")
+    D = np.load(ROOT / "data/build/planning_note/catalogue.npz")
     inst = instance("hard", "hard_s0")
     goal = load(R / "instances/attempts" / f"hard_s0_a{inst['attempt']}" / "goal.json")["entries"]
     fig, axes = plt.subplots(1, 2, figsize=(6.3, 2.75))

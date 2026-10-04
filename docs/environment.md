@@ -6,7 +6,7 @@ the README and `CLAUDE.md` link here rather than restating them.
 
 > The Bosch benchmark is teleport-only (no robot arm, no arm motion planning); an arm is being
 > brought up separately in the Frigidaire twin
-> ([frigidaire/docs/robot.md](../frigidaire/docs/robot.md), in progress 2026-09-29). The FCL
+> ([code/frigidaire/docs/robot.md](../code/frigidaire/docs/robot.md), in progress 2026-09-29). The FCL
 > planning stack is CPU-bound, so the core count below matters more than the GPU.
 
 ## Hardware (host)
@@ -25,7 +25,7 @@ and never touch other users' containers, images, or directories.
 
 ## Software stack (all inside the repo-owned container)
 
-The runtime is the image built by `docker/Dockerfile` and run by `docker/compose.yaml`
+The runtime is the image built by `code/docker/Dockerfile` and run by `code/docker/compose.yaml`
 (container `dishsim-isaac`). The driver-535 host caps Isaac Sim at **4.5.0** (the newest
 release NVIDIA documents for this driver series; 5.x/6.0 want ≥ 570/580).
 
@@ -35,7 +35,7 @@ release NVIDIA documents for this driver series; 5.x/6.0 want ≥ 570/580).
 | Isaac Lab | **v2.1.1** (git checkout at `/workspace/isaaclab`, editable-installed into Kit python) |
 | Python | Kit python **3.10.15** — no venv (the old venv was the sole cause of the `EXP_PATH` landmine) |
 | PyTorch | 2.7.0+cu128 (runs on the 535 driver via CUDA minor-version compat — precompiled sm_86 kernels) |
-| numpy | 1.26.0 (byte-hash digests in tests are pinned per numeric environment — see `tests/test_rack_gen_frozen.py`) |
+| numpy | 1.26.0 (byte-hash digests in tests are pinned per numeric environment — see `code/tests/test_rack_gen_frozen.py`) |
 | Repo | bind-mounted at `/workspace/dishsim`, `pip install -e` on every container start |
 
 **Local-image caveat**: the built `dishsim-isaac:4.5.0` on this box predates the Dockerfile
@@ -49,13 +49,13 @@ NVIDIA Brev launchable (L4, Isaac Sim 6.0.1-rc.7 + Isaac Lab 3.0.0, driver 595, 
 `env_isaaclab`). This port (2026-08-30) reverses the Kit boundary to the 2.1 API, following
 the recipe the `on-corrallab` branch proved for the robot-era code; the Kit-free planning
 stack and every collision cache are version-independent and carried over unchanged
-(`config_hash` untouched — `tests/test_config_hash_frozen.py` passes unedited).
+(`config_hash` untouched — `code/tests/test_config_hash_frozen.py` passes unedited).
 
 ## Isaac Lab 2.1 API notes (the port, reversed from the 3.0-era code)
 
 - **Quaternions are WXYZ** in every isaaclab surface (`rot=` config tuples, `data.*_quat_w`
   buffers, 7-D poses for `write_root_pose_to_sim`). The project convention stays **XYZW**
-  internally (configs, caches, instance/episode JSON); `src/dishsim/quats.py`
+  internally (configs, caches, instance/episode JSON); `code/src/dishsim/quats.py`
   (`xyzw_to_wxyz` / `wxyz_to_xyzw`) converts at every boundary crossing and nowhere else.
   Boundary census on this branch: 7 pose-write sites (scene `_add_object`, machine cfgs,
   `gen_instances`/`run_rearrange` teleports, `instance_views`
@@ -70,7 +70,7 @@ stack and every collision cache are version-independent and carried over unchang
   (same kwarg names, optional `env_ids`/`joint_ids`).
 - **`data.default_root_state`** (13-D) replaces 3.0's split `default_root_pose` /
   `default_root_vel` — slice `[:, :7]` / `[:, 7:]`.
-- **`pxr` is importable Kit-free** (2026-09-20): `scripts/run_py.sh` exports Kit's USD extension
+- **`pxr` is importable Kit-free** (2026-09-20): `code/scripts/run_py.sh` exports Kit's USD extension
   (`/isaac-sim/extscache/omni.usd.libs-*`, its `bin/` on `LD_LIBRARY_PATH`) before starting the
   interpreter, because the Frigidaire FCL checker reads colliders from USD (`loading.collision_parts`).
   `/isaac-sim/python.sh` alone has no `pxr`; the loader reads `LD_LIBRARY_PATH` once, so a runtime
@@ -93,27 +93,27 @@ stack and every collision cache are version-independent and carried over unchang
 
 1. **Boot-first requirement.** Every Kit entry script launches `AppLauncher` **first** and
    imports/resolves everything afterwards (`dishsim`, `isaaclab.*` scene modules, `pxr`).
-2. **Package name vs. repo name.** The Python package is `dishsim` (under `src/`), never
+2. **Package name vs. repo name.** The Python package is `dishsim` (under `code/src/`), never
    `dishwasher_sim_isaaclab`: Kit's extension scan turns a directory whose name matches an
    importable package into a shadowing namespace package (`unknown location` ImportErrors).
    Keep module-scope `pxr`/`omni` imports out of the package (lazy in-function imports, see
-   `src/dishsim/usd_prep.py`).
+   `code/src/dishsim/usd_prep.py`).
 3. **`./isaaclab.sh -p` exits 0 even when the wrapped script crashes** — verify success from
    log content (`[RESULT] PASS`, absence of tracebacks / `free(): invalid pointer`), never
-   from the exit code. `scripts/run_kit.sh` inherits this property.
+   from the exit code. `code/scripts/run_kit.sh` inherits this property.
 4. **The standalone `SimulationContext(sim_utils.SimulationCfg(...))` pattern** (see
-   `scripts/setup/gen_instances.py`) is the reliable construction for this project's scenes.
+   `code/scripts/setup/gen_instances.py`) is the reliable construction for this project's scenes.
 
 ## Launchers (docker era)
 
-- `scripts/run_kit.sh <script> ...` — on the host, forwards itself into `dishsim-isaac` via
+- `code/scripts/run_kit.sh <script> ...` — on the host, forwards itself into `dishsim-isaac` via
   `docker exec` at the mapped cwd; inside, execs `/workspace/isaaclab/isaaclab.sh -p`.
-- `scripts/run_py.sh ...` — same forwarding, but execs Kit's python directly (pytest,
+- `code/scripts/run_py.sh ...` — same forwarding, but execs Kit's python directly (pytest,
   planners, tools; no Kit boot). `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is baked in: hydra's
   auto-registered pytest plugin breaks collection outside Kit.
-- `scripts/tools/bootstrap.sh` — image build (if absent) + `compose up -d` + archive restore
+- `code/scripts/tools/bootstrap.sh` — image build (if absent) + `compose up -d` + archive restore
   + the kit_smoke install gate.
-- The base image's entrypoint launches the streaming sim — `docker/compose.yaml` overrides
+- The base image's entrypoint launches the streaming sim — `code/docker/compose.yaml` overrides
   it (isaaclab-core + pytest self-heal, editable-install of the repo, then `sleep infinity`
   for `docker exec`).
 
@@ -145,7 +145,7 @@ Kit's python, no venv:
 | Location | Contents |
 |---|---|
 | `/` (root disk) | the `dishsim-isaac:4.5.0` image (~24 GB) plus the container's writable layer (0.93 GiB on 2026-09-29: the isaaclab and pytest installs the entrypoint re-applies at every start) |
-| `2tbhdd …/dishsim/repo_data/` | `assets/ build/ media/ results/ logs/ outputs/` — the repo's dirs are symlinks here; `build/` holds the only copy of the current Frigidaire twin build (no archive tarball contains it) |
+| `2tbhdd …/dishsim/repo_data/` | `assets/ build/ media/ results/ logs/ outputs/` — the repo's `data/` dirs are symlinks here; `build/` holds the only copy of the current Frigidaire twin build (no archive tarball contains it) |
 | `2tbhdd …/dishsim/kit_cache/ ov_data/ pip_cache/` | Kit shader/extension caches and the pip cache mount (compose mounts; `pip_cache/` stays empty, see below) |
 | `2tbhdd …/dishsim/hf_home/` | `HF_HOME` (asset-archive downloads) |
 | `2tbhdd …/dishsim/_trash_20260917/`, `_trash_20260929/` | 30-day hold folders of retired data, each with a `MANIFEST.txt` (delete after 2026-10-17 / 2026-10-29) |
@@ -181,7 +181,7 @@ docker top dishsim-isaac
 
 # 2. stop (keeps the container + its entrypoint installs for a fast restart;
 #    restart: unless-stopped means it STAYS stopped across daemon restarts/reboots)
-docker compose -f docker/compose.yaml stop
+docker compose -f code/docker/compose.yaml stop
 
 # 3. verify the release
 docker ps --filter name=dishsim-isaac        # empty
@@ -193,14 +193,14 @@ nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv  # no 
 container, and the next bring-up must recreate it (entrypoint pip reinstalls + the
 readiness wait `bootstrap.sh` performs).
 
-**Restart**: same GPU → `docker compose -f docker/compose.yaml start` (seconds). Different
+**Restart**: same GPU → `docker compose -f code/docker/compose.yaml start` (seconds). Different
 GPU (check `nvidia-smi` first, pick the least-loaded) → `DISHSIM_GPU=<n> docker compose -f
-docker/compose.yaml up -d` — the changed config recreates the container, so wait for the
-entrypoint installs (or just run `scripts/tools/bootstrap.sh`, which waits for readiness).
+code/docker/compose.yaml up -d` — the changed config recreates the container, so wait for the
+entrypoint installs (or just run `code/scripts/tools/bootstrap.sh`, which waits for readiness).
 
 Shared-box safety rules:
 
-1. Act by NAME only — `docker compose -f docker/compose.yaml stop` / `docker stop
+1. Act by NAME only — `docker compose -f code/docker/compose.yaml stop` / `docker stop
    dishsim-isaac`. Never `docker stop $(docker ps -q)`, never `docker system prune`
    (it can delete labmates' stopped containers and images), never `nvidia-smi --gpu-reset`.
 2. `nvidia-smi` lists HOST PIDs with no container attribution; root-owned GPU PIDs are

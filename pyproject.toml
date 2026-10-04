@@ -15,11 +15,11 @@ requires-python = ">=3.10"
 license = { text = "BSD-3-Clause" }
 # Runtime dependencies are deliberately not pinned here: everything runs on Kit's python
 # inside the dishsim-isaac container (torch/isaaclab/pxr preinstalled; planning deps baked
-# in by docker/Dockerfile from requirements-planning.txt) — see docs/environment.md.
+# in by code/docker/Dockerfile from requirements-planning.txt) — see docs/environment.md.
 dependencies = []
 
 [tool.setuptools.packages.find]
-where = ["src", "frigidaire/src"]
+where = ["code/src", "code/frigidaire/src"]
 
 [tool.setuptools.package-data]
 dishsim_frigidaire = ["*.json"]
@@ -29,4 +29,4 @@ line-length = 110
 target-version = "py310"
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "frigidaire/tests"]
+testpaths = ["code/tests", "code/frigidaire/tests"]

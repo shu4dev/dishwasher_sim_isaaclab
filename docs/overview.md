@@ -11,18 +11,18 @@ was replaced by a pointer on the same day.
 ## 1 Overview
 
 The independently authored **Frigidaire FDPC4221AS** twin lives in its own package,
-`frigidaire/` ([source README](../frigidaire/README.md)); its current build is staged in
-`build/frigidaire_collection/` (`build/` is a symlink onto the 2 TB drive; this is the only
+`code/frigidaire/` ([source README](../code/frigidaire/README.md)); its current build is staged in
+`data/build/frigidaire_collection/` (`data/build/` is a symlink onto the 2 TB drive; this is the only
 copy of the current build, and no archive tarball contains it). Its v3-era experiments
 (single-dish random drops, multi-dish randomized states, organized counterparts, the first
 exposure and planner runs) ran on the 52/72-tine photo-fitted racks, before the 2026-09-22
 and 2026-09-28 rebuilds, and were retired on 2026-09-29: the code is in git history (last
 commit before the retirement: `4455813`), the result folders are held until 2026-10-29 in
 `_trash_20260929/` on the 2 TB drive, and none of their numbers are quoted here. Current
-documents: [geometry](../frigidaire/docs/geometry.md) (racks re-measured 2026-09-28), the
-[HOTEC rearrangement benchmark](../frigidaire/docs/hotec_bench.md) on that twin, the
-[exposure scorer](../frigidaire/docs/exposure.md) and the
-[arm bring-up](../frigidaire/docs/robot.md) (UR5e + Robotiq 2F-85, in progress 2026-09-29).
+documents: [geometry](../code/frigidaire/docs/geometry.md) (racks re-measured 2026-09-28), the
+[HOTEC rearrangement benchmark](../code/frigidaire/docs/hotec_bench.md) on that twin, the
+[exposure scorer](../code/frigidaire/docs/exposure.md) and the
+[arm bring-up](../code/frigidaire/docs/robot.md) (UR5e + Robotiq 2F-85, in progress 2026-09-29).
 
 This repo is a **benchmark for dishwasher rearrangement planning**: given a physically
 settled initial arrangement and an exact target arrangement in an articulated dishwasher
@@ -42,17 +42,17 @@ physics validation and evidence rendering. (The earlier UR5e + OMPL manipulation
 on this branch: it lives on `main` and `on-corrallab` and in git history. The RL door-opening
 pipeline, `scripts/rsl_rl/` and `source/dishwasher_tasks/`, was removed on 2026-07-30 in
 commit `2628cfc` and lives in git history only. A UR5e + Robotiq arm is being brought up
-separately in the Frigidaire twin: [frigidaire/docs/robot.md](../frigidaire/docs/robot.md),
+separately in the Frigidaire twin: [code/frigidaire/docs/robot.md](../code/frigidaire/docs/robot.md),
 in progress 2026-09-29.)
 
-The pipeline, mirrored by the layout of `scripts/`:
+The pipeline, mirrored by the layout of `code/scripts/`:
 
 | Stage | Command | Does | Writes |
 |---|---|---|---|
 | **Plan** | in-process (`capacity.plan_full_load`) | Kit-free greedy capacity plan: derive slots live, pre-scan placeability, certify the load jointly, gate on z-budget + measured settle reliability | (consumed live by Generate) |
-| **Generate** | `setup/gen_instances.py` | Seeded rearrangement instances (perturbed plans / random drops), physically settled and saved as artifacts | `results/instances/<machine>/<state>/` |
-| **Problem images** | `evaluation/instance_views.py` | One instance's initial-vs-goal stills — the problem, where the episode video is the solving | `media/instances/<machine>/<state>/<cell>/` (legacy instances without a cell: flat in `<state>/`) |
-| **Benchmark** | `experiment/run_rearrange.py` | Closed-loop algorithm episodes: every move teleports + settles; abort on first fatal fault; move budget; `--video` per-episode MP4 | `results/rearrange/<machine>/<state>/`, `media/rearrange/` |
+| **Generate** | `setup/gen_instances.py` | Seeded rearrangement instances (perturbed plans / random drops), physically settled and saved as artifacts | `data/results/instances/<machine>/<state>/` |
+| **Problem images** | `evaluation/instance_views.py` | One instance's initial-vs-goal stills — the problem, where the episode video is the solving | `data/media/instances/<machine>/<state>/<cell>/` (legacy instances without a cell: flat in `<state>/`) |
+| **Benchmark** | `experiment/run_rearrange.py` | Closed-loop algorithm episodes: every move teleports + settles; abort on first fatal fault; move budget; `--video` per-episode MP4 | `data/results/rearrange/<machine>/<state>/`, `data/media/rearrange/` |
 
 <table align="center">
   <tr>
@@ -96,12 +96,12 @@ The pipeline, mirrored by the layout of `scripts/`:
   instance, so results can be quoted as an optimality gap rather than a relative ranking.
   Feasibility is pairwise-decomposable here, so a compatibility table (seconds) makes an exact
   A* cheap. Instances are per-machine artifacts (settle fixed points are engine-relative); on
-  this box's three pinned perturbed instances the optima are **9, 9, 9** (`tests/test_compat.py`,
+  this box's three pinned perturbed instances the optima are **9, 9, 9** (`code/tests/test_compat.py`,
   re-pinned 2026-08-31) and greedy solved 3/3 in 9 moves on 2026-08-30 (that run left no
   records). It is a *geometric-relaxation* optimum — see the caveats in the module docstring.
 - **Your algorithm**: one class implementing `reset(instance, world)` / `next_move(obs)`
-  (`src/dishsim/rearrange.py`) plus one line in `ALGORITHMS` in
-  `scripts/experiment/run_rearrange.py`; accept a `seed=` kwarg if stochastic. A greedy
+  (`code/src/dishsim/rearrange.py`) plus one line in `ALGORITHMS` in
+  `code/scripts/experiment/run_rearrange.py`; accept a `seed=` kwarg if stochastic. A greedy
   baseline ships as the thing to beat — one-blocker lookahead, so swap-cycles defeat it.
 
 ### 1.3 Object library
@@ -130,7 +130,7 @@ class: [docs/extending.md](extending.md).
 
 Docker with the NVIDIA container runtime, and an NVIDIA GPU with a 535-series (or newer)
 driver — the runtime environment (Isaac Sim **4.5.0** + Isaac Lab **v2.1.1**) is fully baked
-into the image built by `docker/Dockerfile`, and nothing installs on the host. Developed and
+into the image built by `code/docker/Dockerfile`, and nothing installs on the host. Developed and
 validated on the corallab workstation (3× RTX 3090, driver 535.230.02, Ubuntu 20.04 — see
 [docs/environment.md](environment.md)). Everything runs `--headless`; only *rendering*
 additionally needs `--enable_cameras`.
@@ -138,13 +138,13 @@ additionally needs `--enable_cameras`.
 ### 2.2 Runtime container
 
 ```bash
-docker build -f docker/Dockerfile -t dishsim-isaac:4.5.0 .   # once (skipped if present)
-docker compose -f docker/compose.yaml up -d                  # long-lived container dishsim-isaac
+docker build -f code/docker/Dockerfile -t dishsim-isaac:4.5.0 .   # once (skipped if present)
+docker compose -f code/docker/compose.yaml up -d                  # long-lived container dishsim-isaac
 ```
 
 The compose file keeps every bulky mutable path (assets, media, results, Kit caches,
-`HF_HOME`) on `/media/corallab-s1/2tbhdd/brianshu/dishsim`; the repo's data dirs (`assets/`,
-`build/`, `media/`, `results/`, `logs/`, `outputs/`) are symlinks there. On the root disk
+`HF_HOME`) on `/media/corallab-s1/2tbhdd/brianshu/dishsim`; the repo's data dirs (`data/assets/`,
+`data/build/`, `data/media/`, `data/results/`, `data/logs/`, `data/outputs/`) are symlinks there. On the root disk
 stay the `dishsim-isaac:4.5.0` image and the container's writable layer (0.93 GiB on
 2026-09-29: the isaaclab and pytest installs that every start re-applies); the root disk is
 80 % used with about 182 GiB free (2026-09-29). Retired data waits in 30-day hold folders
@@ -163,22 +163,22 @@ and this project's own procedural props, racks and geometry caches. One command 
 all of them, no token needed:
 
 ```bash
-scripts/run_py.sh scripts/tools/restore_assets.py --repo shu4dev/dishsim-assets
+code/scripts/run_py.sh code/scripts/tools/restore_assets.py --repo shu4dev/dishsim-assets
 ```
 
 The restore downloads the archive (built props, every geometry cache — the ~1.5 h-of-Kit
 part — derived dishwasher USDs), re-downloads the ArtVIP originals, validates every cache's
-`config_hash` against the current `config.py`, and runs the test suite. It extracts `assets/`
+`config_hash` against the current `config.py`, and runs the test suite. It extracts `data/assets/`
 members only (`EXTRACT_PREFIXES` in `restore_assets.py`): the `assets` tarball also packs the
-recorded Bosch instances, episode records and comparison table (`results/`), but they are
+recorded Bosch instances, episode records and comparison table (`data/results/`), but they are
 skipped, so a restored box regenerates instances with `gen_instances.py`; the same rule makes
 `--with_media` download a tarball whose members are all skipped, so the command omits it.
-`assets/`, `media/`, `results/` are gitignored; only curated figures under `docs/figures/`
+`data/assets/`, `data/media/`, `data/results/` are gitignored; only curated figures under `docs/figures/`
 are tracked.
 
 **The archive ships the complete Bosch 800 digital-twin world**: collision caches for all
 five Bosch rack states baked at the measured `side_winner` anchor
-(`assets/cache/machines/bosch800/`); the machine USDs re-author on demand at import. Tags
+(`data/assets/cache/machines/bosch800/`); the machine USDs re-author on demand at import. Tags
 dated 2026-09-10 or later carry the exact `E_door_4` CoACD pieces and need no post-restore
 step; an OLDER tag's pieces predate a static-CoACD param change, so run
 `decompose_meshes.py` once per cached context (quickstart step 2; the loud
@@ -195,18 +195,18 @@ restore. It is a visual/manipulation asset, not (yet) the benchmark machine — 
 [docs/bosch800_asset.md](bosch800_asset.md):
 
 ```bash
-scripts/run_py.sh scripts/tools/restore_assets.py --kinds models            # ~3.5 MB
-scripts/run_py.sh scripts/tools/restore_assets.py --kinds models evidence   # +74 MB stills/video
+code/scripts/run_py.sh code/scripts/tools/restore_assets.py --kinds models            # ~3.5 MB
+code/scripts/run_py.sh code/scripts/tools/restore_assets.py --kinds models evidence   # +74 MB stills/video
 ```
 
-Producer side (re-cut + publish after an asset revision): `scripts/tools/archive_assets.py
+Producer side (re-cut + publish after an asset revision): `code/scripts/tools/archive_assets.py
 --kinds models evidence [--upload]`; the upload merges into the remote `latest.json`.
 
 **One-command bring-up** — everything in §2.2–2.3 (image build if absent, container start,
 archive restore + cache validation) in one idempotent script:
 
 ```bash
-scripts/tools/bootstrap.sh          # fresh clone -> planning in ~5 minutes
+code/scripts/tools/bootstrap.sh          # fresh clone -> planning in ~5 minutes
 ```
 
 The division of labor is deliberate: everything expensive **runs once and ships in the
@@ -222,9 +222,9 @@ rebuilds with the two-stage `extract_geometry` → `decompose_meshes` pair (§4)
 the world from nothing instead of restoring, first fetch the ArtVIP source:
 
 ```bash
-scripts/run_py.sh -c "from huggingface_hub import snapshot_download; \
+code/scripts/run_py.sh -c "from huggingface_hub import snapshot_download; \
   snapshot_download(repo_id='X-Humanoid/ArtVIP', repo_type='dataset', \
-  allow_patterns=['Articulated_objects/major_appliances/dishwasher/**'], local_dir='assets/artvip')"
+  allow_patterns=['Articulated_objects/major_appliances/dishwasher/**'], local_dir='data/assets/artvip')"
 ```
 
 (The one-time authoring/inspection scripts live in git history; the archive ships their
@@ -233,20 +233,20 @@ outputs and `docs/joint_report.md` records the measured numbers.)
 ### 2.5 Verify the install
 
 ```bash
-scripts/run_kit.sh scripts/setup/kit_smoke.py --headless --enable_cameras
-scripts/run_py.sh -m pytest tests/
-scripts/run_py.sh -m pytest frigidaire/tests/
+code/scripts/run_kit.sh code/scripts/setup/kit_smoke.py --headless --enable_cameras
+code/scripts/run_py.sh -m pytest code/tests/
+code/scripts/run_py.sh -m pytest code/frigidaire/tests/
 ```
 
 `kit_smoke.py` proves the collision stack imports *inside* the Kit process and that headless
-camera capture produces non-black frames (bootstrap runs it automatically). `tests/` is
+camera capture produces non-black frames (bootstrap runs it automatically). `code/tests/` is
 **8 Kit-free files, 65 tests, about 70 s**: the two frozen-invariant pins (the tripwires that
 protect the shipped caches), the compat ground truth, the benchmark driver's and the RRT
 planners' toy-oracle checks, the instance sampler's tier knobs, the archive tool's tarball
 selection and the HOTEC generator's properties.
 
 > **Note:** `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is required outside Kit — the site-packages
-> carry hydra, whose pytest plugin breaks collection there. `scripts/run_py.sh` bakes it in.
+> carry hydra, whose pytest plugin breaks collection there. `code/scripts/run_py.sh` bakes it in.
 
 ## 3 Quickstart — reproduce the results
 
@@ -257,25 +257,25 @@ crashes).
 ```bash
 # 0. shared box: pick the least-loaded GPU
 nvidia-smi
-DISHSIM_GPU=<n> docker compose -f docker/compose.yaml up -d
+DISHSIM_GPU=<n> docker compose -f code/docker/compose.yaml up -d
 
 # 1. bring-up: image build if absent + container + archive restore + the kit_smoke gate
-scripts/tools/bootstrap.sh
+code/scripts/tools/bootstrap.sh
 #    GATE: restore prints "[OK] ... @ <placement>" per cache, then kit_smoke "[RESULT] PASS"
 
 # 2. only after restoring an archive tag dated before 2026-09-10 (later tags already carry the
 #    exact E_door_4 pieces): re-decompose once per restored context.
 #    The anchor MUST match the restore log's "@ side_winner" — a wrong anchor reads as
 #    "cache is stale".
-scripts/run_py.sh scripts/setup/decompose_meshes.py \
+code/scripts/run_py.sh code/scripts/setup/decompose_meshes.py \
     --machine bosch800 --placement side_winner --scenario placement --object plate
-scripts/run_py.sh scripts/setup/decompose_meshes.py \
+code/scripts/run_py.sh code/scripts/setup/decompose_meshes.py \
     --machine bosch800 --placement side_winner --scenario placement --object bowl
 
 # 3. gates: tests + Kit-free capacity sanity
-scripts/run_py.sh -m pytest tests/          # GATE: 65 passed (about 70 s)
-scripts/run_py.sh -c "
-import sys; sys.path.insert(0, 'src')
+code/scripts/run_py.sh -m pytest code/tests/          # GATE: 65 passed (about 70 s)
+code/scripts/run_py.sh -c "
+import sys; sys.path.insert(0, 'code/src')
 from dishsim import config
 config.apply_machine('bosch800'); config.apply_base_placement('side_winner')
 from dishsim import capacity
@@ -283,27 +283,27 @@ print('total', capacity.plan_full_load(log=lambda *_: None).total_items)"
 #    GATE: total 39 (placement 15 = plate 7 + bowl 8)
 
 # 4. generate settled instances (saved artifacts — every algorithm sees identical inputs)
-scripts/run_kit.sh scripts/setup/gen_instances.py --headless \
+code/scripts/run_kit.sh code/scripts/setup/gen_instances.py --headless \
     --mode perturbed --state placement --n 3 --seed 0
 
 # 5. the PROBLEM: one instance's initial + goal stills
-scripts/run_kit.sh scripts/evaluation/instance_views.py --headless --enable_cameras \
-    --instance results/instances/bosch800/placement/perturbed_s0.json
+code/scripts/run_kit.sh code/scripts/evaluation/instance_views.py --headless --enable_cameras \
+    --instance data/results/instances/bosch800/placement/perturbed_s0.json
 
 # 6. the SOLVING: closed-loop episodes with per-episode MP4s
-scripts/run_kit.sh scripts/experiment/run_rearrange.py --headless --enable_cameras --video \
-    --instances "results/instances/bosch800/placement/*.json" --algorithms greedy
+code/scripts/run_kit.sh code/scripts/experiment/run_rearrange.py --headless --enable_cameras --video \
+    --instances "data/results/instances/bosch800/placement/*.json" --algorithms greedy
 #    GATE: "[RESULT] PASS"; expect 3/3 solved in 9 moves of 45, 0 aborts, 0 infeasible commands
 ```
 
 Re-rolls during step 4 are healthy (the reproduction gate re-settling an arrangement);
 init-mismatch storms are not. Fault/reset thresholds live as module constants in
-`src/dishsim/rearrange.py` (deliberately outside `config.py`, so they can never touch
+`code/src/dishsim/rearrange.py` (deliberately outside `config.py`, so they can never touch
 `config_hash`); widen only against a measurement.
 
 ## 4 Notes for running and extending
 
-**Difficulty tiers** (`src/dishsim/tiers.py`): 3 presets (easy / medium / hard) + 9
+**Difficulty tiers** (`code/src/dishsim/tiers.py`): 3 presets (easy / medium / hard) + 9
 one-knob ablation cells off medium, over four knobs — roster size/mix, a hard
 **counter-occupancy cap** (6/3/1, ablation 0; enforced by the driver, visible to
 algorithms via `obs["counter_cap"]`/`["counter_count"]`), displaced fraction, and authored
@@ -312,8 +312,8 @@ goal tableau is deliberately unaligned) and a **cap-aware provable optimum** in 
 (`compat.optimal_moves(counter_cap=)` — status distinguishes proven-unsolvable from
 search-bound). Generate with `gen_instances.py --cell <name>`, run with
 `run_rearrange.py --cells <names>`, aggregate with
-`scripts/run_py.sh scripts/evaluation/compare_algorithms.py` →
-`results/compare/summary.{csv,md}`.
+`code/scripts/run_py.sh code/scripts/evaluation/compare_algorithms.py` →
+`data/results/compare/summary.{csv,md}`.
 
 
 Every multi-object render tints objects **per item** (`config.item_color`): the sourced props
@@ -322,7 +322,7 @@ item id, so the same object keeps it across the initial still, the goal still an
 video. Tinting is visual only and never touches physics or collision geometry.
 
 An algorithm implements `reset(instance, world)` / `next_move(obs) -> Move | None`
-(`src/dishsim/rearrange.py`; register it in `ALGORITHMS` in `run_rearrange.py`; accept a
+(`code/src/dishsim/rearrange.py`; register it in `ALGORITHMS` in `run_rearrange.py`; accept a
 `seed=` kwarg if stochastic). Every move teleports one object, settles `SETTLE_STEPS_MOVE`
 physics steps, and the episode ABORTS on the first fatal fault — a disturbed neighbor or an
 `unstable-settle` put-back — or at the move budget; a drifting settle is a non-fatal
@@ -335,24 +335,24 @@ a FROZEN CACHE ANCHOR, which you must not touch): the affected caches invalidate
 rebuild with the two-stage pair, per (object, state):
 
 ```bash
-scripts/run_kit.sh scripts/setup/extract_geometry.py --headless \
+code/scripts/run_kit.sh code/scripts/setup/extract_geometry.py --headless \
     --machine bosch800 --placement side_winner --scenario <state> --object <class>
-scripts/run_py.sh scripts/setup/decompose_meshes.py \
+code/scripts/run_py.sh code/scripts/setup/decompose_meshes.py \
     --machine bosch800 --placement side_winner --scenario <state> --object <class>
 ```
 
 Restore the public archive any time with
-`scripts/run_py.sh scripts/tools/restore_assets.py --repo shu4dev/dishsim-assets`
-(the producer side is `scripts/tools/archive_assets.py`).
+`code/scripts/run_py.sh code/scripts/tools/restore_assets.py --repo shu4dev/dishsim-assets`
+(the producer side is `code/scripts/tools/archive_assets.py`).
 
 ## 5 Results
 
-Every claim maps to a recorded artifact; artifacts live under the gitignored `results/` and
-`media/` trees.
+Every claim maps to a recorded artifact; artifacts live under the gitignored `data/results/` and
+`data/media/` trees.
 
 | Claim | Run / artifact | Evidence |
 |---|---|---|
-| **The benchmark runs closed-loop** (corallab, 2026-09-04 tier benchmark of record): greedy_offline and rrt_connect on easy / medium / hard (5 / 10 / 15 items, 10 instances each, no move budget, 60 s planning budget) solve **39 of 60** — easy 10/10 for both, medium 8/10 for both, hard 1/10 (greedy_offline) and 2/10 (rrt_connect). Provable optima on the three pinned perturbed instances are 9/9/9 (`compat.optimal_moves`, `tests/test_compat.py`); the 2026-08-30 "greedy 3/3 in 9 moves" run left no records | `results/rearrange/bosch800/placement/` (60 records), `results/compare/summary.md` | `media/rearrange/bosch800/placement/` (11 episode MP4s, illustrative reruns of a subset of the episodes), `media/instances/bosch800/placement/` (initial vs goal) |
+| **The benchmark runs closed-loop** (corallab, 2026-09-04 tier benchmark of record): greedy_offline and rrt_connect on easy / medium / hard (5 / 10 / 15 items, 10 instances each, no move budget, 60 s planning budget) solve **39 of 60** — easy 10/10 for both, medium 8/10 for both, hard 1/10 (greedy_offline) and 2/10 (rrt_connect). Provable optima on the three pinned perturbed instances are 9/9/9 (`compat.optimal_moves`, `code/tests/test_compat.py`); the 2026-08-30 "greedy 3/3 in 9 moves" run left no records | `data/results/rearrange/bosch800/placement/` (60 records), `data/results/compare/summary.md` | `data/media/rearrange/bosch800/placement/` (11 episode MP4s, illustrative reruns of a subset of the episodes), `data/media/instances/bosch800/placement/` (initial vs goal) |
 | **Bosch 800 full load settles**: a planned multi-rack load teleported to its release poses settles with max drift 1.1 mm — the plan's poses are physically self-consistent | episode-era artifact of record (robot-era media, retired; HF archive + git history) | `docs/figures/bosch800_loaded_reveal.png` |
 | **Measured settle-reliability gates**: bowls 59/60 upright on the Bosch lower rack; scaled cups 49/82 and tumblers 64/88 wedge into the OEM wire lattice — which is why drinkware sits out of the certified Bosch count | probe campaign of record (records kept outside the repo roots, in `/media/corallab-s1/2tbhdd/brianshu/dishsim/robot_era_evidence/results/plate_settle/`; the current archive tarballs, tag `20260910_b3584ae`, do not carry them); gates frozen in `capacity.MEASURED_SETTLE_RELIABILITY` | [docs/known_limitations.md](known_limitations.md) |
 
@@ -396,6 +396,6 @@ for their respective licenses:
 Rack geometry is procedurally generated, styled after publicly documented Whirlpool, Bosch and
 Frigidaire rack designs (design reference only; no third-party geometry is redistributed).
 
-Downloaded and derived assets are never committed (`assets/`, `media/`, `results/` are
+Downloaded and derived assets are never committed (`data/assets/`, `data/media/`, `data/results/` are
 gitignored); the public archive redistributes only what its sources' licenses allow, with
 attribution.

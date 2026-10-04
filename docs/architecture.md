@@ -3,7 +3,7 @@
 ```
 dishwasher_sim_isaaclab/
 │
-├── scripts/
+├── code/scripts/
 │   ├── run_kit.sh                    [Kit launcher: docker-execs into dishsim-isaac from the
 │   │                                  host, then isaaclab.sh -p]
 │   ├── run_py.sh                     [Kit-free python the same way (/isaac-sim/python.sh);
@@ -23,9 +23,9 @@ dishwasher_sim_isaaclab/
 │   ├── evaluation/
 │   │   ├── instance_views.py         [one instance's initial-vs-goal stills, one Kit boot]
 │   │   ├── compare_algorithms.py     [Kit-free: aggregates episode records into the per-cell
-│   │   │                              comparison table, results/compare/summary.{csv,md}]
+│   │   │                              comparison table, data/results/compare/summary.{csv,md}]
 │   │   └── bosch800_asset_evidence.py [Kit: the standalone Bosch 800 asset's open/extend/load/
-│   │                                   retract/close cycle, media/bosch800_asset/]
+│   │                                   retract/close cycle, data/media/bosch800_asset/]
 │   │
 │   └── tools/
 │       ├── restore_assets.py         [download, safe-extract, validate cache hashes, run tests]
@@ -35,7 +35,7 @@ dishwasher_sim_isaaclab/
 │       └── bootstrap.sh              [fresh-box bring-up: image build if absent + compose up +
 │                                      restore + the kit_smoke gate]
 │
-├── src/dishsim/                      [the environment package (installed editable by the
+├── code/src/dishsim/                 [the environment package (installed editable by the
 │   │                                  container entrypoint)]
 │   ├── config.py                     [EVERY tunable: object registry, rack params, placement
 │   │                                  modes, cameras, tolerances. Tune here. Machine selector:
@@ -93,21 +93,21 @@ dishwasher_sim_isaaclab/
 │   ├── transforms.py                 [pose helpers (XYZW throughout)]
 │   └── checks.py                     [pass/fail gate helpers for scripts]
 │
-├── tests/                            [8 files / 65 tests: the frozen-invariant pins, the
+├── code/tests/                       [8 files / 65 tests: the frozen-invariant pins, the
 │                                      compat ground truth, the harness's and the RRT
 │                                      planners' toy-oracle checks, the instance sampler's
 │                                      tier knobs, the archive tool's tarball selection, the
 │                                      HOTEC generator properties; run via
-│                                      scripts/run_py.sh -m pytest tests/]
-├── frigidaire/                       [the Frigidaire FDPC4221AS twin, a separate package
+│                                      code/scripts/run_py.sh -m pytest code/tests/]
+├── code/frigidaire/                  [the Frigidaire FDPC4221AS twin, a separate package
 │                                      (dishsim_frigidaire) with its own src/ scripts/ tests/
 │                                      docs/, tracked in git: generator, loaders, HOTEC
 │                                      benchmark, exposure scorer; the arm bring-up in
 │                                      src/dishsim_frigidaire/robot/ is in progress.
-│                                      See frigidaire/README.md]
+│                                      See code/frigidaire/README.md]
 ├── docs/                             [environment, success criteria, measured reports]
-├── docker/                           [Dockerfile (build record) + compose.yaml (the runtime)]
-├── assets/ build/ media/ results/ logs/ outputs/
+├── code/docker/                      [Dockerfile (build record) + compose.yaml (the runtime)]
+├── data/assets/ data/build/ data/media/ data/results/ data/logs/ data/outputs/
 │                                     [generated, gitignored — symlinks onto the 2 TB drive]
 ├── requirements-planning.txt         [pinned planning deps, baked into the image]
 └── pyproject.toml
@@ -124,7 +124,7 @@ config / geometry (cache format, config_hash)
 collision_world ── placement ── capacity / rearrange ── slotting
         (Kit-free python via run_py.sh: plan an arrangement, certify it collision-free)
         │
-        ▼  artifacts (capacity plans, results/instances/*.json, episode records)
+        ▼  artifacts (capacity plans, data/results/instances/*.json, episode records)
         │
 scene / machine / usd_prep / media   (Kit-side: teleport, settle, judge stability, render)
 ```

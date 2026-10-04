@@ -19,7 +19,7 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
-D = np.load(ROOT / "build/scoring_note/figdata.npz")
+D = np.load(ROOT / "data/build/scoring_note/figdata.npz")
 
 plt.rcParams.update({"font.family": "serif", "font.serif": ["DejaVu Serif"], "mathtext.fontset": "cm",
                      "font.size": 8, "axes.linewidth": 0.6, "savefig.dpi": 300, "pdf.fonttype": 42})

@@ -1,11 +1,11 @@
 # Bosch 800 standalone dishwasher asset — SHP78CM5N reference
 
-`assets/models/bosch800/bosch800.usdc` is a standalone, independently authored
+`data/assets/models/bosch800/bosch800.usdc` is a standalone, independently authored
 approximation of the Bosch 800 Series pocket-handle dishwasher. It includes mesh geometry,
 PBR materials, relative texture paths, rigid bodies, collision shapes and driven joints. No
 online asset server, ArtVIP assets, robot models, or planning archive is needed to use it.
 The binaries (`bosch800.usdc`, the rack USDs, `textures/`) and the asset's evidence under
-`assets/evidence/bosch800/` are not in git; only this document is tracked. They come from
+`data/assets/evidence/bosch800/` are not in git; only this document is tracked. They come from
 the public HF archive as two opt-in tarball kinds — see "Fetch the prebuilt asset" below.
 
 Open the USD directly in Isaac Sim, or reference its default prim `/Bosch800` into another
@@ -14,7 +14,7 @@ Z is up, X is width, and the front faces negative Y. The origin is at the centre
 appliance's floor footprint. The asset starts closed.
 
 **Scope on this branch.** The asset is separate from the benchmark's own Bosch 800 machine
-(`usd_prep.make_bosch800_usd`, re-authored on import into `assets/machines/bosch800/`) and
+(`usd_prep.make_bosch800_usd`, re-authored on import into `data/assets/machines/bosch800/`) and
 its cached collision worlds. `--machine bosch800` still selects that procedural machine; the
 new geometry needs fresh planning caches and slot calibration before it can back the
 benchmark. Until then it ships as a redistributable asset only.
@@ -67,7 +67,7 @@ textures. Their link origin is the rack wire-plane reference; spawn a loose lowe
 least 30 mm above a floor so its wheels do not initially penetrate it.
 
 A revision of the lower rack based on the four local `bottom_rack` photographs is
-staged separately. See [lower rack polish](../frigidaire/docs/lower_rack_polish.md) for its geometry,
+staged separately. See [lower rack polish](../code/frigidaire/docs/lower_rack_polish.md) for its geometry,
 installation and Isaac Sim capture scripts, and current validation status. It has
 not yet replaced the prebuilt binaries described here.
 
@@ -96,18 +96,18 @@ token. Each tarball carries a `MANIFEST.json` with a sha256 per file, and
 
 ```bash
 # standalone machine assets (~3.5 MB, seconds): this Bosch 800 asset plus the preliminary
-# Frigidaire FDPC4221AS revisions under assets/models/frigidaire_fdpc4221as{,_v2}/
-scripts/run_py.sh scripts/tools/restore_assets.py --kinds models
+# Frigidaire FDPC4221AS revisions under data/assets/models/frigidaire_fdpc4221as{,_v2}/
+code/scripts/run_py.sh code/scripts/tools/restore_assets.py --kinds models
 # add its validation evidence (~74 MB: stills, video, validation.json, previous-asset zip)
-scripts/run_py.sh scripts/tools/restore_assets.py --kinds models evidence
+code/scripts/run_py.sh code/scripts/tools/restore_assets.py --kinds models evidence
 ```
 
-Sizes of the local tarballs of tag `20260910_b3584ae` (`ls -l outputs/archive/`): `models`
+Sizes of the local tarballs of tag `20260910_b3584ae` (`ls -l data/outputs/archive/`): `models`
 3,477,304 bytes, `evidence` 74,317,755 bytes and, for the default cache restore, `assets`
 137,085,513 bytes.
 
 Without the repo (any machine with `curl` + `python3`); the archive extracts to
-`assets/models/bosch800/` relative to the current directory:
+`data/assets/models/bosch800/` relative to the current directory:
 
 ```bash
 B=https://huggingface.co/datasets/shu4dev/dishsim-assets/resolve/main
@@ -116,16 +116,16 @@ curl -L -o $N $B/$N && tar xzf $N
 ```
 
 Re-cutting the tarballs after an asset revision (producer side, Kit-free). Build first, inspect
-the tarballs (`tar -tzf`; `*.zip` duplicates under `assets/models/` are excluded by design), then
+the tarballs (`tar -tzf`; `*.zip` duplicates under `data/assets/models/` are excluded by design), then
 upload exactly those files with `--no-build --tag`:
 
 ```bash
-scripts/run_py.sh scripts/tools/archive_assets.py --status                          # what differs?
-scripts/run_py.sh scripts/tools/archive_assets.py --kinds models evidence            # build only
-HF_TOKEN=<write token> scripts/run_py.sh scripts/tools/archive_assets.py \
+code/scripts/run_py.sh code/scripts/tools/archive_assets.py --status                          # what differs?
+code/scripts/run_py.sh code/scripts/tools/archive_assets.py --kinds models evidence            # build only
+HF_TOKEN=<write token> code/scripts/run_py.sh code/scripts/tools/archive_assets.py \
     --kinds models evidence --upload --no-build --tag <date>_<gitsha> \
-    --card outputs/archive/hf_README.md                                             # + publish
-scripts/run_py.sh scripts/tools/archive_assets.py --status                          # -> SYNCED
+    --card data/outputs/archive/hf_README.md                                             # + publish
+code/scripts/run_py.sh code/scripts/tools/archive_assets.py --status                          # -> SYNCED
 ```
 
 `run_py.sh` forwards `HF_TOKEN` into the container only when it is set in that shell; the token
@@ -135,17 +135,17 @@ the remote file cannot be read (`--fresh` is the opt-in for an empty repo).
 
 ## Runs under this repo's stack (corallab, Isaac Sim 4.5.0 / Isaac Lab 2.1.1)
 
-`scripts/evaluation/bosch800_asset_evidence.py` loads the USD as an Isaac Lab 2.1
+`code/scripts/evaluation/bosch800_asset_evidence.py` loads the USD as an Isaac Lab 2.1
 `Articulation` with the asset's own drives and base joint (nothing overridden), reads the
 dish sites the asset names under `<Rack>/Manipulation/`, and records a full
 open -> extend -> load -> retract -> close cycle with this repo's plate and cup props:
 
 ```bash
-scripts/run_kit.sh scripts/evaluation/bosch800_asset_evidence.py --headless --enable_cameras
-scripts/run_kit.sh scripts/evaluation/bosch800_asset_evidence.py --headless --probe   # stage dump only
+code/scripts/run_kit.sh code/scripts/evaluation/bosch800_asset_evidence.py --headless --enable_cameras
+code/scripts/run_kit.sh code/scripts/evaluation/bosch800_asset_evidence.py --headless --probe   # stage dump only
 ```
 
-Output: `media/bosch800_asset/{closed,racks_extended,loaded_extended}_{iso,front}.png`,
+Output: `data/media/bosch800_asset/{closed,racks_extended,loaded_extended}_{iso,front}.png`,
 `articulation.mp4` (15 s, 30 fps) and `evidence.json`. Run of record 2026-09-08:
 `[RESULT] PASS` — every hold within 0.2 mm / 0.01 deg of target, the plate settled in
 `LowerRack/plate_slot_0` and the cup on `MiddleRack/cup_drop`, and both rode their racks
@@ -164,7 +164,7 @@ grasp fixture. This verifies asset support/access, not a robot arm, finger grasp
 pick-and-place policy. Images and video come from Isaac Sim's RTX camera while PhysX drives
 the articulation. Its `[RESULT] PASS` report ships as `validation.json`.
 
-`assets/evidence/bosch800/`:
+`data/assets/evidence/bosch800/`:
 
 - `validation.json`: measured settling, loaded travel and retrieval (result `PASS`).
 - `run.log`: the validation run's console log.

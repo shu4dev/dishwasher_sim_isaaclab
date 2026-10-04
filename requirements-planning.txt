@@ -1,5 +1,5 @@
 # Planning-stack dependencies (CPU side; Kit/Isaac deps come from the Isaac Lab install).
-# Installed into Kit's python 3.10 by docker/Dockerfile (no venv on the corallab machine).
+# Installed into Kit's python 3.10 by code/docker/Dockerfile (no venv on the corallab machine).
 # Pins are the newest versions with py3.10 wheels; the Brev-era py3.12 pins are recorded in
 # docs/environment.md history.
 python-fcl==0.7.0.11
@@ -9,5 +9,5 @@ matplotlib==3.10.9  # 3.11.x needs python >= 3.11
 imageio==2.37.4
 
 # Preinstalled in the Isaac Sim python (not pip-installed here).
-# Asset-archive tooling (scripts/tools/) is installed by the Dockerfile alongside:
+# Asset-archive tooling (code/scripts/tools/) is installed by the Dockerfile alongside:
 #   huggingface_hub requests pyyaml filelock tqdm fsspec

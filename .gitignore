@@ -1,27 +1,9 @@
-# Downloaded assets — never commit (see README for sources + licenses).
-# Includes derived USDs and the collision-world cache (assets/cache/), all regenerable.
-# No trailing slash: on the corallab machine these are SYMLINKS onto the 2 TB drive, and
-# `name/` patterns match only real directories.
-/assets
-
-# Visual-evidence media and planning results stay on disk for review; only curated
-# copies under docs/figures/ are tracked.
-/media
-/results
-# Logs and outputs
-/logs
-/outputs
-# Per-run experiment artifacts (videos, frames, plots, trial JSONL, index.html): a SYMLINK
-# onto the 2 TB drive like the roots above (user decision 2026-09-29: root disk gains nothing).
-/artifacts
+# Data — never commit: data/ holds the seven SYMLINKS onto the 2 TB drive (assets, results,
+# media, logs, outputs, build, artifacts) and the experiments index of symlinks over them; only
+# curated copies under docs/figures/ are tracked.
+/data
 wandb/
 
-# build/ is a SYMLINK onto the 2 TB drive since 2026-09-17 (holds the Frigidaire
-# collection); `build/` below matches only a real directory, so ignore the link too.
-/build
-
-# experiments/ is a local symlink index over the ignored data roots.
-/experiments
 /plans
 /research
 
