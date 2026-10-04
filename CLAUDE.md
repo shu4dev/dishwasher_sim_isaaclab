@@ -16,7 +16,7 @@ provably minimum move count per instance, so results are quoted as an optimality
 
 The minimal pipeline, in order (this is the whole Bosch benchmark):
 
-1. **Bring-up** — `code/scripts/tools/bootstrap.sh`: image build if absent, `compose up`, archive
+1. **Bring-up** — `code/util/tools/bootstrap.sh`: image build if absent, `compose up`, archive
    restore (validates every cache's `config_hash`), kit_smoke install gate.
 2. **Generate** — `gen_instances.py`: seeded, physically settled problem instances (JSON).
 3. **Problem images** — `instance_views.py`: initial-vs-goal stills per instance.
@@ -31,7 +31,7 @@ container `dishsim-isaac`. Never upgrade or downgrade Isaac Sim / Isaac Lab. Eve
 (canonical launcher landmines): `docs/environment.md`.
 
 **Shared machine**: pick the least-loaded GPU per shell (`nvidia-smi`, then
-`DISHSIM_GPU=<n> docker compose -f code/docker/compose.yaml up -d`); never touch other users'
+`DISHSIM_GPU=<n> docker compose -f code/util/docker/compose.yaml up -d`); never touch other users'
 containers, images, or directories. All mutable data (data/{assets,media,results,logs,outputs}, Kit
 caches) lives on the 2 TB drive under `/media/corallab-s1/2tbhdd/brianshu/dishsim/` — the
 repo's data roots are symlinks there and the root disk must gain nothing. The container runs
@@ -52,10 +52,10 @@ the project root:
 ```bash
 # tests (Kit-free). test_rack_gen_frozen.py digests are pinned PER numeric environment
 # (this box: numpy 1.26 / Kit py3.10); it MUST pass in this container — failing HERE is drift.
-code/scripts/run_py.sh -m pytest code/tests/
+code/util/run_py.sh -m pytest code/tests/
 
 # Kit-free capacity sanity (seconds; the plan is recomputed in-process by gen_instances)
-code/scripts/run_py.sh -c "
+code/util/run_py.sh -c "
 import sys; sys.path.insert(0, 'code/src')
 from dishsim import config
 config.apply_machine('bosch800'); config.apply_base_placement('side_winner')
@@ -64,29 +64,29 @@ plan = capacity.plan_full_load(log=lambda *_: None)
 print('total', plan.total_items)  # expect 39 (placement 15 = plate 7 + bowl 8)"
 
 # generate settled benchmark instances (saved artifacts; per rack state)
-code/scripts/run_kit.sh code/scripts/setup/gen_instances.py --headless \
+code/util/run_kit.sh code/initialization/bosch/gen_instances.py --headless \
     --mode perturbed --state placement --n 3 --seed 0
 
 # one instance's initial-vs-goal stills (the PROBLEM)
-code/scripts/run_kit.sh code/scripts/evaluation/instance_views.py --headless --enable_cameras \
+code/util/run_kit.sh code/initialization/bosch/instance_views.py --headless --enable_cameras \
     --instance data/results/instances/bosch800/placement/perturbed_s0.json
 
 # run algorithms closed-loop (the SOLVING; one Kit session per state batch)
-code/scripts/run_kit.sh code/scripts/experiment/run_rearrange.py --headless --enable_cameras --video \
+code/util/run_kit.sh code/planner/bosch/run_rearrange.py --headless --enable_cameras --video \
     --instances "data/results/instances/bosch800/placement/*.json" --algorithms greedy
 
 # BENCHMARK tiers (dishsim/tiers.py: 3 presets + 9 ablation cells; counter-occupancy cap,
 # authored swap cycles, spun per-object goal rotations, cap-aware compat certificate in
 # every instance's meta). Generate a cell, run cells, aggregate:
-code/scripts/run_kit.sh code/scripts/setup/gen_instances.py --headless --cell medium --n 10 --seed 0
-code/scripts/run_kit.sh code/scripts/experiment/run_rearrange.py --headless \
+code/util/run_kit.sh code/initialization/bosch/gen_instances.py --headless --cell medium --n 10 --seed 0
+code/util/run_kit.sh code/planner/bosch/run_rearrange.py --headless \
     --cells easy,medium,hard --algorithms greedy          # 60 s planning budget default
-code/scripts/run_py.sh code/scripts/evaluation/compare_algorithms.py  # -> data/results/compare/summary.{csv,md}
+code/util/run_py.sh code/planner/bosch/compare_algorithms.py  # -> data/results/compare/summary.{csv,md}
 
 # rebake ONE (object, state) cache after a hashed-config change (extract -> decompose):
-code/scripts/run_kit.sh code/scripts/setup/extract_geometry.py --headless \
+code/util/run_kit.sh code/initialization/bosch/extract_geometry.py --headless \
     --machine bosch800 --placement side_winner --scenario placement --object cup
-code/scripts/run_py.sh code/scripts/setup/decompose_meshes.py \
+code/util/run_py.sh code/initialization/bosch/decompose_meshes.py \
     --machine bosch800 --placement side_winner --scenario placement --object cup
 ```
 
@@ -95,7 +95,7 @@ never rebake what the archive carries. Archive tags dated 2026-09-10 or later ar
 box and already carry the exact E_door_4 pieces (`COACD["E_door_4"]["preprocess_mode"] = "off"`);
 only a restore of an older tag needs the one-off `decompose_meshes.py` pass described in
 docs/known_limitations.md. Check archive state with
-`code/scripts/run_py.sh code/scripts/tools/archive_assets.py --status` (read-only, no token).
+`code/util/run_py.sh code/util/tools/archive_assets.py --status` (read-only, no token).
 
 **`./isaaclab.sh -p` exits 0 even when the wrapped script crashes.** Judge every Kit run from
 log content (`[RESULT] PASS`, absence of tracebacks / `free(): invalid pointer`), never the
@@ -194,7 +194,7 @@ bench and the MCTS replaced it. What remains in `code/frigidaire/src/dishsim_fri
 the bench: the FCL `PlannerWorld` (appliance mirror, counter slab at top 0.914 m, objects), the support
 graph and the greedy sequencer with the counter cap, on the Bosch driver `rearrange.run_episode`;
 reference `code/frigidaire/docs/planner.md`; `frigidaire_planner_video.py` renders episodes. Two traps:
-the backend's rack-speed gate flakes (retry the other rack order), and `code/scripts/run_py.sh` exports
+the backend's rack-speed gate flakes (retry the other rack order), and `code/util/run_py.sh` exports
 Kit's USD extension so `pxr` imports Kit-free (the FCL checker needs it).
 Geometry (2026-09-28): the twin's racks and basket are tape-measured (48/64 tines, 1x4 basket 320 x 95 x 130 with a 220 mm handle; revisions `upper_tines_4x13_v5` / `lower_tines_6x12_v4` / `basket_1x4_320x95_v4` since the 2026-09-28 re-measurement: non-uniform column/row gaps, front/left margins from the tape, rear/right margins the rim's leftover, lower rack 561 deep and 108 tall), claims variant B retired, the v3, v4 and v5 builds archived under `data/build/frigidaire_collection/history/`; reference `code/frigidaire/docs/geometry.md`. Every Isaac result before 2026-09-28 (HOTEC v11-v13, exposure, the whole HOTEC benchmark) is stale on the new racks.
 
@@ -208,9 +208,9 @@ value is an `estimated` parameter in the module table; further measurements go i
 (`v3/`) with `--set kind.name=value`, never overwriting an earlier one. Brimful capacities are computed to the lowest rim
 point (bowl 764 vs 769 mL advertised; cup 283 vs 355 mL — the envelope cannot hold 12 oz, documented,
 not tuned). Report: `docs/hotec_wheatstraw_asset.md`; tests: `code/tests/test_hotec_gen.py`; the Frigidaire
-load/settle/orbit script is `code/frigidaire/scripts/evaluation/frigidaire_hotec_load.py` (`--layout-only`
+load/settle/orbit script is `code/planner/frigidaire/frigidaire_hotec_load.py` (`--layout-only`
 first, then Kit). Landmine: the loading helpers assume centre-origin pieces — place by centroid.
-Top-5 exposure loads of all 24 pieces (2026-09-29): `code/frigidaire/scripts/evaluation/frigidaire_hotec_top5.py --all`
+Top-5 exposure loads of all 24 pieces (2026-09-29): `code/planner/frigidaire/frigidaire_hotec_top5.py --all`
 (nesting scored, dishes may touch 0.8 mm, front-bank plates, joint gate with a 5 mm peak); see the report's dated section.
 
 ## HOTEC rearrangement benchmark (2026-09-23)
@@ -222,8 +222,8 @@ highest-exposure load found by coordinate ascent (track A: greedy_offline / rrt_
 / move-level MCTS (`dishsim_frigidaire/mcts.py`, since 2026-09-29; the ascent "exposure planner" is retired) build their OWN load, which is Isaac sequence-gated like the goal before replay, scored by S,
 success needs a pooling-free load; no row is copied between tracks, 2026-09-28). Teleport
 moves, Isaac settle per move, end check = retract both racks + containment. Kit-free library/CLI/scheduler
-`code/frigidaire/scripts/experiment/frigidaire_bench.py`, Kit side `frigidaire_bench_kit.py`, results page
-`code/frigidaire/scripts/evaluation/frigidaire_bench_page.py`; reference, decisions and landmines:
+`code/planner/frigidaire/frigidaire_bench.py`, Kit side `frigidaire_bench_kit.py`, results page
+`code/planner/frigidaire/frigidaire_bench_page.py`; reference, decisions and landmines:
 `code/frigidaire/docs/hotec_bench.md`; outputs under `data/results/benchmark/frigidaire_hotec/`. Two traps: pass host
 paths into the container only through `rel()` (a `/home/...` path lands in the container's writable layer),
 and stop jobs by PID, never broad `pkill -f` in the shared container.

@@ -257,10 +257,10 @@ def load_state_tables(state: str, classes: list[str]) -> _StateTables:
         if not os.path.exists(os.path.join(cdir, "scene_state.json")):
             raise FileNotFoundError(
                 f"missing cache {cdir} — bake it with:\n"
-                f"  code/scripts/run_kit.sh code/scripts/setup/extract_geometry.py --headless "
+                f"  code/util/run_kit.sh code/initialization/bosch/extract_geometry.py --headless "
                 f"--machine {config.MACHINE} --placement {config.BASE_PLACEMENT} "
                 f"--scenario {state} --object {cls}\n"
-                f"  code/scripts/run_py.sh code/scripts/setup/decompose_meshes.py "
+                f"  code/util/run_py.sh code/initialization/bosch/decompose_meshes.py "
                 f"--machine {config.MACHINE} --placement {config.BASE_PLACEMENT} "
                 f"--scenario {state} --object {cls}")
         with config.active_object(cls):

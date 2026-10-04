@@ -2,7 +2,7 @@
 
 The inspection runs once in a subprocess using Isaac's bundled USD, without
 starting Kit. This keeps ordinary pytest collection independent of pxr's loader
-and makes ``code/scripts/run_py.sh -m pytest code/frigidaire/tests/test_frigidaire_asset.py`` sufficient.
+and makes ``code/util/run_py.sh -m pytest code/frigidaire/tests/test_frigidaire_asset.py`` sufficient.
 """
 
 from __future__ import annotations

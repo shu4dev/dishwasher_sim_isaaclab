@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Kit-free tests for code/scripts/tools/archive_assets.py (tarball selection, latest.json merge,
+"""Kit-free tests for code/util/tools/archive_assets.py (tarball selection, latest.json merge,
 sync status). No network: the remote side is passed in as plain dicts."""
 
 import importlib.util
@@ -13,7 +13,7 @@ import time
 import pytest
 
 _PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                     "scripts", "tools", "archive_assets.py")
+                     "util", "tools", "archive_assets.py")
 _spec = importlib.util.spec_from_file_location("archive_assets", _PATH)
 aa = importlib.util.module_from_spec(_spec)
 sys.modules["archive_assets"] = aa

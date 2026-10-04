@@ -2,7 +2,7 @@
 
 Ported from ``src/dishsim/robots.py`` on branch on-corrallab (cdc3f51). The asset is the Isaac Sim 6.0
 ``Robots/UniversalRobots/ur5e/ur5e.usd`` with the ``Gripper = Robotiq_2f_85`` variant, mirrored into
-``data/assets/robots/`` by ``code/frigidaire/scripts/setup/mirror_robot_usd.sh`` (two crate-0.9 layers converted to usda for
+``data/assets/robots/`` by ``code/execution/frigidaire/mirror_robot_usd.sh`` (two crate-0.9 layers converted to usda for
 Isaac Sim 4.5). ``finger_joint`` (0 = open, 0.8 = closed) is the only commanded finger joint; the others follow
 through PhysX mimic constraints. Actuator gains are the on-corrallab values; the finger armature/damping are
 load-bearing (the near-massless finger links resonate without them).
@@ -40,7 +40,7 @@ def robot_cfg(prim_path="/World/Robot", pos=(0., 0., 0.), rot_wxyz=(1., 0., 0., 
     from isaaclab.assets import ArticulationCfg
 
     if not os.path.isfile(UR5E_USD):
-        raise FileNotFoundError(f"{UR5E_USD} missing: run code/frigidaire/scripts/setup/mirror_robot_usd.sh")
+        raise FileNotFoundError(f"{UR5E_USD} missing: run code/execution/frigidaire/mirror_robot_usd.sh")
     return ArticulationCfg(
         prim_path=prim_path,
         articulation_root_prim_path="/root_joint",   # the asset carries a second, disabled root on the gripper
@@ -77,7 +77,7 @@ def robot_cfg(prim_path="/World/Robot", pos=(0., 0., 0.), rot_wxyz=(1., 0., 0., 
 def deinstance_gripper(stage, root="/World/Robot/Gripper"):
     """Make the 2F-85's instanced mesh prims real prims BEFORE ``sim.reset()``.
 
-    Measured 2026-09-29 (code/frigidaire/scripts/setup/frigidaire_grip_probe.py): on Isaac Sim 4.5 the 6.0 asset's
+    Measured 2026-09-29 (code/execution/frigidaire/frigidaire_grip_probe.py): on Isaac Sim 4.5 the 6.0 asset's
     gripper colliders live inside instanceable ``visuals`` Xforms; PhysX creates the shapes (property query lists
     them) but they generate NO contacts with anything (a 30 mm cube, the ground, a bowl: 0 N, fingers close
     through). De-instanced, the same pads stop on a 30 mm cube at 0.56 rad with 26-60 N and hold it. This is the

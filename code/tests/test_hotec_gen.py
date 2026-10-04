@@ -146,7 +146,7 @@ def test_parameter_tags_and_hash():
 
 def test_usd_round_trip(built):
     if not Path("/isaac-sim").exists():
-        pytest.skip("USD round trip runs inside the Isaac container (pxr via code/scripts/run_py.sh)")
+        pytest.skip("USD round trip runs inside the Isaac container (pxr via code/util/run_py.sh)")
     from pxr import Usd, UsdGeom, UsdPhysics, UsdShade   # must import there; a failure is a real failure
     _, table = built
     scratch = ROOT / "data/build/hotec_tests"

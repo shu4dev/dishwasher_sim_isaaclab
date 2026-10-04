@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT / "code/frigidaire/scripts/experiment"))
+sys.path.insert(0, str(ROOT / "code/planner/frigidaire"))
 import frigidaire_bench as B  # noqa: E402
 
 sc = B.Scorer()

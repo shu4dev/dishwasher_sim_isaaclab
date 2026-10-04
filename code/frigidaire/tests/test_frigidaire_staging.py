@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from dishsim_frigidaire.paths import REPO_ROOT, SOURCE_ROOT
 
-_SCRIPT = SOURCE_ROOT / "scripts/setup/stage_frigidaire_collection.py"
+_SCRIPT = REPO_ROOT / "code/initialization/frigidaire/stage_frigidaire_collection.py"
 _SPEC = importlib.util.spec_from_file_location("frigidaire_stage_for_test", _SCRIPT)
 staging = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(staging)

@@ -10,7 +10,7 @@
 Run this first (Kit-free; rays run on the GPU when Warp sees one):
 
 ```
-code/scripts/run_py.sh -m pytest code/frigidaire/tests/test_exposure.py
+code/util/run_py.sh -m pytest code/frigidaire/tests/test_exposure.py
 ```
 
 Then open `data/results/exposure/frigidaire/hotec/heatmap.png`, the one method figure still in the
@@ -37,11 +37,11 @@ The HOTEC figure (made 2026-09-22, on the pre-2026-09-28 racks):
 
 1. Scorer tests (22 tests): the command above.
 2. The HOTEC exposure search (Kit-free, CUDA; 34 min for three sweeps on 2026-09-22):
-   `code/scripts/run_py.sh code/frigidaire/scripts/evaluation/frigidaire_hotec_exposure_search.py --sweeps 3 --seed 0 --out <new folder>`
+   `code/util/run_py.sh code/planner/frigidaire/frigidaire_hotec_exposure_search.py --sweeps 3 --seed 0 --out <new folder>`
    → `search.json` and `best_layout.json` in the new folder. Always pass a new `--out`: the
    default is `data/results/exposure/frigidaire/hotec/`, which holds the 2026-09-22 records.
 3. The method figure of two loads (Kit-free):
-   `code/scripts/run_py.sh code/frigidaire/scripts/evaluation/frigidaire_hotec_exposure_figure.py --start <start layout.json> --best <best_layout.json> --out <heatmap.png>`
+   `code/util/run_py.sh code/planner/frigidaire/frigidaire_hotec_exposure_figure.py --start <start layout.json> --best <best_layout.json> --out <heatmap.png>`
 4. Retired 2026-09-29, see git history at HEAD 4455813: the demo scene with its Isaac still and
    12 s orbit video, the one-pair demo, the seven-pair chart and the pool search of random_06
    (`frigidaire_exposure_{scene,scene_render,demo,summary,search}.py`), and the Isaac settle of a

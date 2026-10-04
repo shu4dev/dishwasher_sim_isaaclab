@@ -7,7 +7,7 @@ import numpy as np
 
 from dishsim_frigidaire import geometry
 
-_PATH = Path(__file__).resolve().parents[1] / "scripts/evaluation/frigidaire_lower_rack_clearance.py"
+_PATH = Path(__file__).resolve().parents[3] / "code/initialization/frigidaire/frigidaire_lower_rack_clearance.py"
 _SPEC = importlib.util.spec_from_file_location("lower_clearance", _PATH)
 clearance = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(clearance)

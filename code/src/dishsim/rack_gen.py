@@ -13,7 +13,7 @@ handle, and fold-down cup shelves + RackMatic lever blocks on the upper rack.
 
 Kit-free by design (numpy + trimesh only, no ``pxr``): the same builder feeds three consumers —
 :mod:`dishsim.usd_prep` authors the merged per-group meshes into the derived v0 USD (PhysX/SDF
-side), ``code/scripts/setup/decompose_meshes.py`` writes the exact convex parts as FCL pieces (no CoACD
+side), ``code/initialization/bosch/decompose_meshes.py`` writes the exact convex parts as FCL pieces (no CoACD
 for the racks), and the Kit-free tests validate the shape before any Kit run.
 
 Design space is the world-metric rack BODY frame: X = width, Y = depth with y=0 the front edge

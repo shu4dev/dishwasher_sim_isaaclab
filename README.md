@@ -12,7 +12,7 @@
 Run this first, about 5 minutes from a fresh clone:
 
 ```bash
-code/scripts/tools/bootstrap.sh
+code/util/tools/bootstrap.sh
 ```
 
 It builds the `dishsim-isaac` image if absent, starts the container, restores the public
@@ -37,33 +37,33 @@ a goal arrangement, 15 items, physically settled
 
 ## Run the benchmark
 
-Every Kit command goes through `code/scripts/run_kit.sh`, every Kit-free one through
-`code/scripts/run_py.sh`; both forward into the container. Judge each Kit run by its log line
+Every Kit command goes through `code/util/run_kit.sh`, every Kit-free one through
+`code/util/run_py.sh`; both forward into the container. Judge each Kit run by its log line
 `[RESULT] PASS` and the absence of tracebacks. Exit codes lie.
 
-1. Pick a GPU (shared machine): `nvidia-smi`, then `DISHSIM_GPU=<n> docker compose -f code/docker/compose.yaml up -d`.
-2. Bring-up: `code/scripts/tools/bootstrap.sh` (5 min).
+1. Pick a GPU (shared machine): `nvidia-smi`, then `DISHSIM_GPU=<n> docker compose -f code/util/docker/compose.yaml up -d`.
+2. Bring-up: `code/util/tools/bootstrap.sh` (5 min).
 3. Only after restoring an archive tag dated before 2026-09-10 (later tags already carry the exact `E_door_4` pieces, see [docs/known_limitations.md](docs/known_limitations.md)): re-decompose the two shipped pieces that predate a parameter change (seconds each):
    ```bash
-   code/scripts/run_py.sh code/scripts/setup/decompose_meshes.py --machine bosch800 --placement side_winner --scenario placement --object plate
-   code/scripts/run_py.sh code/scripts/setup/decompose_meshes.py --machine bosch800 --placement side_winner --scenario placement --object bowl
+   code/util/run_py.sh code/initialization/bosch/decompose_meshes.py --machine bosch800 --placement side_winner --scenario placement --object plate
+   code/util/run_py.sh code/initialization/bosch/decompose_meshes.py --machine bosch800 --placement side_winner --scenario placement --object bowl
    ```
-4. Gates: `code/scripts/run_py.sh -m pytest code/tests/` (65 pass, about 70 s) and the capacity check in [docs/overview.md](docs/overview.md#3-quickstart--reproduce-the-results) (prints `total 39`).
+4. Gates: `code/util/run_py.sh -m pytest code/tests/` (65 pass, about 70 s) and the capacity check in [docs/overview.md](docs/overview.md#3-quickstart--reproduce-the-results) (prints `total 39`).
 5. Generate, picture, solve (Kit, a few minutes each):
    ```bash
-   code/scripts/run_kit.sh code/scripts/setup/gen_instances.py --headless --mode perturbed --state placement --n 3 --seed 0
-   code/scripts/run_kit.sh code/scripts/evaluation/instance_views.py --headless --enable_cameras --instance data/results/instances/bosch800/placement/perturbed_s0.json
-   code/scripts/run_kit.sh code/scripts/experiment/run_rearrange.py --headless --enable_cameras --video --instances "data/results/instances/bosch800/placement/*.json" --algorithms greedy
+   code/util/run_kit.sh code/initialization/bosch/gen_instances.py --headless --mode perturbed --state placement --n 3 --seed 0
+   code/util/run_kit.sh code/initialization/bosch/instance_views.py --headless --enable_cameras --instance data/results/instances/bosch800/placement/perturbed_s0.json
+   code/util/run_kit.sh code/planner/bosch/run_rearrange.py --headless --enable_cameras --video --instances "data/results/instances/bosch800/placement/*.json" --algorithms greedy
    ```
    Expected: 3 of 3 solved in 9 moves of 45, 0 aborts, 0 infeasible commands.
 
 Difficulty tiers: `gen_instances.py --cell <easy|medium|hard>`, `run_rearrange.py --cells ...`,
-then `code/scripts/run_py.sh code/scripts/evaluation/compare_algorithms.py` → `data/results/compare/summary.md`.
+then `code/util/run_py.sh code/planner/bosch/compare_algorithms.py` → `data/results/compare/summary.md`.
 
 ## Add your algorithm
 
 1. Implement `reset(instance, world)` and `next_move(obs)` in one class (`code/src/dishsim/rearrange.py` shows the greedy baseline).
-2. Register it in `ALGORITHMS` in `code/scripts/experiment/run_rearrange.py`. Accept `seed=` if stochastic.
+2. Register it in `ALGORITHMS` in `code/planner/bosch/run_rearrange.py`. Accept `seed=` if stochastic.
 3. Run step 5 above with `--algorithms <name>`.
 
 The greedy baseline is one-blocker lookahead; swap cycles defeat it.
@@ -83,8 +83,8 @@ The Frigidaire FDPC4221AS, an independently authored twin under `code/frigidaire
 | Path | What |
 |---|---|
 | `code/src/dishsim/` | benchmark package (`rearrange.py` core, `compat.py` optima, `collision_world.py` FCL, `config.py`) |
-| `code/scripts/{setup,evaluation,experiment,tools}/` | the pipeline stages, in order |
-| `code/frigidaire/` | the Frigidaire twin: generator, loaders, experiments, `docs/`, tests (tracked in git) |
+| `code/{initialization,planner,execution,util}/` | the stages, in order, with the scripts per machine in `bosch/` and `frigidaire/` ([code/README.md](code/README.md)) |
+| `code/frigidaire/` | the Frigidaire twin: generator, loaders, `docs/`, tests (tracked in git); its scripts sit in the stage folders |
 | `data/assets/ data/build/ data/media/ data/results/ data/logs/ data/outputs/` | gitignored symlinks to the 2 TB drive; root disk gains nothing (`data/build/` holds the only copy of the current Frigidaire twin build) |
 | `docs/figures/` | the only tracked media, with provenance in its README |
 | `data/experiments/` | symlink index of every experiment: machine → experiment → trial, one README per entry; nothing lives there |

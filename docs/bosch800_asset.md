@@ -97,9 +97,9 @@ token. Each tarball carries a `MANIFEST.json` with a sha256 per file, and
 ```bash
 # standalone machine assets (~3.5 MB, seconds): this Bosch 800 asset plus the preliminary
 # Frigidaire FDPC4221AS revisions under data/assets/models/frigidaire_fdpc4221as{,_v2}/
-code/scripts/run_py.sh code/scripts/tools/restore_assets.py --kinds models
+code/util/run_py.sh code/util/tools/restore_assets.py --kinds models
 # add its validation evidence (~74 MB: stills, video, validation.json, previous-asset zip)
-code/scripts/run_py.sh code/scripts/tools/restore_assets.py --kinds models evidence
+code/util/run_py.sh code/util/tools/restore_assets.py --kinds models evidence
 ```
 
 Sizes of the local tarballs of tag `20260910_b3584ae` (`ls -l data/outputs/archive/`): `models`
@@ -120,12 +120,12 @@ the tarballs (`tar -tzf`; `*.zip` duplicates under `data/assets/models/` are exc
 upload exactly those files with `--no-build --tag`:
 
 ```bash
-code/scripts/run_py.sh code/scripts/tools/archive_assets.py --status                          # what differs?
-code/scripts/run_py.sh code/scripts/tools/archive_assets.py --kinds models evidence            # build only
-HF_TOKEN=<write token> code/scripts/run_py.sh code/scripts/tools/archive_assets.py \
+code/util/run_py.sh code/util/tools/archive_assets.py --status                          # what differs?
+code/util/run_py.sh code/util/tools/archive_assets.py --kinds models evidence            # build only
+HF_TOKEN=<write token> code/util/run_py.sh code/util/tools/archive_assets.py \
     --kinds models evidence --upload --no-build --tag <date>_<gitsha> \
     --card data/outputs/archive/hf_README.md                                             # + publish
-code/scripts/run_py.sh code/scripts/tools/archive_assets.py --status                          # -> SYNCED
+code/util/run_py.sh code/util/tools/archive_assets.py --status                          # -> SYNCED
 ```
 
 `run_py.sh` forwards `HF_TOKEN` into the container only when it is set in that shell; the token
@@ -135,14 +135,14 @@ the remote file cannot be read (`--fresh` is the opt-in for an empty repo).
 
 ## Runs under this repo's stack (corallab, Isaac Sim 4.5.0 / Isaac Lab 2.1.1)
 
-`code/scripts/evaluation/bosch800_asset_evidence.py` loads the USD as an Isaac Lab 2.1
+`code/initialization/bosch/bosch800_asset_evidence.py` loads the USD as an Isaac Lab 2.1
 `Articulation` with the asset's own drives and base joint (nothing overridden), reads the
 dish sites the asset names under `<Rack>/Manipulation/`, and records a full
 open -> extend -> load -> retract -> close cycle with this repo's plate and cup props:
 
 ```bash
-code/scripts/run_kit.sh code/scripts/evaluation/bosch800_asset_evidence.py --headless --enable_cameras
-code/scripts/run_kit.sh code/scripts/evaluation/bosch800_asset_evidence.py --headless --probe   # stage dump only
+code/util/run_kit.sh code/initialization/bosch/bosch800_asset_evidence.py --headless --enable_cameras
+code/util/run_kit.sh code/initialization/bosch/bosch800_asset_evidence.py --headless --probe   # stage dump only
 ```
 
 Output: `data/media/bosch800_asset/{closed,racks_extended,loaded_extended}_{iso,front}.png`,

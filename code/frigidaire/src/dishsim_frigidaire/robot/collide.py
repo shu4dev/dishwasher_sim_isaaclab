@@ -241,7 +241,7 @@ def rrt_connect(world, q0, goals, time_s=10., seed=1, collide_kw=None, resolutio
 
 
 def load_model(path):
-    """(hulls, X_link) from data/results/robot/arm_model.json (code/frigidaire/scripts/setup/frigidaire_arm_model.py)."""
+    """(hulls, X_link) from data/results/robot/arm_model.json (code/execution/frigidaire/frigidaire_arm_model.py)."""
     import json
     d = json.loads(open(path).read())
     hulls = {k: [_hull(np.asarray(v)) for v in lst] for k, lst in d["hulls"].items()}

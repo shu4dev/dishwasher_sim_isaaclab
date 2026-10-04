@@ -21,8 +21,8 @@ from ``code/frigidaire/src/dishsim_frigidaire/tableware.py:49-136`` and the USD 
 (lines 41-42, 84-97, 117-130); this tracked module must never import that package.
 ``pxr`` and ``matplotlib`` are imported function-locally (architecture layering rule).
 
-    code/scripts/run_py.sh -m dishsim.hotec_gen --out data/assets/models/hotec_wheatstraw/v1
-    code/scripts/run_py.sh -m dishsim.hotec_gen --out .../v2 --set cup.base_diameter_m=0.060
+    code/util/run_py.sh -m dishsim.hotec_gen --out data/assets/models/hotec_wheatstraw/v1
+    code/util/run_py.sh -m dishsim.hotec_gen --out .../v2 --set cup.base_diameter_m=0.060
 """
 from __future__ import annotations
 
@@ -801,7 +801,7 @@ def _import_pxr():
     try:
         import pxr  # noqa: F401
     except ImportError as exc:
-        raise ImportError("pxr is not importable: run through code/scripts/run_py.sh (its omni.usd.libs shim) or inside "
+        raise ImportError("pxr is not importable: run through code/util/run_py.sh (its omni.usd.libs shim) or inside "
                           "an environment prepared like dishsim_frigidaire.usd_bootstrap.bundled_usd_environment()") from exc
 
 

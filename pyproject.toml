@@ -15,7 +15,7 @@ requires-python = ">=3.10"
 license = { text = "BSD-3-Clause" }
 # Runtime dependencies are deliberately not pinned here: everything runs on Kit's python
 # inside the dishsim-isaac container (torch/isaaclab/pxr preinstalled; planning deps baked
-# in by code/docker/Dockerfile from requirements-planning.txt) — see docs/environment.md.
+# in by code/util/docker/Dockerfile from requirements-planning.txt) — see docs/environment.md.
 dependencies = []
 
 [tool.setuptools.packages.find]

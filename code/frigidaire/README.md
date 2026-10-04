@@ -1,7 +1,8 @@
 # Frigidaire source
 
-This folder contains the FDPC4221AS generator, loader, build/evaluation tools,
-tests and documentation. The finished collection belongs at
+This folder contains the FDPC4221AS generator, loader, tests and documentation;
+its build, evaluation and experiment scripts sit in the stage folders under `code/`
+(see [code/README.md](../README.md)). The finished collection belongs at
 `data/assets/models/frigidaire_fdpc4221as/`; supplied references and generated images
 belong with that collection.
 
@@ -35,22 +36,24 @@ requirements explicitly; the random-pose experiment does not certify a full rele
 
 - `src/dishsim_frigidaire/`: geometry, USD authoring/loading, optional dish-loading
   utilities, candidate data and canonical collection paths.
-- `scripts/setup/`: stage references/history, build USD and package the collection.
-- `scripts/evaluation/`: rack diagrams, geometry clearance, USD inspection, assembly
-  and claims evidence, HOTEC loads and top-5 loads, the benchmark results page.
-- `scripts/experiment/`: scripted/passive appliance demonstration, the HOTEC benchmark
-  (`frigidaire_bench*.py`), the Isaac gate and the robot episode.
+- `code/initialization/frigidaire/`: stage references/history, build USD and package the
+  collection, rack diagrams, geometry clearance, USD inspection, assembly and claims
+  evidence, the scripted/passive appliance demonstration and the Isaac gate.
+- `code/planner/frigidaire/`: the HOTEC benchmark (`frigidaire_bench*.py`), HOTEC loads and
+  top-5 loads, the MCTS sweep, the benchmark results page and episode videos.
+- `code/execution/frigidaire/`: the arm bring-up probes, the robot episode and its report.
+- `code/util/frigidaire/`: the two render helpers the planner and execution scripts import.
 - `tests/`: Frigidaire tests, discovered by the repository pytest configuration.
 - `docs/`: current geometry notes, collection README template and historical notes.
 
 The earlier [four-view lower-rack polish](docs/lower_rack_polish.md) is collected
 here as well: `src/dishsim_frigidaire/lower_rack_asset.py`,
-`scripts/setup/polish_lower_rack.py`, and
-`scripts/evaluation/lower_rack_polish_evidence.py`. Its documentation describes
+`code/initialization/frigidaire/polish_lower_rack.py`, and
+`code/initialization/frigidaire/lower_rack_polish_evidence.py`. Its documentation describes
 the existing prototype and installation target.
 
 The root project installs both `dishsim` and `dishsim_frigidaire`; refresh an
-existing editable installation with `code/scripts/run_py.sh -m pip install -e . --no-deps`.
+existing editable installation with `code/util/run_py.sh -m pip install -e . --no-deps`.
 The package keeps USD and Kit imports out of module initialization.
 
 ```python
@@ -74,30 +77,30 @@ Isaac Sim 4.5 / Isaac Lab container. Each command can use an explicit staging
 path. Keep one Kit job running at a time.
 
 ```bash
-python3 code/frigidaire/scripts/setup/stage_frigidaire_collection.py \
+python3 code/initialization/frigidaire/stage_frigidaire_collection.py \
   --out-dir data/build/frigidaire_collection
 
-code/scripts/run_py.sh code/frigidaire/scripts/setup/build_frigidaire.py \
+code/util/run_py.sh code/initialization/frigidaire/build_frigidaire.py \
   --out-dir data/build/frigidaire_collection/usd
 
-code/scripts/run_py.sh code/frigidaire/scripts/evaluation/frigidaire_collection_inspect.py \
+code/util/run_py.sh code/initialization/frigidaire/frigidaire_collection_inspect.py \
   --collection-dir data/build/frigidaire_collection
 
-code/scripts/run_kit.sh code/frigidaire/scripts/evaluation/frigidaire_asset_evidence.py \
+code/util/run_kit.sh code/initialization/frigidaire/frigidaire_asset_evidence.py \
   --headless --device cpu --assembly-only --physics-only \
   --usd data/build/frigidaire_collection/usd/fdpc4221as.usdc \
   --out-dir data/build/frigidaire_collection/images/assembly
 
-code/scripts/run_kit.sh code/frigidaire/scripts/evaluation/frigidaire_asset_evidence.py \
+code/util/run_kit.sh code/initialization/frigidaire/frigidaire_asset_evidence.py \
   --headless --device cpu --assembly-only --enable_cameras --render-only \
   --usd data/build/frigidaire_collection/usd/fdpc4221as.usdc \
   --out-dir data/build/frigidaire_collection/images/assembly
 
-code/scripts/run_py.sh -m pytest code/tests code/frigidaire/tests
+code/util/run_py.sh -m pytest code/tests code/frigidaire/tests
 
-python3 code/frigidaire/scripts/setup/package_frigidaire.py \
+python3 code/initialization/frigidaire/package_frigidaire.py \
   --collection-dir data/build/frigidaire_collection --check
-python3 code/frigidaire/scripts/setup/package_frigidaire.py \
+python3 code/initialization/frigidaire/package_frigidaire.py \
   --collection-dir data/build/frigidaire_collection \
   --output data/build/frigidaire_fdpc4221as.zip
 ```

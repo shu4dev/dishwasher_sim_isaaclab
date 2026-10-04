@@ -71,7 +71,7 @@ def load_object_pieces(cache_dir: str) -> list:
     if not os.path.isdir(out_dir) or not os.listdir(out_dir):
         raise RuntimeError(
             f"missing CoACD pieces for the object in {cache_dir} — "
-            "run code/scripts/setup/decompose_meshes.py first"
+            "run code/initialization/bosch/decompose_meshes.py first"
         )
     return [trimesh.load(os.path.join(out_dir, f), force="mesh") for f in sorted(os.listdir(out_dir))]
 
@@ -175,12 +175,12 @@ class CollisionWorld:
             out_dir = coacd_dir_for(name, mesh_rel, self.cache_dir)
             if not os.path.isdir(out_dir) or not os.listdir(out_dir):
                 raise RuntimeError(
-                    f"missing CoACD pieces for '{name}' — run code/scripts/setup/decompose_meshes.py first"
+                    f"missing CoACD pieces for '{name}' — run code/initialization/bosch/decompose_meshes.py first"
                 )
             files = sorted(os.listdir(out_dir))
             if name in config.RACK_GEN:
                 # rack piece counts are deterministic (rack_gen parts) — reject a piece dir
-                # truncated by an interrupted code/scripts/setup/decompose_meshes.py export, where a missing piece would be
+                # truncated by an interrupted code/initialization/bosch/decompose_meshes.py export, where a missing piece would be
                 # a physically present wire that FCL never sees
                 from . import rack_gen  # local import: only needed on the rack path
 
@@ -189,7 +189,7 @@ class CollisionWorld:
                 if len(files) != expected:
                     raise RuntimeError(
                         f"rack piece dir for '{name}' has {len(files)} pieces, expected {expected} "
-                        "(interrupted export?) — re-run code/scripts/setup/decompose_meshes.py --force"
+                        "(interrupted export?) — re-run code/initialization/bosch/decompose_meshes.py --force"
                     )
             return [trimesh.load(os.path.join(out_dir, f), force="mesh") for f in files]
         return [trimesh.load(os.path.join(self.cache_dir, mesh_rel), force="mesh")]

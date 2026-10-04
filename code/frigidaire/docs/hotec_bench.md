@@ -1,6 +1,6 @@
 # HOTEC rearrangement benchmark (Frigidaire FDPC4221AS twin)
 
-Reference for agents working on `code/frigidaire/scripts/experiment/frigidaire_bench.py` (Kit-free library, CLI,
+Reference for agents working on `code/planner/frigidaire/frigidaire_bench.py` (Kit-free library, CLI,
 scheduler) and `frigidaire_bench_kit.py` (Kit: start generation and episodes). Read [exposure.md](exposure.md)
 for the score and [planner.md](planner.md) for the planner this reuses. Designed with the user in six grilling
 rounds on 2026-09-23; the approved plan is `~/.claude/plans/i-am-creating-a-majestic-feather.md`.
@@ -93,7 +93,7 @@ after its neighbours; up to 8 builds), and the certified order between every pai
 The orchestrator runs on the host (`python3`, it needs docker); every stage runs in `dishsim-isaac`.
 
 ```bash
-B="nice -n 10 python3 code/frigidaire/scripts/experiment/frigidaire_bench.py"
+B="nice -n 10 python3 code/planner/frigidaire/frigidaire_bench.py"
 $B --capacity                                   # gate G2 (Kit-free, in the container): 8 / 16 / 24 racked
 $B --generate --tiers easy medium hard --seeds 0 1 2 --kit-jobs 3 --py-jobs 2 --max-attempts 12
 $B --plan-all --tiers easy medium hard --seeds 0 1 2 --kit-jobs 3 --py-jobs 2   # own loads: plan (Warp, 60 s) -> Isaac build -> resequence
@@ -101,7 +101,7 @@ $B --run-all  --tiers easy medium hard --seeds 0 1 2 --kit-jobs 3 --cameras   # 
 $B --analyze-all --tiers easy medium hard --py-jobs 2                 # S_final, S per move, score-detail figure
 $B --videos --tiers easy medium hard --kit-jobs 3                     # first instance per tier, 5 videos each
 $B --collect                                                          # compare/summary.{md,json}
-code/scripts/run_py.sh code/frigidaire/scripts/evaluation/frigidaire_bench_page.py --label "..."   # results page folder
+code/util/run_py.sh code/planner/frigidaire/frigidaire_bench_page.py --label "..."   # results page folder
 ```
 
 Scheduler: one container (`dishsim-isaac`, GPU 1), at most 3 Kit jobs (a camera Kit job is about 2.9 GB of
@@ -121,7 +121,7 @@ Logs: `data/logs/benchmark_frigidaire_hotec/<unit>.log`, judged by the `[RESULT]
 
 ## Results (2026-09-29, re-measured racks)
 
-Run: host `python3 code/frigidaire/scripts/experiment/frigidaire_bench.py --full --tiers easy medium hard --seeds 0 1 2
+Run: host `python3 code/planner/frigidaire/frigidaire_bench.py --full --tiers easy medium hard --seeds 0 1 2
 --max-attempts 8 --kit-jobs 3 --py-jobs 2`, `[RESULT] PASS full (9 instances)` at 05:46 local; pilot = the seed-0
 chains (published 03:45). Easy s3-s5 (generated and run 2026-09-28 on the same racks) are in the tables too. Tables:
 `data/results/benchmark/frigidaire_hotec/compare/summary.md` (`--collect` must run in the container: `compare/` is

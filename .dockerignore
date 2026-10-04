@@ -1,4 +1,4 @@
 # The image build COPYs only requirements-planning.txt; keep the context minimal.
 *
 !requirements-planning.txt
-!code/docker/
+!code/util/docker/

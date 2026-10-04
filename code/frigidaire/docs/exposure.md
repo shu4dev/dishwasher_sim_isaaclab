@@ -82,10 +82,10 @@ summary script and is not regenerated; it still shows the pre-2026-09-22 arm rad
 | File | Role |
 |---|---|
 | `src/dishsim_frigidaire/exposure.py` | scorer: `food_contact`, `surface_samples`, `rack_sources`, `cast` (Warp), `exposure_of`, `pools`, `load_state`, `score_state`, `score_arrangement`, `sanity_pair` |
-| `scripts/evaluation/frigidaire_hotec_exposure_search.py` | HOTEC 24-piece search: registers `hotec_plate` / `hotec_bowl` / `hotec_cup` in the scorer, coordinate ascent, `--insertion-gate`; writes `search.json` and `best_layout.json`; reused as a module by `frigidaire_bench.py` and the figure script |
-| `scripts/evaluation/frigidaire_hotec_exposure_figure.py` | method image of two HOTEC loads: per-sample exposure top-down per rack plus per-piece bars |
-| `scripts/evaluation/frigidaire_hotec_top5.py` | top-5 exposure loads of all 24 HOTEC pieces (2026-09-29), each Isaac-gated |
-| `scripts/experiment/frigidaire_bench.py` | HOTEC rearrangement benchmark; its goal search and the S it reports use the scorer ([hotec_bench.md](hotec_bench.md)) |
+| `code/planner/frigidaire/frigidaire_hotec_exposure_search.py` | HOTEC 24-piece search: registers `hotec_plate` / `hotec_bowl` / `hotec_cup` in the scorer, coordinate ascent, `--insertion-gate`; writes `search.json` and `best_layout.json`; reused as a module by `frigidaire_bench.py` and the figure script |
+| `code/planner/frigidaire/frigidaire_hotec_exposure_figure.py` | method image of two HOTEC loads: per-sample exposure top-down per rack plus per-piece bars |
+| `code/planner/frigidaire/frigidaire_hotec_top5.py` | top-5 exposure loads of all 24 HOTEC pieces (2026-09-29), each Isaac-gated |
+| `code/planner/frigidaire/frigidaire_bench.py` | HOTEC rearrangement benchmark; its goal search and the S it reports use the scorer ([hotec_bench.md](hotec_bench.md)) |
 | `tests/test_exposure.py` | 22 Kit-free tests (analytic ray cases, lathe layout incl. spoons, fork/knife rules, loader re-seating, pooling incl. plates, feasibility, baselines opt-in) |
 
 Retired 2026-09-29 (in git history at HEAD 4455813):
@@ -109,9 +109,9 @@ All Kit-free unless marked; run from the repo root. Warp runs on CUDA when avail
 root-owned; clean with `docker exec dishsim-isaac rm`).
 
 ```bash
-code/scripts/run_py.sh -m pytest code/frigidaire/tests/test_exposure.py                                       # 22 tests
-code/scripts/run_py.sh code/frigidaire/scripts/evaluation/frigidaire_hotec_exposure_search.py --sweeps 3 --seed 0 --out <new folder>   # HOTEC search, CUDA, 34 min on 2026-09-22
-code/scripts/run_py.sh code/frigidaire/scripts/evaluation/frigidaire_hotec_exposure_figure.py --start <start layout.json> --best <best_layout.json> --out <heatmap.png>
+code/util/run_py.sh -m pytest code/frigidaire/tests/test_exposure.py                                       # 22 tests
+code/util/run_py.sh code/planner/frigidaire/frigidaire_hotec_exposure_search.py --sweeps 3 --seed 0 --out <new folder>   # HOTEC search, CUDA, 34 min on 2026-09-22
+code/util/run_py.sh code/planner/frigidaire/frigidaire_hotec_exposure_figure.py --start <start layout.json> --best <best_layout.json> --out <heatmap.png>
 ```
 
 The search's default `--out` is `data/results/exposure/frigidaire/hotec/` (the records cited below) and
@@ -201,7 +201,7 @@ proposals are FCL-feasible, not settled, until an Isaac settle confirms them.
 The user asked for the arrangement of the whole HOTEC set (8 plates, 8 bowls, 8 cups; v2 massed
 assets) that scores highest under this scorer, in the final twin (tape racks, v3-look upper floor,
 95 mm v3-design basket), racking all 24 pieces. Script:
-`code/frigidaire/scripts/evaluation/frigidaire_hotec_exposure_search.py` (Kit-free, CUDA).
+`code/planner/frigidaire/frigidaire_hotec_exposure_search.py` (Kit-free, CUDA).
 
 **HOTEC kinds in the scorer.** The scorer keys kinds by name and builds food-contact surfaces from the
 prototype lathe meshes, so the HOTEC pieces are registered as `hotec_plate` / `hotec_bowl` /

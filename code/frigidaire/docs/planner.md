@@ -83,16 +83,16 @@ counter cap  at most `cap` objects in the counter band at once; a move into a fu
 | `src/dishsim_frigidaire/planner.py` | `PlannerWorld`, `slab_body`, support edges, counter band, `sequence`, instance glue (`item_order`, `to_rearrange_instance`, `goal_T`, pose helpers) |
 | `src/dishsim_frigidaire/initial_state_candidates.py` | `InitialCollisionChecker`, the FCL checker the world wraps (its candidate catalog and packing solvers were retired 2026-09-29) |
 | `src/dishsim_frigidaire/initial_state_runtime.py` | Isaac backend; the `extra_statics` hook authors the counter slab before `sim.reset()` (`frigidaire_bench_kit.py` passes it) |
-| `scripts/experiment/frigidaire_bench.py` | `make_bench_world` (`BenchWorld(PlannerWorld)`), the `sequence` calls, the CLI |
-| `scripts/experiment/frigidaire_bench_kit.py` | Kit side: the slab through `extra_statics`, `BenchOracle`, episodes |
-| `scripts/evaluation/frigidaire_planner_video.py` | Kit, `--enable_cameras`: stop-motion MP4 of one episode; `frigidaire_bench.py` calls it for the benchmark's episodes |
+| `code/planner/frigidaire/frigidaire_bench.py` | `make_bench_world` (`BenchWorld(PlannerWorld)`), the `sequence` calls, the CLI |
+| `code/planner/frigidaire/frigidaire_bench_kit.py` | Kit side: the slab through `extra_statics`, `BenchOracle`, episodes |
+| `code/planner/frigidaire/frigidaire_planner_video.py` | Kit, `--enable_cameras`: stop-motion MP4 of one episode; `frigidaire_bench.py` calls it for the benchmark's episodes |
 | `tests/test_planner.py` | 7 Kit-free tests (counter band, support edges, unstack fault, sequencer cap and buffer, counter-first order and support gate, instance glue, allowed kinds do not widen racks) |
-| `code/scripts/run_py.sh` | exports Kit's USD extension so `pxr` imports Kit-free (the FCL checker reads colliders from USD) |
+| `code/util/run_py.sh` | exports Kit's USD extension so `pxr` imports Kit-free (the FCL checker reads colliders from USD) |
 
 ## Commands
 
 ```bash
-code/scripts/run_py.sh -m pytest code/frigidaire/tests/test_planner.py
+code/util/run_py.sh -m pytest code/frigidaire/tests/test_planner.py
 ```
 
 Instance generation, episodes and videos run through `frigidaire_bench.py` (`--generate`,

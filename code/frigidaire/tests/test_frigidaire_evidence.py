@@ -16,7 +16,7 @@ from unittest.mock import patch
 import numpy  # noqa: F401 — keep the extension loaded across temporary sys.modules stubs
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts/evaluation/frigidaire_asset_evidence.py"
+SCRIPT = Path(__file__).resolve().parents[3] / "code/initialization/frigidaire/frigidaire_asset_evidence.py"
 
 
 def load_evidence(*arguments):
@@ -120,7 +120,7 @@ class EvidenceContractTests(unittest.TestCase):
         for name in ("asset", "geometry", "paths"):
             path = f"code/frigidaire/src/dishsim_frigidaire/{name}.py"
             self.assertEqual(sources[path], hashlib.sha256((self.evidence.ROOT / path).read_bytes()).hexdigest())
-        self.assertIn("code/frigidaire/scripts/evaluation/frigidaire_asset_evidence.py", sources)
+        self.assertIn("code/initialization/frigidaire/frigidaire_asset_evidence.py", sources)
         self.assertIn("code/frigidaire/src/dishsim_frigidaire/cutlery_candidates.json", sources)
 
     def test_usd_hashes_exclude_history_and_full_load(self):

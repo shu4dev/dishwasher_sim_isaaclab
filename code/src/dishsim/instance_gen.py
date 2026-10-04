@@ -4,7 +4,7 @@
 
 """Initial-arrangement sampling for benchmark instances — Kit-free.
 
-Lives in the package rather than in ``code/scripts/setup/gen_instances.py`` because that script
+Lives in the package rather than in ``code/initialization/bosch/gen_instances.py`` because that script
 launches ``AppLauncher`` at module scope, so importing it boots Kit; anything that wants to
 build instances without Isaac (an adversarial-family generator, a test) could otherwise only
 copy the sampler, and a second copy is a second thing to drift.

@@ -236,14 +236,14 @@ Host-side previews (NumPy and Matplotlib only; they write `measurements.json` be
 the images):
 
 ```bash
-python3 code/frigidaire/scripts/evaluation/frigidaire_upper_rack_preview.py \
+python3 code/initialization/frigidaire/frigidaire_upper_rack_preview.py \
     --out-dir data/build/frigidaire_collection/images/upper_rack      # 48 tines
-python3 code/frigidaire/scripts/evaluation/frigidaire_lower_rack_preview.py \
+python3 code/initialization/frigidaire/frigidaire_lower_rack_preview.py \
     --out-dir data/build/frigidaire_collection/images/lower_rack      # 64 tines + basket_front/top/oblique.png
-python3 code/frigidaire/scripts/evaluation/frigidaire_lower_rack_clearance.py   # -> validation/lower_rack_clearance.json
-python3 code/frigidaire/scripts/evaluation/frigidaire_rack_dimensions_cm.py     # -> data/media/frigidaire_rack_dimensions/*.png (curated copies in docs/figures)
-python3 code/frigidaire/scripts/setup/stage_frigidaire_collection.py --archive-current v6   # BEFORE a rebuild; never reuse a version
-code/scripts/run_py.sh code/frigidaire/scripts/setup/build_frigidaire.py             # USD rebuild, [RESULT] PASS
+python3 code/initialization/frigidaire/frigidaire_lower_rack_clearance.py   # -> validation/lower_rack_clearance.json
+python3 code/initialization/frigidaire/frigidaire_rack_dimensions_cm.py     # -> data/media/frigidaire_rack_dimensions/*.png (curated copies in docs/figures)
+python3 code/initialization/frigidaire/stage_frigidaire_collection.py --archive-current v6   # BEFORE a rebuild; never reuse a version
+code/util/run_py.sh code/initialization/frigidaire/build_frigidaire.py             # USD rebuild, [RESULT] PASS
 ```
 
 `data/build/frigidaire_collection/usd/parameters.json` and `usd/geometry_validation.json`

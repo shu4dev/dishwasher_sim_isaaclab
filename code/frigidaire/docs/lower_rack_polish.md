@@ -46,7 +46,7 @@ interpretations, not manufacturer CAD measurements.
 From the repository root, using a Python with numpy:
 
 ```bash
-python3 code/frigidaire/scripts/setup/polish_lower_rack.py --preview
+python3 code/initialization/frigidaire/polish_lower_rack.py --preview
 ```
 
 This writes a portable `lower_rack.usda`, `geometry_validation.json`, and
@@ -66,8 +66,8 @@ In an environment with access to `dishsim-isaac` and write access to the asset a
 media directories:
 
 ```bash
-code/scripts/run_py.sh code/frigidaire/scripts/setup/polish_lower_rack.py --install
-code/scripts/run_kit.sh code/frigidaire/scripts/evaluation/lower_rack_polish_evidence.py --headless --enable_cameras
+code/util/run_py.sh code/initialization/frigidaire/polish_lower_rack.py --install
+code/util/run_kit.sh code/initialization/frigidaire/lower_rack_polish_evidence.py --headless --enable_cameras
 ```
 
 The installer stages both USDC files, checks USD mesh topology and material paths,
@@ -82,7 +82,7 @@ replacement restores both originals. Texture paths remain relative.
 The capture script can also inspect the staged USDA without installing:
 
 ```bash
-code/scripts/run_kit.sh code/frigidaire/scripts/evaluation/lower_rack_polish_evidence.py --headless --enable_cameras \
+code/util/run_kit.sh code/initialization/frigidaire/lower_rack_polish_evidence.py --headless --enable_cameras \
   --usd data/build/bosch800_lower_rack/lower_rack.usda
 ```
 

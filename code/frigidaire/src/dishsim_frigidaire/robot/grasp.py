@@ -1,6 +1,6 @@
 """Top-down 2F-85 grasps of a HOTEC bowl in any resting pose (Kit-free).
 
-Measured on the grip probe (code/frigidaire/scripts/setup/frigidaire_grip_probe.py, 2026-09-29), with the TCP of
+Measured on the grip probe (code/execution/frigidaire/frigidaire_grip_probe.py, 2026-09-29), with the TCP of
 ``ur5e.T_WRIST3_TCP`` = the fingertip ENDS (the pads reach ~6 mm beyond and ~32 mm behind it), closing along the
 TCP y axis, TCP z = approach (world down here):
 

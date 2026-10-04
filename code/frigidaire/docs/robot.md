@@ -13,18 +13,18 @@ while the lower rack is loaded (the extended upper rack covers the lower rack: n
 | `robot/grasp.py` | top-down grasps of a HOTEC bowl: rim pinch (upright), foot-ring clamp (mouth down), rim side point (lying); tilted variants that clear the counter slab |
 | `robot/rig.py` | Kit controller: joint moves with velocity feed-forward, IK lines, gripper, blocked-motion detection |
 | `robot/collide.py` | FCL arm model (convex hull per link from the USD collision meshes, calibrated link offsets) vs appliance, counter, dishes, pedestal, floor; OMPL RRT-Connect |
-| `code/frigidaire/scripts/setup/mirror_robot_usd.sh` | Isaac 6.0 UR5e + 2F-85 asset mirror (11 MB, data/assets/robots) |
-| `code/frigidaire/scripts/setup/frigidaire_grip_probe.py` | friction gate G0 and the collider diagnostics |
-| `code/frigidaire/scripts/setup/frigidaire_grasp_test.py` | generated grasps on one bowl, per pose class |
-| `code/frigidaire/scripts/setup/frigidaire_arm_model.py` | exports the arm collision model to data/results/robot/arm_model.json |
-| `code/frigidaire/scripts/setup/frigidaire_robot_mount.py` | collision-checked mount search (floor / counter grids) |
-| `code/frigidaire/scripts/experiment/frigidaire_robot_episode.py` | the episode: benchmark start state + robot, two phases, per-move report, video; since Phase 0 (2026-09-30) run under `robot/flags.py` profiles (`headline`, `legacy_upright3`) and the harness, one folder per `--run-id` |
+| `code/execution/frigidaire/mirror_robot_usd.sh` | Isaac 6.0 UR5e + 2F-85 asset mirror (11 MB, data/assets/robots) |
+| `code/execution/frigidaire/frigidaire_grip_probe.py` | friction gate G0 and the collider diagnostics |
+| `code/execution/frigidaire/frigidaire_grasp_test.py` | generated grasps on one bowl, per pose class |
+| `code/execution/frigidaire/frigidaire_arm_model.py` | exports the arm collision model to data/results/robot/arm_model.json |
+| `code/execution/frigidaire/frigidaire_robot_mount.py` | collision-checked mount search (floor / counter grids) |
+| `code/execution/frigidaire/frigidaire_robot_episode.py` | the episode: benchmark start state + robot, two phases, per-move report, video; since Phase 0 (2026-09-30) run under `robot/flags.py` profiles (`headline`, `legacy_upright3`) and the harness, one folder per `--run-id` |
 | `robot/flags.py` | named run flags: every benchmark relaxation (R4-R6), the R1/R7 thresholds, R2 gains, D1-D3 rules, the counter cap, the diagnostic continue mode; `headline` and `legacy_upright3` profiles |
 | `robot/harness.py` | Kit-side harness (plan Phase 0.3-0.4): sleep threshold 0, PhysX contact reports (touching pairs, normal force per pad), the seven auto-fail invariants, the diagnostic settle routine, fixed-camera video with the simulated clock, key frames |
 | `robot/triallog.py` | JSONL trial log (sim_s and wall_s separate; attempt and config_id separate) |
-| `code/frigidaire/scripts/setup/frigidaire_robot_conventions.py` | live-asset conventions, the 12-joint loaded close (D7 / H2 runtime test), the arm-collider press test (D12); fixture via `frigidaire_robot_conventions_fixture.py` |
-| `code/frigidaire/scripts/setup/robot_asset_manifest.py` | `data/assets/robots/MANIFEST.sha256` (D11) |
-| `code/frigidaire/scripts/evaluation/frigidaire_robot_report.py` | Kit-free report: plots from the trial logs, `data/artifacts/<run-id>/index.html`, `REPORT.md` |
+| `code/execution/frigidaire/frigidaire_robot_conventions.py` | live-asset conventions, the 12-joint loaded close (D7 / H2 runtime test), the arm-collider press test (D12); fixture via `frigidaire_robot_conventions_fixture.py` |
+| `code/execution/frigidaire/robot_asset_manifest.py` | `data/assets/robots/MANIFEST.sha256` (D11) |
+| `code/execution/frigidaire/frigidaire_robot_report.py` | Kit-free report: plots from the trial logs, `data/artifacts/<run-id>/index.html`, `REPORT.md` |
 | `code/frigidaire/tests/test_robot_{kin,conventions,flags,harness}.py` | Kit-free tests (the conventions test reads `code/frigidaire/tests/fixtures/robot/conventions.json`) |
 
 ## Measured findings (landmines)

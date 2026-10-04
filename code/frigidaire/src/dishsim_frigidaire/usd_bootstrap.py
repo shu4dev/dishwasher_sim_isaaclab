@@ -22,7 +22,7 @@ def bundled_usd_environment(isaac_root: str | Path = "/isaac-sim") -> dict[str, 
     candidates = sorted((root / "extscache").glob("omni.usd.libs-*/pxr/Usd"))
     if not candidates:
         raise RuntimeError(
-            "Bundled USD was not found. Run this tool with code/scripts/run_py.sh "
+            "Bundled USD was not found. Run this tool with code/util/run_py.sh "
             "inside the dishsim-isaac container, or use a Python with USD installed."
         )
     usd_extension = candidates[-1].parents[1]

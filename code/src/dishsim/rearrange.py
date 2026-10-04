@@ -12,7 +12,7 @@ is just physical space. Episodes ABORT on the first fault (colliding command, un
 settle, disturbed neighbor) or at the move budget.
 
 Kit-free by construction: :func:`run_episode` is parameterized by an ``oracle`` (executes a
-move, returns settled poses + fault — Isaac in ``code/scripts/experiment/run_rearrange.py``, a toy
+move, returns settled poses + fault — Isaac in ``code/planner/bosch/run_rearrange.py``, a toy
 in ``code/tests/test_rearrange.py``) and a ``world`` (FCL feasibility, :class:`ArrangementWorld`).
 
 Context discipline: the CALLER applies machine -> object -> scenario -> placement before

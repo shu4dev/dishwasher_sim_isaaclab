@@ -1,4 +1,4 @@
-"""Kit-free checks of the HOTEC benchmark library (code/frigidaire/scripts/experiment/frigidaire_bench.py)."""
+"""Kit-free checks of the HOTEC benchmark library (code/planner/frigidaire/frigidaire_bench.py)."""
 from __future__ import annotations
 
 import importlib.util
@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 @pytest.fixture(scope="module")
 def B():
-    spec = importlib.util.spec_from_file_location("frigidaire_bench", ROOT / "code/frigidaire/scripts/experiment/frigidaire_bench.py")
+    spec = importlib.util.spec_from_file_location("frigidaire_bench", ROOT / "code/planner/frigidaire/frigidaire_bench.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -145,7 +145,7 @@ def test_rrt_candidates_fall_back_to_goals_and_cells(B):
 
 def test_rel_maps_host_paths_to_container_paths(B):
     assert B.rel(B.OUT / "baseline") == "data/results/benchmark/frigidaire_hotec/baseline"       # symlinked root stays relative
-    assert B.rel(B.ROOT / "code/frigidaire/scripts") == "code/frigidaire/scripts"
+    assert B.rel(B.ROOT / "code/planner/frigidaire") == "code/planner/frigidaire"
     assert B.rel("/media/corallab-s1/2tbhdd/brianshu/dishsim/x") == "/media/corallab-s1/2tbhdd/brianshu/dishsim/x"
     with pytest.raises(ValueError):
         B.rel("/tmp/elsewhere")

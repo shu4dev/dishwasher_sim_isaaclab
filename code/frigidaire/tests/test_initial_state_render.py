@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def load_render():
-    path = ROOT / "code/frigidaire/scripts/evaluation/frigidaire_initial_state_render.py"
+    path = ROOT / "code/util/frigidaire/frigidaire_initial_state_render.py"
     spec = importlib.util.spec_from_file_location("initial_state_render", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

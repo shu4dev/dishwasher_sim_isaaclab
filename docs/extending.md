@@ -13,9 +13,9 @@ The object/mode/state extension workflows.
    It downloads/generates the source mesh, prints the *measured* dimensions and fails if they
    disagree with the registry by >2 mm — freeze the printed block into the spec.
 3. Rebuild that object's caches:
-   `code/scripts/run_kit.sh code/scripts/setup/extract_geometry.py --headless --machine bosch800
+   `code/util/run_kit.sh code/initialization/bosch/extract_geometry.py --headless --machine bosch800
    --placement side_winner --scenario <state> --object <name>` then the same flags to
-   `code/scripts/run_py.sh code/scripts/setup/decompose_meshes.py`. Slots derive live from the
+   `code/util/run_py.sh code/initialization/bosch/decompose_meshes.py`. Slots derive live from the
    cached rack geometry (`placement.derive_slots`).
 
 > **Note:** never eyeball-edit a measured value. Every dimension in `config.py` traces to a

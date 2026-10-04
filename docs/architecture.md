@@ -3,37 +3,50 @@
 ```
 dishwasher_sim_isaaclab/
 │
-├── code/scripts/
+├── code/README.md                    [the stages in order and what each hands to the next;
+│                                      every stage and machine folder has its own README]
+│
+├── code/initialization/              [STAGE 1 — twins, assets, collision caches, evidence,
+│   │                                  problem instances]
+│   ├── bosch/
+│   │   ├── extract_geometry.py       [dump the settled statics + object mesh into the cache]
+│   │   ├── decompose_meshes.py       [convex FCL pieces (CoACD / analytic parts)]
+│   │   ├── gen_instances.py          [settled rearrangement instances (perturbed / random)]
+│   │   ├── instance_views.py         [one instance's initial-vs-goal stills, one Kit boot]
+│   │   └── bosch800_asset_evidence.py [Kit: the standalone Bosch 800 asset's open/extend/load/
+│   │                                   retract/close cycle, data/media/bosch800_asset/]
+│   └── frigidaire/                   [build, stage, package and certify the Frigidaire twin;
+│                                      claims, demo, the Isaac start-state gate]
+│
+├── code/planner/                     [STAGE 2 — where each dish goes and in what order]
+│   ├── bosch/
+│   │   ├── run_rearrange.py          [benchmark runner: persistent Kit session, closed-loop
+│   │   │                              episodes, per-move settle + fault gates, --video]
+│   │   └── compare_algorithms.py     [Kit-free: aggregates episode records into the per-cell
+│   │                                  comparison table, data/results/compare/summary.{csv,md}]
+│   └── frigidaire/                   [HOTEC benchmark, MCTS, HOTEC loads and top-5, results
+│                                      page, episode videos]
+│
+├── code/execution/
+│   └── frigidaire/                   [STAGE 3 — the UR5e + Robotiq 2F-85 bring-up and robot
+│                                      episode (in progress)]
+│
+├── code/util/
 │   ├── run_kit.sh                    [Kit launcher: docker-execs into dishsim-isaac from the
 │   │                                  host, then isaaclab.sh -p]
 │   ├── run_py.sh                     [Kit-free python the same way (/isaac-sim/python.sh);
 │   │                                  bakes PYTEST_DISABLE_PLUGIN_AUTOLOAD=1]
-│   │
-│   ├── setup/                        [PHASE 1 — assets, the simulation world, collision caches]
+│   ├── tools/
 │   │   ├── kit_smoke.py              [install gate: planning stack imports inside Kit +
 │   │   │                              headless capture is non-black; wired into bootstrap.sh]
-│   │   ├── extract_geometry.py       [dump the settled statics + object mesh into the cache]
-│   │   ├── decompose_meshes.py       [convex FCL pieces (CoACD / analytic parts)]
-│   │   └── gen_instances.py          [settled rearrangement instances (perturbed / random)]
-│   │
-│   ├── experiment/
-│   │   └── run_rearrange.py          [benchmark runner: persistent Kit session, closed-loop
-│   │                                  episodes, per-move settle + fault gates, --video]
-│   │
-│   ├── evaluation/
-│   │   ├── instance_views.py         [one instance's initial-vs-goal stills, one Kit boot]
-│   │   ├── compare_algorithms.py     [Kit-free: aggregates episode records into the per-cell
-│   │   │                              comparison table, data/results/compare/summary.{csv,md}]
-│   │   └── bosch800_asset_evidence.py [Kit: the standalone Bosch 800 asset's open/extend/load/
-│   │                                   retract/close cycle, data/media/bosch800_asset/]
-│   │
-│   └── tools/
-│       ├── restore_assets.py         [download, safe-extract, validate cache hashes, run tests]
-│       ├── archive_assets.py         [producer side of restore_assets: kind-aware tarballs
-│       │                              (assets/media/models/evidence) with sha256 manifests,
-│       │                              optional HF upload; --status diffs against the remote]
-│       └── bootstrap.sh              [fresh-box bring-up: image build if absent + compose up +
-│                                      restore + the kit_smoke gate]
+│   │   ├── restore_assets.py         [download, safe-extract, validate cache hashes, run tests]
+│   │   ├── archive_assets.py         [producer side of restore_assets: kind-aware tarballs
+│   │   │                              (assets/media/models/evidence) with sha256 manifests,
+│   │   │                              optional HF upload; --status diffs against the remote]
+│   │   └── bootstrap.sh              [fresh-box bring-up: image build if absent + compose up +
+│   │                                  restore + the kit_smoke gate]
+│   ├── frigidaire/                   [the two render helpers planner and execution scripts import]
+│   └── docker/                       [Dockerfile (build record) + compose.yaml (the runtime)]
 │
 ├── code/src/dishsim/                 [the environment package (installed editable by the
 │   │                                  container entrypoint)]
@@ -98,15 +111,15 @@ dishwasher_sim_isaaclab/
 │                                      planners' toy-oracle checks, the instance sampler's
 │                                      tier knobs, the archive tool's tarball selection, the
 │                                      HOTEC generator properties; run via
-│                                      code/scripts/run_py.sh -m pytest code/tests/]
+│                                      code/util/run_py.sh -m pytest code/tests/]
 ├── code/frigidaire/                  [the Frigidaire FDPC4221AS twin, a separate package
-│                                      (dishsim_frigidaire) with its own src/ scripts/ tests/
-│                                      docs/, tracked in git: generator, loaders, HOTEC
-│                                      benchmark, exposure scorer; the arm bring-up in
-│                                      src/dishsim_frigidaire/robot/ is in progress.
+│                                      (dishsim_frigidaire) with its own src/ tests/ docs/,
+│                                      tracked in git: generator, loaders, HOTEC benchmark
+│                                      helpers, exposure scorer; the arm bring-up in
+│                                      src/dishsim_frigidaire/robot/ is in progress; its
+│                                      scripts sit in the stage folders' frigidaire/.
 │                                      See code/frigidaire/README.md]
 ├── docs/                             [environment, success criteria, measured reports]
-├── code/docker/                      [Dockerfile (build record) + compose.yaml (the runtime)]
 ├── data/assets/ data/build/ data/media/ data/results/ data/logs/ data/outputs/
 │                                     [generated, gitignored — symlinks onto the 2 TB drive]
 ├── requirements-planning.txt         [pinned planning deps, baked into the image]

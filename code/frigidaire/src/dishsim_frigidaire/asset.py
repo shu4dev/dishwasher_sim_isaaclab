@@ -678,7 +678,7 @@ def build(output_dir=ASSET_DIR, component=None):
         "Door 0..90 degrees; lower_slide -0.49..0 m; upper_slide -0.44..0 m. "
         "The basket is an independent rigid body.\n\n"
         "For scripted motion or passive spring counterbalance, use dishsim_frigidaire.asset.spawn "
-        "and code/frigidaire/scripts/experiment/frigidaire_demo.py in the source repository. "
+        "and code/initialization/frigidaire/frigidaire_demo.py in the source repository. "
         "The loader also relocates the world-side fixed joint when spawning off origin.\n\n"
         "Dimensions absent from the reference specification are estimates. See parameters.json. "
         "geometry_validation.json covers authoring only; physics validation is recorded separately "

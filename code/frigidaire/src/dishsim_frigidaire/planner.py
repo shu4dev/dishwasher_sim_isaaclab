@@ -3,7 +3,7 @@
 """Bench-side planning helpers for the Frigidaire FDPC4221AS: world, support gate and sequencer.
 
 Kit-free. Objects start in a messy pile on a countertop above the machine and unorganized in the
-racks; the HOTEC benchmark (``code/frigidaire/scripts/experiment/frigidaire_bench.py``) plans teleport
+racks; the HOTEC benchmark (``code/planner/frigidaire/frigidaire_bench.py``) plans teleport
 moves, one object at a time, on the driver ``dishsim.rearrange.run_episode``. This module supplies
 the world (an FCL mirror of the appliance, the counter slab and every object), the support graph
 and the sequencer (the benchmark's greedy rule with counter objects first, the support gate and

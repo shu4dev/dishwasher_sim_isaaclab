@@ -168,7 +168,7 @@ Rebuild with overrides, e.g. `--set cup.base_diameter_m=0.060 --set cup.wall_m=0
 
 ## Frigidaire load: pictures and video
 
-`code/frigidaire/scripts/evaluation/frigidaire_hotec_load.py` plans a layout Kit-free (the Frigidaire
+`code/planner/frigidaire/frigidaire_hotec_load.py` plans a layout Kit-free (the Frigidaire
 FCL world with the HOTEC colliders injected; plates on edge in the lower-rack tine gaps, bowls
 mouth-down, cups inverted and near-upright in the glass troughs like the claims tumblers, priority
 plates > bowls > cups, leftovers upright on the runtime counter slab), then one Isaac session spawns the appliance and 24 pieces,
@@ -327,7 +327,7 @@ re-scoring scripts are `data/build/frigidaire_diagnostics/scratch/recert_layout.
 
 All 24 pieces, no planning: the five highest-exposure complete loads, each validated by the joint Isaac gate (all
 24 teleported at once, settle, both racks retracted, containment) and rendered. Tool:
-`code/frigidaire/scripts/evaluation/frigidaire_hotec_top5.py` (tests `code/frigidaire/tests/test_hotec_top5.py`), reusing the
+`code/planner/frigidaire/frigidaire_hotec_top5.py` (tests `code/frigidaire/tests/test_hotec_top5.py`), reusing the
 HOTEC benchmark library without modifying it. Private results page: https://claude.ai/artifact/Ve2AHygZ7879EAx56Ko7ww.
 
 A first run with the benchmark's placement rules (`data/results/hotec/frigidaire/top5_20260929/`) racked all 24 in 0 of 40
@@ -362,17 +362,17 @@ all five renders PASS. Records `data/results/hotec/frigidaire/top5_20260929_touc
 ## Reproduce
 
 ```bash
-code/scripts/run_py.sh -m pytest code/tests/test_hotec_gen.py -q                       # Kit-free property checks
-code/scripts/run_py.sh -m dishsim.hotec_gen --out data/assets/models/hotec_wheatstraw/v1   # build (refuses to overwrite)
-code/scripts/run_py.sh code/frigidaire/scripts/evaluation/frigidaire_hotec_load.py --layout-only \
+code/util/run_py.sh -m pytest code/tests/test_hotec_gen.py -q                       # Kit-free property checks
+code/util/run_py.sh -m dishsim.hotec_gen --out data/assets/models/hotec_wheatstraw/v1   # build (refuses to overwrite)
+code/util/run_py.sh code/planner/frigidaire/frigidaire_hotec_load.py --layout-only \
     --assets data/assets/models/hotec_wheatstraw/v2 --out-dir data/results/hotec/frigidaire/v6
-code/scripts/run_kit.sh code/frigidaire/scripts/evaluation/frigidaire_hotec_load.py \
+code/util/run_kit.sh code/planner/frigidaire/frigidaire_hotec_load.py \
     --layout data/results/hotec/frigidaire/v6/layout.json --assets data/assets/models/hotec_wheatstraw/v2 \
     --out-dir data/results/hotec/frigidaire/v6 --tag hotec_v6 --headless --enable_cameras --device cpu
 # v1 (photo-fitted racks) used --out-dir data/results/hotec/frigidaire/v1 and --tag hotec_v1
 ```
 
-Kit-free `pxr` comes from the `code/scripts/run_py.sh` shim (Kit's `omni.usd.libs` extension); the USD
+Kit-free `pxr` comes from the `code/util/run_py.sh` shim (Kit's `omni.usd.libs` extension); the USD
 test fails loudly if it is missing inside the container. Outputs are root-owned (the container
 writes them): remove with `docker exec dishsim-isaac rm`, never host sudo.
 

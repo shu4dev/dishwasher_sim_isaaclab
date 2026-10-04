@@ -1,4 +1,4 @@
-"""Kit-free checks of the top-5 HOTEC arrangement search (code/frigidaire/scripts/evaluation/frigidaire_hotec_top5.py)."""
+"""Kit-free checks of the top-5 HOTEC arrangement search (code/planner/frigidaire/frigidaire_hotec_top5.py)."""
 from __future__ import annotations
 
 from collections import Counter
@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 @pytest.fixture(scope="module")
 def T():
-    spec = importlib.util.spec_from_file_location("hotec_top5", ROOT / "code/frigidaire/scripts/evaluation/frigidaire_hotec_top5.py")
+    spec = importlib.util.spec_from_file_location("hotec_top5", ROOT / "code/planner/frigidaire/frigidaire_hotec_top5.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

@@ -10,7 +10,7 @@ import unittest
 import zipfile
 
 
-_SCRIPT = Path(__file__).resolve().parents[1] / "scripts/setup/package_frigidaire.py"
+_SCRIPT = Path(__file__).resolve().parents[3] / "code/initialization/frigidaire/package_frigidaire.py"
 _SPEC = importlib.util.spec_from_file_location("frigidaire_package", _SCRIPT)
 package = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(package)

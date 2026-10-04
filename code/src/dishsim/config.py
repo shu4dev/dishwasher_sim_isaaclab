@@ -283,7 +283,7 @@ CACHE_DIR = os.path.join(ASSETS_DIR, "cache")
 COLLISION_MARGIN_M = 0.002
 # CoACD parameters per body (fallback key "default"); threshold is the concavity tolerance —
 # lower = finer decomposition. The RACKS no longer go through CoACD: their meshes are generated
-# by rack_gen from RACK_GEN below, and code/scripts/setup/decompose_meshes.py writes the generator's exact convex parts as
+# by rack_gen from RACK_GEN below, and code/initialization/bosch/decompose_meshes.py writes the generator's exact convex parts as
 # the FCL pieces (zero decomposition slop on 3 mm wires). CoACD remains for the concave bodies
 # whose geometry we don't control.
 COACD = {
@@ -319,7 +319,7 @@ COACD = {
 # Design space = world-metric rack body frame: x = width, y = depth (y=0 the front edge, the
 # end that extends toward the robot), z up from 0 at the lowest wire surface; meters.
 # usd_prep authors these meshes into the derived v0 USD (replacing the ArtVIP flat baskets);
-# code/scripts/setup/decompose_meshes.py writes the generator's convex parts as the FCL pieces. Vertical layout is derived:
+# code/initialization/bosch/decompose_meshes.py writes the generator's convex parts as the FCL pieces. Vertical layout is derived:
 # channel runners bottom at z=0, main runners raised by channel.drop, crossbars tangent on top
 # (floor_top = crossbar top = the slot datum the Phase-E percentile must land on — everything
 # floor-level therefore stays inside placement.py's 15 mm bottom-slab band).
@@ -700,7 +700,7 @@ class ObjectSpec:
     height_m: float  # extent along axis_obj [m]
     grasp: GraspSpec
     placement: PlacementSpec
-    coacd: dict  # code/scripts/setup/decompose_meshes.py params, or {"analytic": True} for prop_gen part lists
+    coacd: dict  # code/initialization/bosch/decompose_meshes.py params, or {"analytic": True} for prop_gen part lists
     countertop_poses_w: tuple = ()  # ((x, y, z), yaw_deg) staging poses
     cache_name: str | None = None  # manifest/hash name; defaults to `name`
     usd_basename: str | None = None  # defaults to f"{name}_physics.usd"

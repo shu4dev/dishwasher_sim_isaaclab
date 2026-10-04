@@ -1,6 +1,6 @@
 """Convention tests of the UR5e + 2F-85 on the LIVE asset (plan plans/2026-09-29-easy-s0.md, Phase 0.5; D7, D12).
 
-The measurements come from code/frigidaire/scripts/setup/frigidaire_robot_conventions.py (Kit, Isaac Sim 4.5), trimmed
+The measurements come from code/execution/frigidaire/frigidaire_robot_conventions.py (Kit, Isaac Sim 4.5), trimmed
 into code/frigidaire/tests/fixtures/robot/conventions.json (inputs only, see its README). These tests assert that the
 Kit-free code's conventions (robot/grasp.py, robot/ur5e.py) match what the live asset does, and that every
 computed axis is finite and non-degenerate before use.

@@ -1,0 +1,12 @@
+# initialization/bosch
+
+Collision caches, problem instances and asset evidence for the Bosch 800 twin. Defaults are defined in the
+script itself unless another file is named. Kit = run through `code/util/run_kit.sh ... --headless`.
+
+| Script | What it does | Key parameters (default) | Reads | Writes |
+|---|---|---|---|---|
+| `extract_geometry.py` | Kit. Builds the locked statics scene, settles it and dumps per-body meshes plus the active object's mesh into the collision cache (`use_fabric=False`). | `--machine` (none = the v1 baseline), `--placement` (none = the machine's), `--scenario` (`both_out`), `--object` (`mug`), `--settle_steps` (200); the hashed knobs in `code/src/dishsim/config.py` | machine USDs, `code/src/dishsim/config.py` | `data/assets/cache/` (meshes, `scene_state.json`) |
+| `decompose_meshes.py` | Kit-free. Convex FCL pieces for every cached body: the racks get rack_gen's exact parts, the rest CoACD; then rack probes (open zones free, a box on a tine must collide). | `--machine`, `--placement`, `--scenario` (`both_out`), `--object` (`mug`), `--force`; CoACD parameters `config.COACD` | `data/assets/cache/scene_state.json` | `data/assets/cache/coacd/<name>_<hash>/piece_*.obj` |
+| `gen_instances.py` | Kit. Seeded instances: targets from the capacity plan, a seeded subset displaced, teleported and settled in Isaac, then the reproduction gate; the settled poses are the stored initials. | `--mode` (`perturbed`, or `random`), `--state` (`placement`), `--n` (10), `--seed` (0), `--displace` (all for random, ceil(n_items/2) for perturbed), `--cell` (a key of `CELLS` in `code/src/dishsim/tiers.py`; overrides `--mode` and `--displace`) | collision caches, the capacity plan (in-process) | `data/results/instances/<machine>/<state>/` (`--out`, default `data/results/instances`) |
+| `instance_views.py` | Kit. Initial-vs-goal stills of one instance (the problem), objects tinted per class. | `--instance` (required), `--settle_steps` (90) | the instance JSON | `data/media/instances/<machine>/<state>/<cell>/` (`--out`) |
+| `bosch800_asset_evidence.py` | Kit. Drives the standalone Bosch 800 USD through open, extend, load, retract and close with a plate and a cup; dish sites read from the asset. | `--usd` (`data/assets/models/bosch800/bosch800.usdc`), `--probe` (stage dump only), `--no_video` | the USD, `data/assets/props` | `data/media/bosch800_asset/` (`--out_dir`): stills, `articulation.mp4`, `evidence.json` |

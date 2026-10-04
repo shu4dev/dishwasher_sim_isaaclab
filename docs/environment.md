@@ -25,7 +25,7 @@ and never touch other users' containers, images, or directories.
 
 ## Software stack (all inside the repo-owned container)
 
-The runtime is the image built by `code/docker/Dockerfile` and run by `code/docker/compose.yaml`
+The runtime is the image built by `code/util/docker/Dockerfile` and run by `code/util/docker/compose.yaml`
 (container `dishsim-isaac`). The driver-535 host caps Isaac Sim at **4.5.0** (the newest
 release NVIDIA documents for this driver series; 5.x/6.0 want ≥ 570/580).
 
@@ -70,7 +70,7 @@ stack and every collision cache are version-independent and carried over unchang
   (same kwarg names, optional `env_ids`/`joint_ids`).
 - **`data.default_root_state`** (13-D) replaces 3.0's split `default_root_pose` /
   `default_root_vel` — slice `[:, :7]` / `[:, 7:]`.
-- **`pxr` is importable Kit-free** (2026-09-20): `code/scripts/run_py.sh` exports Kit's USD extension
+- **`pxr` is importable Kit-free** (2026-09-20): `code/util/run_py.sh` exports Kit's USD extension
   (`/isaac-sim/extscache/omni.usd.libs-*`, its `bin/` on `LD_LIBRARY_PATH`) before starting the
   interpreter, because the Frigidaire FCL checker reads colliders from USD (`loading.collision_parts`).
   `/isaac-sim/python.sh` alone has no `pxr`; the loader reads `LD_LIBRARY_PATH` once, so a runtime
@@ -100,20 +100,20 @@ stack and every collision cache are version-independent and carried over unchang
    `code/src/dishsim/usd_prep.py`).
 3. **`./isaaclab.sh -p` exits 0 even when the wrapped script crashes** — verify success from
    log content (`[RESULT] PASS`, absence of tracebacks / `free(): invalid pointer`), never
-   from the exit code. `code/scripts/run_kit.sh` inherits this property.
+   from the exit code. `code/util/run_kit.sh` inherits this property.
 4. **The standalone `SimulationContext(sim_utils.SimulationCfg(...))` pattern** (see
-   `code/scripts/setup/gen_instances.py`) is the reliable construction for this project's scenes.
+   `code/initialization/bosch/gen_instances.py`) is the reliable construction for this project's scenes.
 
 ## Launchers (docker era)
 
-- `code/scripts/run_kit.sh <script> ...` — on the host, forwards itself into `dishsim-isaac` via
+- `code/util/run_kit.sh <script> ...` — on the host, forwards itself into `dishsim-isaac` via
   `docker exec` at the mapped cwd; inside, execs `/workspace/isaaclab/isaaclab.sh -p`.
-- `code/scripts/run_py.sh ...` — same forwarding, but execs Kit's python directly (pytest,
+- `code/util/run_py.sh ...` — same forwarding, but execs Kit's python directly (pytest,
   planners, tools; no Kit boot). `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is baked in: hydra's
   auto-registered pytest plugin breaks collection outside Kit.
-- `code/scripts/tools/bootstrap.sh` — image build (if absent) + `compose up -d` + archive restore
+- `code/util/tools/bootstrap.sh` — image build (if absent) + `compose up -d` + archive restore
   + the kit_smoke install gate.
-- The base image's entrypoint launches the streaming sim — `code/docker/compose.yaml` overrides
+- The base image's entrypoint launches the streaming sim — `code/util/docker/compose.yaml` overrides
   it (isaaclab-core + pytest self-heal, editable-install of the repo, then `sleep infinity`
   for `docker exec`).
 
@@ -181,7 +181,7 @@ docker top dishsim-isaac
 
 # 2. stop (keeps the container + its entrypoint installs for a fast restart;
 #    restart: unless-stopped means it STAYS stopped across daemon restarts/reboots)
-docker compose -f code/docker/compose.yaml stop
+docker compose -f code/util/docker/compose.yaml stop
 
 # 3. verify the release
 docker ps --filter name=dishsim-isaac        # empty
@@ -193,14 +193,14 @@ nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv  # no 
 container, and the next bring-up must recreate it (entrypoint pip reinstalls + the
 readiness wait `bootstrap.sh` performs).
 
-**Restart**: same GPU → `docker compose -f code/docker/compose.yaml start` (seconds). Different
+**Restart**: same GPU → `docker compose -f code/util/docker/compose.yaml start` (seconds). Different
 GPU (check `nvidia-smi` first, pick the least-loaded) → `DISHSIM_GPU=<n> docker compose -f
-code/docker/compose.yaml up -d` — the changed config recreates the container, so wait for the
-entrypoint installs (or just run `code/scripts/tools/bootstrap.sh`, which waits for readiness).
+code/util/docker/compose.yaml up -d` — the changed config recreates the container, so wait for the
+entrypoint installs (or just run `code/util/tools/bootstrap.sh`, which waits for readiness).
 
 Shared-box safety rules:
 
-1. Act by NAME only — `docker compose -f code/docker/compose.yaml stop` / `docker stop
+1. Act by NAME only — `docker compose -f code/util/docker/compose.yaml stop` / `docker stop
    dishsim-isaac`. Never `docker stop $(docker ps -q)`, never `docker system prune`
    (it can delete labmates' stopped containers and images), never `nvidia-smi --gpu-reset`.
 2. `nvidia-smi` lists HOST PIDs with no container attribution; root-owned GPU PIDs are

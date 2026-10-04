@@ -10,10 +10,10 @@ The pieces serve two consumers with zero decomposition slop:
 
 - The authoring pipeline (``build_object_assets.py``, in git history) authored them as per-part
   USD mesh prims, each with a convex-hull collider (PhysX side);
-- ``code/scripts/setup/decompose_meshes.py`` writes them verbatim as the FCL pieces (no CoACD — CoACD
+- ``code/initialization/bosch/decompose_meshes.py`` writes them verbatim as the FCL pieces (no CoACD — CoACD
   would seal thin open shells like the glass walls).
 
-Deterministic by construction (fixed segment counts, no RNG): code/scripts/setup/decompose_meshes.py must regenerate
+Deterministic by construction (fixed segment counts, no RNG): code/initialization/bosch/decompose_meshes.py must regenerate
 byte-identical geometry from the registry dims alone. Dims come from
 :data:`dishsim.config.OBJECTS` — edit there, not here.
 """
