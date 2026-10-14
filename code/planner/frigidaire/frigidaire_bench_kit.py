@@ -431,91 +431,133 @@ def start(args, B, report):
 
 # --------------------------------------------------------------------------- --sequence
 
-def build_sequence(backend, B, P, by_id, targets, centroids, landing, initial=()):
-    """Build a load in Isaac one dish at a time, lowest centre first (a valid order for "rests on"), each commanded
-    at its target pose + the goal hover and settled like a move (150 + 60 ticks): every dish must pass ``landing``
-    (the goal: within the at-goal tolerance of its jointly settled pose; an own load: within the episode's settle
-    deviation of its commanded pose), with < 2 mm contact depth, and no dish already placed may move
-    > 10 mm / 20 deg. Dense HOTEC loads lean on each other (shingled plates, tilted upper bowls), so "any order" is
-    impossible (a solo-clearance rule banned the standard upper bowl pair and adjacent plates); this certifies ONE
-    order. The built poses become the targets, and their support edges become the goal-order constraints the
-    planners see. ``targets`` = {id: world pose dict}; ``initial`` = (a before b) constraints the learned set starts
-    from (an acyclic set, e.g. a dependency graph's edges; empty for the benchmark), so record["learned"] includes
-    them; returns (status, record, bans)."""
+def build_sequence(backend, B, P, by_id, targets, centroids, landing, initial=(), together=()):
+    """Build a load in Isaac one dish at a time, lowest centre first (a valid order for "rests on"), each released at
+    its LOWEST CLEAR HOVER above the target (B.clear_release, 2026-10-14: the 1 mm checker allowance against the placed
+    dishes and the appliance, 1 mm steps, 60 mm cap; past it "no clear release" = not landed) and settled like a move
+    (150 + 60 ticks): every dish must pass ``landing`` (the goal: within the at-goal tolerance of its jointly settled
+    pose; an own load: within the episode's settle deviation of its release pose), with < 2 mm contact depth, and no
+    placed dish may be disturbed: one that was at its goal (within the at-goal tolerance of its target) before the move
+    is disturbed only when it ends outside that tolerance; any other keeps the old rule (moved > 10 mm / 20 deg).
+    Dense HOTEC loads lean on each other (shingled plates, tilted upper bowls), so "any order" is impossible (a
+    solo-clearance rule banned the standard upper bowl pair and adjacent plates); this certifies ONE order. The built
+    poses become the targets, and their support edges become the goal-order constraints the planners see.
+    ``targets`` = {id: world pose dict}; ``initial`` = (a before b) constraints the learned set starts from (an acyclic
+    set, e.g. a dependency graph's edges; empty for the benchmark), so record["learned"] includes them; ``together`` =
+    dish groups released as ONE step at their targets + one shared clear hover (the dependency test's diagnostic build
+    of a mutual-support pair, disjoint groups; never a benchmark move); returns (status, record, bans)."""
     import numpy as np
     from dishsim import rearrange as R
     from dishsim_frigidaire.random_poses import LIMITS
-    height = {i: float(targets[i]["position_m"][2]) for i in by_id}
+    checker = B.release_checker()
+    rep = {}
+    for group in together:                                  # disjoint groups (pairs) placed as one step
+        for i in sorted(group):
+            rep[i] = min(group)
+
+    def node(i):
+        return rep.get(i, i)
+    members = {}
+    for i in by_id:
+        members.setdefault(node(i), []).append(i)
+    height = {r: min(float(targets[i]["position_m"][2]) for i in m) for r, m in members.items()}
     centre = {i: np.asarray(targets[i]["position_m"], dtype=float) for i in by_id}
     near = {i: [j for j in by_id if j != i and by_id[j]["rack"] == by_id[i]["rack"]
                 and float(np.linalg.norm(centre[j] - centre[i])) < SEQUENCE_NEIGHBOUR_M] for i in by_id}
+    goals = {i: P.pose_T(targets[i]) for i in by_id}
+    kinds = {i: by_id[i]["kind"] for i in by_id}
 
     def topo(constraints):
-        """Kahn's order: every learned (a before b) holds, ties lowest centre first; None on a cycle."""
+        """Kahn's order of the release units: every learned (a before b) holds, ties lowest centre first; None on a
+        cycle."""
         import heapq
-        indeg = {i: 0 for i in by_id}
-        for a, b in constraints:
+        cons = {(node(a), node(b)) for a, b in constraints if node(a) != node(b)}
+        indeg = {r: 0 for r in members}
+        for a, b in cons:
             indeg[b] += 1
-        heap = [(height[i], i) for i, d in indeg.items() if d == 0]
+        heap = [(height[r], r) for r, d in indeg.items() if d == 0]
         heapq.heapify(heap)
         out = []
         while heap:
-            _, i = heapq.heappop(heap)
-            out.append(i)
-            for a, b in constraints:
-                if a == i:
+            _, r = heapq.heappop(heap)
+            out.append(r)
+            for a, b in cons:
+                if a == r:
                     indeg[b] -= 1
                     if indeg[b] == 0:
                         heapq.heappush(heap, (height[b], b))
-        return out if len(out) == len(by_id) else None
+        return out if len(out) == len(members) else None
 
     def build(order):
         for j, i in enumerate(by_id):                      # clear the racks: every dish parked apart
             backend.set_rigid_pose(backend.objects[i], {"position_m": [3. + .4 * j, 2., .3], "quaternion_xyzw": [0., 0., 0., 1.]})
         for _ in range(60):
             backend.tick()
+        frames = backend.poses()
+        appliance = B.appliance_bodies(checker, frames)
         placed, steps = [], []
-        for oid in order:
-            e = by_id[oid]
-            T_goal = P.pose_T(targets[oid])
-            T_cmd = T_goal.copy()
-            T_cmd[2, 3] += B.GOAL_HOVER_M
-            pre = {i: P.pose_T(backend.poses()[i]) for i in placed}
-            backend.set_rigid_pose(backend.objects[oid], P.pose_dict(T_cmd))
+        for r in order:
+            unit = members[r]
+            now = backend.poses()
+            pre = {i: P.pose_T(now[i]) for i in placed}
+            at_goal = {i for i in placed if not B.off_goal(kinds[i], centroids[kinds[i]], pre[i], goals[i])}
+            close = B.near_poses({i: now[i] for i in placed}, kinds, targets[r]["position_m"])
+            dishes = [checker._body(kinds[i], pose, i) for i, pose in close.items()]
+            up = P.pose_T(frames[by_id[r]["rack"]])[:3, 2]
+            release, hover, blockers = B.clear_release(checker, [(kinds[i], targets[i], i) for i in unit], dishes,
+                                                       appliance, up)
+            pair = unit if len(unit) > 1 else None
+            if release is None:                            # no clear release: not landed, nothing dropped
+                steps += [{"id": i, "hover_mm": None, "no_clear_release": True, "blockers": blockers,
+                           "together": pair, "disturbed": []} for i in unit]
+                return "landing", r, None, steps
+            for i, pose in zip(unit, release):
+                backend.set_rigid_pose(backend.objects[i], pose)
             for _ in range(SETTLE_TICKS + WINDOW_TICKS):
                 backend.tick()
             now = backend.poses()
-            dist = B.goal_distance(centroids[e["kind"]], P.pose_T(now[oid]), T_goal)
-            dev = float(np.linalg.norm(np.asarray(now[oid]["position_m"]) - T_cmd[:3, 3]))
-            deep = max((d for name, d in backend.latest_contact["depths_m"].items() if oid in name.split("|")), default=0.)
-            moved = R.disturbed_items({**pre, oid: T_goal}, {i: P.pose_T(now[i]) for i in [*placed, oid]}, oid)
-            steps.append({"id": oid, "lateral_mm": round(dist[0] * 1e3, 1), "dz_mm": round(dist[1] * 1e3, 1),
-                          "tilt_deg": round(dist[2], 1), "settle_dev_mm": round(dev * 1e3, 1),
-                          "contact_mm": round(deep * 1e3, 2), "disturbed": moved})
+            post = {i: P.pose_T(now[i]) for i in placed}
+            old = R.disturbed_items(pre, post, None)       # dishes not at their goal keep the old rule
+            moved = sorted({i for i in placed if i in at_goal and B.off_goal(kinds[i], centroids[kinds[i]], post[i], goals[i])}
+                           | {i for i in old if i not in at_goal})
+            landed = True
+            for i, pose in zip(unit, release):
+                dist = B.goal_distance(centroids[kinds[i]], P.pose_T(now[i]), goals[i])
+                dev = float(np.linalg.norm(np.asarray(now[i]["position_m"]) - np.asarray(pose["position_m"])))
+                deep = max((d for name, d in backend.latest_contact["depths_m"].items() if i in name.split("|")), default=0.)
+                steps.append({"id": i, "lateral_mm": round(dist[0] * 1e3, 1), "dz_mm": round(dist[1] * 1e3, 1),
+                              "tilt_deg": round(dist[2], 1), "settle_dev_mm": round(dev * 1e3, 1),
+                              "contact_mm": round(deep * 1e3, 2), "hover_mm": round(hover * 1e3), "together": pair,
+                              "disturbed": moved})
+                landed = landed and bool(landing(kinds[i], dist, dev)) and deep < LIMITS["peak_penetration_m"]
             if moved:
-                return "moved", oid, moved, steps
-            if not landing(e["kind"], dist, dev) or deep >= LIMITS["peak_penetration_m"]:
-                return "landing", oid, None, steps
-            placed.append(oid)
+                return "moved", r, moved, steps
+            if not landed:
+                return "landing", r, None, steps
+            placed += unit
         return "ok", None, None, steps
 
     learned, builds, status, bans = set(map(tuple, initial)), [], None, []
     order = topo(learned)
     for _ in range(SEQUENCE_BUILDS):
+        if order is None:
+            break
         status, x, moved, steps = build(order)
-        builds.append({"order": order, "status": status, "dish": x, "moved": moved, "steps": steps})
+        builds.append({"order": [i for r in order for i in members[r]], "status": status, "dish": x, "moved": moved,
+                       "steps": steps})
         if status == "ok":
             break
         if status == "moved":                               # x must go in before what it knocked
             learned |= {(x, y) for y in moved}
         else:                                               # x did not land: it leans on its neighbours, so
-            later = [y for y in near[x] if (x, y) not in learned and (y, x) not in learned]   # they go in first
+            later = sorted({y for i in members[x] for y in near[i] if node(y) != x   # they go in first
+                            and (x, y) not in learned and (y, x) not in learned})
             if not later:
                 break
             learned |= {(y, x) for y in later}
         order = topo(learned)
-        if order is None:
-            break
+    if not builds:
+        raise ValueError("build_sequence: the initial constraints hold a cycle")
     record = {"status": status, "builds": builds, "learned": sorted(learned)}
     if status == "ok":
         pairs = set()
@@ -523,9 +565,10 @@ def build_sequence(backend, B, P, by_id, targets, centroids, landing, initial=()
             backend.tick()
             pairs.update(tuple(p) for p in backend.latest_contact["pairs"])
         final = backend.poses()
-        pos = {i: n for n, i in enumerate(order)}
-        contact = [tuple(e) for e in P.support_edges(sorted(pairs), final, order) if pos[e[0]] < pos[e[1]]]
-        record.update(order=order, poses_world={oid: final[oid] for oid in order},
+        flat = builds[-1]["order"]
+        pos = {i: n for n, i in enumerate(flat)}
+        contact = [tuple(e) for e in P.support_edges(sorted(pairs), final, flat) if pos[e[0]] < pos[e[1]]]
+        record.update(order=flat, poses_world={oid: final[oid] for oid in flat},
                       goal_order=sorted(set(contact) | learned),
                       reason=f"built in {len(builds)} build(s), {len(set(contact) | learned)} order constraints "
                              f"({len(learned)} learned), max lateral {max(s['lateral_mm'] for s in steps)} mm")
@@ -658,10 +701,13 @@ class Timed:
 
 class BenchOracle:
     """Teleport, settle, judge on the IsaacInitialStateBackend scene: rearrange.settle_move's verdicts, thresholds
-    and put-back, except that a displaced neighbour is FATAL only when it was at its goal before the move or ends
-    outside the counter and the racks; any other displaced dish (a messy start dish) is a recorded, non-fatal
-    "nudge". Messy rack drops lean on each other, so the Bosch rule (any neighbour > 10 mm / 20 deg is fatal)
-    aborted nearly every episode within 1-6 moves on interactions no algorithm can see (pilot, 2026-09-23)."""
+    and put-back, except that a displaced neighbour is FATAL only when it ends outside the counter and the racks, or
+    when it was at its goal before the move and ends outside its at-goal tolerance of that goal (2026-10-14; before,
+    any move > 10 mm / 20 deg of an at-goal dish); any other displaced dish (a messy start dish) is a recorded,
+    non-fatal "nudge". Messy rack drops lean on each other, so the Bosch rule (any neighbour > 10 mm / 20 deg is fatal)
+    aborted nearly every episode within 1-6 moves on interactions no algorithm can see (pilot, 2026-09-23). A move to
+    the dish's goal is released at the lowest clear hover above the goal (B.clear_release, 2026-10-14) instead of the
+    commanded goal + GOAL_HOVER_M; with no clear release it is a non-fatal failed settle (nothing moves)."""
 
     def __init__(self, backend, ids, kinds, world, centroids, goal=None, points=None):
         self.backend, self.ids, self.kinds, self.world, self.centroids, self.goal = backend, ids, kinds, world, centroids, goal
@@ -695,20 +741,63 @@ class BenchOracle:
         kind = self.kinds[item["item_id"]]
         return B.within_goal(kind, B.goal_distance(self.centroids[kind], T, self.goal[item["item_id"]]))
 
-    def _fatal(self, moved, protected, poses):
+    def _goal0(self, k):
+        """Dish k's settled goal (the world's goal command minus GOAL_HOVER_M)."""
+        import numpy as np
+        import frigidaire_bench as B
+        T = np.asarray(self.world.goal_of[k], dtype=float).copy()
+        T[2, 3] -= B.GOAL_HOVER_M
+        return T
+
+    def _off(self, k, T):
+        import frigidaire_bench as B
+        return B.off_goal(self.kinds[k], self.centroids[self.kinds[k]], T, self._goal0(k))
+
+    def _fatal(self, moved, protected, poses, ingoal=()):
+        """Protected dishes inside their at-goal tolerance before the move (``ingoal``) that end outside it; other
+        protected dishes moved > 10 mm / 20 deg (the old rule); any moved dish outside the counter and the racks."""
         import frigidaire_bench as B
         from dishsim_frigidaire import planner as P
         snap = self.backend.poses()
         frames = {r: snap[r] for r in ("LowerRack", "UpperRack")}
-        return [k for k in moved if k in protected or (B.racked_in(self.points[self.kinds[k]], P.pose_dict(poses[k]), frames) is None
-                                                        and not self.world.in_counter(poses[k]))]
+        off = [k for k in sorted(ingoal) if self._off(k, poses[k])]
+        return off + [k for k in moved if k not in off and k not in ingoal and (
+            k in protected or (B.racked_in(self.points[self.kinds[k]], P.pose_dict(poses[k]), frames) is None
+                               and not self.world.in_counter(poses[k])))]
+
+    def _release(self, move):
+        """(release 4x4, hover mm, blockers): a goal move's lowest clear hover above the settled goal; other moves
+        keep their command (hover None)."""
+        import frigidaire_bench as B
+        from dishsim_frigidaire import planner as P
+        k = move.item_id
+        goal = self.world.goal_of.get(k)
+        if goal is None or P._key(move.T_base_obj) != P._key(goal):
+            return move.T_base_obj, None, []
+        T_goal, kind, now = self._goal0(k), self.kinds[k], self.backend.poses()
+        checker = B.release_checker()
+        close = B.near_poses({i: now[i] for i in self.ids if i != k}, self.kinds, T_goal[:3, 3])
+        dishes = [checker._body(self.kinds[i], pose, i) for i, pose in close.items()]
+        frames = {r: now[r] for r in ("LowerRack", "UpperRack")}
+        rack = B.racked_in(self.points[kind], P.pose_dict(T_goal), frames)
+        up = P.pose_T(now[rack])[:3, 2] if rack else (0., 0., 1.)
+        release, hover, blockers = B.clear_release(checker, [(kind, P.pose_dict(T_goal), k)], dishes,
+                                                   B.appliance_bodies(checker, now), up)
+        if release is None:
+            return None, None, blockers
+        return P.pose_T(release[0]), round(hover * 1e3), []
 
     def settle(self, move):
         import numpy as np
         from dishsim import rearrange as R
         protected = {k for k in self.ids if k != move.item_id and self.world.at_own_goal(k)}
         pre = self._poses()
-        self.teleport(move.item_id, move.T_base_obj)
+        ingoal = {k for k in protected if not self._off(k, pre[k])}    # judged against the goal (2026-10-14)
+        T_release, hover, blockers = self._release(move)
+        if T_release is None:                                       # no clear release: nothing moves, not landed
+            return pre, "failed-settle", {"no_clear_release": True, "blockers": blockers, "hover_mm": None,
+                                          "disturbed": [], "nudged": []}
+        self.teleport(move.item_id, T_release)
         hist = []
         for s in range(SETTLE_TICKS):
             self.step(1)
@@ -717,16 +806,16 @@ class BenchOracle:
         poses = self._poses()
         drift_p = float(np.linalg.norm(hist[-1][:3, 3] - hist[0][:3, 3]))
         drift_deg = R.rot_angle_deg(hist[0], hist[-1])
-        dev_p = float(np.linalg.norm(poses[move.item_id][:3, 3] - np.asarray(move.T_base_obj)[:3, 3]))
+        dev_p = float(np.linalg.norm(poses[move.item_id][:3, 3] - np.asarray(T_release)[:3, 3]))
         moved = R.disturbed_items(pre, poses, move.item_id)
-        fatal = self._fatal(moved, protected, poses)
+        fatal = self._fatal(moved, protected, poses, ingoal)
         # the gates' contact-depth limit, per move: a placement that leaves the moved dish wedged > 2 mm into
         # anything is put back (every finished load failed the end check with 7-9 mm resting depth otherwise)
         from dishsim_frigidaire.random_poses import LIMITS
         deep = max((d for name, d in self.backend.latest_contact["depths_m"].items() if move.item_id in name.split("|")),
                    default=0.)
         info = {"settle_dev_mm": round(dev_p * 1e3, 1), "drift_mm": round(drift_p * 1e3, 1), "contact_mm": round(deep * 1e3, 2),
-                "disturbed": fatal, "nudged": [k for k in moved if k not in fatal]}
+                "disturbed": fatal, "nudged": [k for k in moved if k not in fatal], "hover_mm": hover}
         if fatal:
             return poses, "disturbed", info
         if (drift_p > R.STABLE_POS_M or drift_deg > R.STABLE_ROT_DEG or dev_p > DEV_MAX_M
@@ -739,7 +828,7 @@ class BenchOracle:
             back_dr = R.rot_angle_deg(pre[move.item_id], poses[move.item_id])
             info["teleport_back_mm"] = round(back_dp * 1e3, 1)
             again = R.disturbed_items(pre, poses, move.item_id)
-            refatal = self._fatal(again, protected, poses)
+            refatal = self._fatal(again, protected, poses, ingoal)
             info["nudged"] += [k for k in again if k not in refatal and k not in info["nudged"]]
             if refatal:
                 info["disturbed"] = refatal

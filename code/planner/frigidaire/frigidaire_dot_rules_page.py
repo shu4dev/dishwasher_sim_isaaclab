@@ -83,21 +83,37 @@ def esc(s):
 
 # ------------------------------------------------------------------ data
 def grid_payload(grid):
+    """The explorer's grid (2026-10-14: New+J only): the axes, each entity's NJ (negative = a skipped dish pose), the
+    dishes' zJ and object-level NJ, the dot's J line count."""
     keep = ("tilts", "heights", "distances", "thetas", "scale", "dots", "n_points")
     out = {k: grid[k] for k in keep}
-    for ent in ("plate", "bowl") + (("cup",) if "cup" in grid else ()):
-        out[ent] = {k: grid[ent][k] for k in RULES + ("zG", "zJ")}
-        if f"{ent}_obj" in grid:                   # object level: the explorer toggle shows Original, New, New+J only
-            out[f"{ent}_obj"] = {k: grid[f"{ent}_obj"][k] for k in RULES3}
+    for ent in ("plate", "bowl", "cup"):
+        if ent in grid:
+            out[ent] = {k: grid[ent][k] for k in ("NJ", "zJ")}
+            if f"{ent}_obj" in grid:
+                out[f"{ent}_obj"] = {"NJ": grid[f"{ent}_obj"]["NJ"]}
     dot = grid.get("dot")
     if not dot:
         raise SystemExit("grid.json has no 'dot' entity")
-    dkeys = RULES + ("zG", "zJ", "nG", "nJ", "mDown", "mGap")
-    out["dot"] = {k: dot[k] for k in dkeys if k in dot}
-    for alias in ("dot_neg", "dot_mirror", "dotneg", "dot_mirrored"):
-        if grid.get(alias):
-            out["dot_neg"] = {k: grid[alias][k] for k in dkeys if k in grid[alias]}
-            break
+    out["dot"] = {k: dot[k] for k in ("NJ", "nJ") if k in dot}
+    return out
+
+
+def rel_stats(grid, key="NJ", floor=.05):
+    """New+J relative to 0 deg over the grid (dot level): per entity the cells whose 0 deg value (same height,
+    distance, theta) is at least ``floor``, the share above 1 and the largest relative value."""
+    nT, sc = len(grid["tilts"]), float(grid["scale"])
+    out = {}
+    for ent in ("dot", "plate", "bowl", "cup", "plate_obj", "bowl_obj", "cup_obj"):
+        if ent not in grid:
+            continue
+        a = np.asarray(grid[ent][key], dtype=float).reshape(nT, -1) / sc
+        ref = a[0]
+        ok = (ref >= floor) & (a >= 0)
+        rel = np.where(ok, a / np.where(ref > 0, ref, 1.), np.nan)
+        v = rel[~np.isnan(rel)]
+        out[ent] = {"cells": int(v.size), "above": float((v > 1 + 1e-9).mean()), "max": float(v.max()),
+                    "small_refs": int(((ref >= 0) & (ref < floor)).sum()), "refs": int((ref >= 0).sum())}
     return out
 
 
@@ -163,16 +179,17 @@ def header(d):
     if d["has_obj"]:
         obj = ("A dish has two scores: the dot level, the mean of its 500 dot scores, and the object level, the sum of "
                "its 500 numerators over the sum of its 500 denominators, a ratio of sums in which each dot counts in "
-               "proportion to its denominator. The explorer switches between the two levels and adds the cup.")
+               "proportion to its denominator. The explorer switches between the two levels.")
     else:
         obj = ("A dish will also get an object-level score, the sum of its 500 numerators over the sum of its 500 "
                "denominators (a ratio of sums); that grid, with the cup, is being computed, and the explorer toggle "
                "comes with it.")
     n, ok = len(d["deps"]), sum(x["dep"].get("status") != "gate" for x in d["deps"])   # loads past the joint gate
-    deps = (f" For {dep_scope(d)}, Isaac first settles all 24 dishes together (the joint gate), then "
-            "drops close pairs of dishes in both orders into that settled load to find which dish must go in before "
-            "which, and builds the load one dish at a time in that order: one dependency graph per load, with the "
-            "settled and built poses rescored." if d["deps"] and ok == n else
+    deps = (f" For {dep_scope(d)} that pass the joint gate (Isaac settles all 24 dishes together), Isaac drops "
+            "close pairs of dishes in both orders into that settled load, each released at its lowest clear hover, "
+            "to find which dish must go in before which, separates mutual support (two dishes that only stand "
+            "together) from cycles, and builds the load one dish at a time in that order: one dependency graph per "
+            "load, with the settled and built poses rescored." if d["deps"] and ok == n else
             f" For {dep_scope(d)}, Isaac first settles all 24 dishes together (the joint gate); for the {ok} that pass "
             "it, Isaac then drops close pairs of dishes in both orders into that settled load to find which dish must go "
             "in before which, and builds the load one dish at a time in that order: one dependency graph per tested "
@@ -180,7 +197,8 @@ def header(d):
     lead = ("A dot's score says how exposed it is to the lower spray arm. The original rule (revision 5) can rank a dot "
             "that sees one spray point above a dot that sees all of them. New divides by the best-facing dot at the "
             "same spot instead of by the dot's own weight, and New+J does the same over near-vertical jets only. The "
-            "page compares these three rules; the explorer and the appendix keep all seven. Every result uses "
+            "page compares these three rules; the appendix keeps all seven, and the explorer shows New+J alone, one "
+            "curve per dot or dish, as a score or relative to the same dish facing the arm. Every result uses "
             f"N = {d['Nf']} lines per set. {obj} Then completely random 24-dish loads, each settled and gated in "
             "Isaac and ranked under the three rules, and the five best and five worst loads under New+J from two "
             f"samplers, shown in the Isaac scene.{deps} The appendix proves that New+G and New+J become the same "
@@ -240,36 +258,60 @@ empty    a dot with no line, or W = 0, scores 0</div>
 
 
 def explorer(tpl, d):
+    """The explorer (2026-10-14): New+J only, one curve per entity (dot, plate, bowl, cup), Show = score | relative to
+    0 deg, Level = dot | object; the other six rules stay in the grid file and the appendix."""
     i, j = between(tpl, '<section id="explorer">', "</section>")
-    sec = tpl[i:j]
-    who = "the plate, the bowl and the cup" if d["has_cup"] else "the plate and the bowl"
-    sec = sub1(sec, "The dot is unblocked and computed live. The plate and the bowl are read from the grid:",
-               f"The unblocked dot, {who} are all read from one grid computed with N = {d['Nf']} lines per set:")
-    sec = sub1(sec, "The five dot-score rules", "The seven dot-score rules")
-    extra = (" Four rules appear only here: D divides the same numerator by N instead of by a weight; D+G and D+J "
-             "are D over the G or the J lines (G: the fixed spray points within θ of vertical below the dot); New+G "
-             "is New over the G lines.")
-    if d["has_cup"]:
-        sec = sub1(sec, "at 180° the plate lies face up and the bowl mouth up.",
-                   "at 180° the plate lies face up, the bowl and the cup mouth up.")
-        sec = sub1(sec, '<button type="button" data-entity="bowl" aria-pressed="false">bowl</button>',
-                   '<button type="button" data-entity="bowl" aria-pressed="false">bowl</button>'
-                   '<button type="button" data-entity="cup" aria-pressed="false">cup</button>')
-    if d["has_obj"]:
-        extra += (" Level switches a dish between the dot level, the mean of its 500 dot scores, and the object level, "
-                  "the sum of its 500 numerators over the sum of its 500 denominators. The object level shows "
-                  "Original, New and New+J only (the D family divides every dot by the same N, so it is the same at "
-                  "both levels), and a single dot has none.")
-        sec = sub1(sec, '        </div>\n      </div>\n      <div class="sliders">',
-                   '        </div>\n        <span class="ctl-label">Level</span>\n'
-                   '        <div class="seg" id="seg-level" role="group" aria-label="Dot level or object level">\n'
-                   '          <button type="button" data-level="dot" aria-pressed="true">dot</button>'
-                   '<button type="button" data-level="object" aria-pressed="false">object</button>\n'
-                   '        </div>\n      </div>\n      <div class="sliders">')
-    sec = sub1(sec, "θ moves only the four cone rules.</p>", "θ moves only the four cone rules." + esc(extra) + "</p>")
-    if not d["has_neg"]:
-        sec = sub1(sec, '<input id="in-distance" type="range" min="-35"', '<input id="in-distance" type="range" min="0"')
-        sec = sub1(sec, "the dish grid covers 0 to 35 cm only", "the grid covers 0 to 35 cm only")
+    sec, g = tpl[i:j], d["grid"]
+    st = rel_stats(g)
+    dishes = [e for e in ("plate", "bowl", "cup") if e in st]
+    who = ", ".join(f"the {e}" for e in dishes[:-1]) + f" and the {dishes[-1]}"
+    objs = [e for e in dishes if f"{e}_obj" in st]
+    top_obj = max(objs, key=lambda e: st[f"{e}_obj"]["max"]) if objs else None
+    cup_o = ""
+    if "cup" in g:
+        o = [(t, F.grid_at(g, "cup", t, 14, 0, 30)["O"]) for t in g["tilts"]]
+        bt, bv = max(o, key=lambda x: x[1])
+        cup_o = (f" 0° is the grid's facing pose, not each dish's best: under Original, 14 cm over the disc centre, the "
+                 f"cup scores most at {bt}° ({bv:.3f} against {o[0][1]:.3f} at 0°).")
+    prose = (f"One rule, New+J, one curve per entity: one unblocked dot, {who}, all read from one grid computed with "
+             f"N = {d['Nf']} lines per set (tilt in 5° steps from 0° to 180°, nine heights, distance in 5 cm steps, ten "
+             "jet angles). Pick which slider runs along the x-axis; the other three set the pose. Click a legend entry "
+             "to hide or show an entity. Each dish is alone, with its own mesh as the only blocker, and its food-contact "
+             "centre sits at the chosen height and distance; past 90° the food side turns away from the arm. Show "
+             "switches between the score and the score relative to 0°: the same entity at 0° (axis straight down, "
+             "facing the arm) at the same height, distance and θ, so every curve is 1 at 0°. A point is drawn only "
+             "where that 0° score is at least 0.05; below it the curve has a gap, reference too small (30 to 35 cm out, "
+             "where even the facing dish barely sees the disc)." + cup_o + " A relative value passes 1 in "
+             + ", ".join(f"{100 * st[e]['above']:.2f} % of the {e}'s cells (at most {st[e]['max']:.2f})"
+                         for e in ["dot", *dishes] if e in st).replace(" dot's", " single dot's")
+             + " that have a reference" + (f", and at the object level the {top_obj} reaches "
+                                           f"{st[top_obj + '_obj']['max']:.2f}" if top_obj else "")
+             + "; the axis then grows. "
+             "Level switches a dish between the dot level, the mean of its 500 dot scores, and the object level, the "
+             "sum of its 500 numerators over the sum of its 500 denominators; a single dot has no object level. "
+             "Original, D, D+G, D+J, New and New+G are kept in the grid file and the appendix.")
+    a, b = between(sec, '<p class="prose">', "</p>")
+    sec = sec[:a] + '<p class="prose">' + esc(prose) + "</p>" + sec[b:]
+    sec = sub1(sec, '<button type="button" data-mode="scores" aria-pressed="true">scores</button><button type="button" '
+                    'data-mode="diff" aria-pressed="false">difference from the original</button>',
+               '<button type="button" data-mode="scores" aria-pressed="true">score</button><button type="button" '
+               'data-mode="rel" aria-pressed="false">relative to 0°</button>')
+    a, b = between(sec, '        <span class="ctl-label">For</span>', "        </div>\n")
+    level = ('        <span class="ctl-label">Level</span>\n'
+             '        <div class="seg" id="seg-level" role="group" aria-label="Dot level or object level">\n'
+             '          <button type="button" data-level="dot" aria-pressed="true">dot</button><button type="button" '
+             'data-level="object" aria-pressed="false">object</button>\n        </div>\n') if d["has_obj"] else ""
+    sec = sec[:a] + level + sec[b:]
+    sec = sub1(sec, '<input id="in-distance" type="range" min="-35"', '<input id="in-distance" type="range" min="0"')
+    sec = sub1(sec, 'aria-label="Rules in the chart"', 'aria-label="Entities in the chart"')
+    sec = sub1(sec, 'aria-label="The five dot-score rules against the chosen slider.',
+               'aria-label="New+J of the dot and the dishes against the chosen slider.')
+    a, b = between(sec, "<figcaption>", "</figcaption>")
+    cap = ("New+J scores, or each relative to the same entity at 0°. Gaps: a dish pose skipped because the dish would "
+           "dip below the disc plane, or, relative, a 0° score under 0.05 (reference too small). On the θ axis, the "
+           "dark bar marks 1° to 35°: the jets of the one lower arm with published angles. On the distance axis, the "
+           "dotted line marks the disc edge.")
+    sec = sec[:a] + "<figcaption>" + esc(cap) + "</figcaption>" + sec[b:]
     return sec
 
 
@@ -288,8 +330,13 @@ def perdot(d):
                 "dot, seen along world Y. One 0-to-1 scale; hollow rings mark dots with no weight (Σ c = 0, or no line "
                 "in their set)." if n == 0 else f"The {dish}, same pose and rules.")
         low = [NAMES[r] for r in RULES3[1:] if 180 in ti and m[ti[180], RULES.index(r)] < 0.01]
+        keep = ""
+        if 0 in ti and 90 in ti:                  # the share of the 0 deg score kept on edge (2026-10-14)
+            sh = {r: m[ti[90], RULES.index(r)] / m[ti[0], RULES.index(r)] for r in ("O", "NJ")}
+            keep = (f" On edge the {dish} keeps {100 * sh['O']:.0f} % of its 0° score under Original and "
+                    f"{100 * sh['NJ']:.1f} % under New+J.")
         cap = (f"{lead} Means facing the arm (tilt 0): {at(0)}. On edge (90°): {at(90)}. Food side away (180°): "
-               f"{at(180)}" + (f"; {' and '.join(low)} below 0.01." if low else "."))
+               f"{at(180)}" + (f"; {' and '.join(low)} below 0.01." if low else ".") + keep)
         out.append(f"""  <figure>
     <div class="media"><img src="media/dots_{dish}.png" alt="The {dish}, 500 dots, coloured by score under Original, New and New+J at tilt 0, 45, 90, 135 and 180 degrees" loading="lazy"></div>
     <figcaption>{esc(cap)}</figcaption>
@@ -478,13 +525,23 @@ def loads_section(d):
     <div class="tile"><p class="t-label">5/(n+1)</p><p class="t-value">{100 * p5:.1f}%</p><p class="t-sub">the chance that one more random load would enter the top five (n = {n})</p></div>
     <div class="tile"><p class="t-label">Best load, New / New+J</p><p class="t-value">{R['N']['max']:.3f} / {R['NJ']['max']:.3f}</p><p class="t-sub">{esc(R['N']['best'])}{' wins both' if R['N']['best'] == R['NJ']['best'] else ' / ' + esc(R['NJ']['best'])}</p></div>
   </div>"""
-    head = "".join(f"<th>{NAMES[r]}</th>" for r in RULES3)
-    rows = [f"<tr><td>{lab}</td>" + "".join(f"<td>{f3(R[r][k])}</td>" for r in RULES3) + "</tr>"
+    rl = summ.get("rel")                       # relative S (2026-10-14): a scored column, not adopted
+
+    def relc(lid):
+        v = summ["by_id"][lid].get("S_rel")
+        return f"<td>{f3(v)}</td>" if rl and v is not None else ("<td>–</td>" if rl else "")
+    head = "".join(f"<th>{NAMES[r]}</th>" for r in RULES3) + ("<th>New+J relative</th>" if rl else "")
+    rows = [f"<tr><td>{lab}</td>" + "".join(f"<td>{f3(R[r][k])}</td>" for r in RULES3)
+            + (f"<td>{f3(rl[k])}</td>" if rl else "") + "</tr>"
             for lab, k in (("min", "min"), ("median", "median"), ("max", "max"))]
     for rb in RULES3:
         S = summ["by_id"][R[rb]["best"]]["S"]
         rows.append(f"<tr><td>Best by {NAMES[rb]} ({esc(R[rb]['best'])})</td>"
-                    + "".join(f"<td>{f3(S[r])}</td>" for r in RULES3) + "</tr>")
+                    + "".join(f"<td>{f3(S[r])}</td>" for r in RULES3) + relc(R[rb]["best"]) + "</tr>")
+    if rl:
+        S = summ["by_id"][rl["best"]]["S"]
+        rows.append(f"<tr><td>Best by New+J relative ({esc(rl['best'])})</td>"
+                    + "".join(f"<td>{f3(S[r])}</td>" for r in RULES3) + relc(rl["best"]) + "</tr>")
     table = f"""  <div class="scroll-x">
     <table class="cases">
       <thead><tr><th>S over {n} loads</th>{head}</tr></thead>
@@ -531,8 +588,16 @@ def loads_section(d):
                   f"<b>The spread of S</b> over {n} loads; too few loads for rank correlations.")
     if n < 10:
         spread_cap += f" With {n} loads the top five and the bottom five overlap."
+    if rl and n >= 3:
+        common = len(set(rl["top5"]) & set(R["NJ"]["top5"]))
+        spread_cap += (f" Last panel, relative S (a scored column, not adopted): every dish's New+J over its own "
+                       f"reference, the same engine run on that dish alone, axis straight down, at its own centre "
+                       f"under its own arm, N = {nl}; relative = New+J / max(reference, 0.05), area-weighted like S. "
+                       f"Spearman rank correlation of relative against absolute S under New+J over the {n} loads: "
+                       f"{sp.get('NJ-REL', float('nan')):.2f}; {common} of the five best by New+J are also among the "
+                       "five best by relative S.")
     figs.append(f"""  <figure>
-    <div class="media"><img src="media/rand_spread.png" alt="Histograms of S under New and New+J over the random loads, and scatters of Original against New and of New against New+J coloured by New+J" loading="lazy"></div>
+    <div class="media"><img src="media/rand_spread.png" alt="Histograms of S under New and New+J over the random loads, scatters of Original against New and of New against New+J coloured by New+J{', and relative S against S under New+J' if rl else ''}" loading="lazy"></div>
     <figcaption>{spread_cap}</figcaption>
   </figure>""")
     cav = (f"Caveats: {summ['pooling_loads']} of the {n} loads have at least one dish that pools water; they are kept "
@@ -593,6 +658,8 @@ def isaac_section(d):
                    + (f"{pools} dish{'es' if pools != 1 else ''} pool water." if pools else "No dish pools water."))
             graph = ""
             sm = dsum.get(p["load_id"]) if key == "restr" else None
+            if not sm and key == "restr" and p["load_id"] in (d.get("gate_rejected") or {}):
+                cap += " It has no dependency graph: the joint gate rejected it."
             if sm:                            # the load's dependency graph, the same figure as the dependency section
                 graph = (f'\n    <div class="media"><img src="media/depgraph_{esc(p["load_id"])}.png" alt="Dependency '
                          f'graph of load {esc(p["load_id"])} from the ordered-pair test in Isaac, by wave, and top views '
@@ -634,8 +701,9 @@ def isaac_section(d):
     </table>
   </div>"""
     graphs_note = ('  <p class="prose">Each still is followed by the load&#8217;s dependency graph from the ordered-pair '
-                   'test in Isaac: an arrow from A to B means A has to be placed before B, a two-way pair means that '
-                   'no one-at-a-time order builds the load, and a load the joint gate rejected has no edges. The test, '
+                   'test in Isaac: an arrow from A to B means A has to be placed before B; a two-way pair is either '
+                   'mutual support (each dish falls without the other: place together or re-roll) or a cycle (no '
+                   'one-at-a-time order builds the load); a load the joint gate rejected has no graph. The test, '
                    'the full table and the graphs of the other tested loads are in '
                    '<a href="#dependency-graphs">Dependency graphs</a>.</p>\n'
                    if any(q["load_id"] in dsum for q in sets.get("restr", []) if q["side"] == "top") else "")
@@ -796,8 +864,40 @@ def resettled_block(d, rank):
 {note}{chr(10).join(figs)}"""
 
 
+def test_edges(dep):
+    """The record's tested edges (a before b), learned constraints left out: v18 and v20 records keep them in
+    goal_order; else every edge of the record."""
+    go = dep.get("goal_order")
+    return {tuple(map(str, e[:2])) for e in go} if go else set(F.dep_edges(dep)[0])
+
+
+def two_way_classes(dep):
+    """{(a, b): 'mutual support' | 'cycle'} of a record (v18: every two-way pair is a cycle)."""
+    _, two, _ = F.dep_edges(dep)
+    mutual = {tuple(sorted(map(str, x))) for x in dep.get("mutual_support") or []}
+    return {p: "mutual support" if p in mutual else "cycle" for p in two}
+
+
+def reproduced(dep, rerun):
+    """(tested edges in both runs, in the first run) of a load and its perturbed rerun; None without a rerun."""
+    if rerun is None or rerun.get("status") == "gate":
+        return None
+    a, b = test_edges(dep), test_edges(rerun)
+    return len(a & b), len(a)
+
+
+def relative_states(path):
+    """{state: S_rel} from <id>.relative.json beside a dependency record (frigidaire_dot_rules_relative.py)."""
+    try:
+        rec = json.loads(Path(path).read_text())
+        return {k: float(v["S_rel"]) for k, v in rec["states"].items()}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
 def dependency_section(d):
-    """The ordered-pair dependency graph of each of the five best restricted loads (figure, caption, JSON link)."""
+    """The v20 ordered-pair dependency graphs of the gated restricted loads (figure, caption, JSON link), the per-load
+    table, and the comparison with Version 18 (--compare-dir, --compare-rerun-dir)."""
     deps = d["deps"]
     if not deps:
         return ""
@@ -806,150 +906,155 @@ def dependency_section(d):
     Ns = {int(x["scores"]["N"]) for x in deps if x["scores"] and x["scores"].get("N")}
     nf = n_(Ns.pop()) if len(Ns) == 1 else d["Nf"]
     sms = {x["dep"]["load_id"]: F.dep_summary(x["dep"], x["scores"]) for x in deps}
-    reruns = d.get("reruns") or {}                       # --rerun-dir: edge agreement of a second run per load
-    agree = {x["dep"]["load_id"]: rerun_agreement(x["dep"], reruns[x["dep"]["load_id"]]["dep"]) for x in deps
-             if x["dep"]["load_id"] in reruns and not sms[x["dep"]["load_id"]]["rejected"]
-             and reruns[x["dep"]["load_id"]]["dep"].get("status") != "gate"}
-    tails = "".join(f"; in {x['dep']['load_id']} the context stayed displaced instead: its drift never returned below "
-                    f"{t[1]:.1f} mm after test {t[0]}" + (f", even in the {t[2]} drops in which only cups were out of the "
-                                                         "load" if t[2] else "")
-                    for x in deps for t in [F.drift_tail(x["dep"])] if t)
+    reruns, v18, v18r = d.get("reruns") or {}, d.get("v18") or {}, d.get("v18_reruns") or {}
+    rel = {x["dep"]["load_id"]: relative_states(x["path"].with_name(x["dep"]["load_id"] + ".relative.json"))
+           for x in deps}
+    pert = perturbation(r["dep"] for r in reruns.values())
+    rep = {lid: reproduced(sms_dep, reruns[lid]["dep"] if lid in reruns else None)
+           for lid, sms_dep in ((x["dep"]["load_id"], x["dep"]) for x in deps)}
+    th = deps[0]["dep"].get("thresholds") or {}
+    rr = th.get("rerun") or {}
+    rel_cfg = th.get("release") or {}
     test = ("Each load first passes the joint gate of the top-five loads, in the extended racks of the empty baseline: "
             "all 24 dishes are placed at their packed poses at once and settled together, and the load passes when it "
             "comes to rest, both racks then retract with it, no contact gets deeper than 5 mm at any moment of the "
-            "settle or the retraction, and every dish ends inside the cabinet. A load the gate rejects gets no graph. "
-            "The graph then comes from the goal load alone, the jointly settled poses, and the benchmark's own move: a "
-            "dish is teleported 3 mm above its goal pose and Isaac settles it (150 + 60 ticks). It lands when it comes "
-            "to rest within the at-goal tolerance of its goal pose (bowls and cups 15 mm lateral, 20 mm in height and "
-            "15°; plates 18 mm, 20 mm and 16°) with less than 2 mm of contact depth, and no other dish moves more than "
-            "10 mm or 20°. The context is the rest of the load: the other dishes sit at their jointly settled poses, "
-            "re-settled before each drop, and a dish counts as moved against those re-settled poses, as in the "
-            "sequencer. Each dish is dropped last into the full load (24 drops), and each dish of a candidate pair is "
-            "dropped with the other one removed (2 drops per pair). The candidates are the pairs whose collision "
-            f"pieces come within {candidate_mm(deps):g} mm of each other at the goal poses (FCL, any rack); every "
-            f"other pair is independent by geometry. A context drift above {F.DRIFT_MM:g} mm before a drop usually "
-            "means a removed dish was holding a neighbour up: the neighbour falls, the dropped dish then pushes it and "
-            "the test records a knock, an edge in the right direction that is really a lean (the neighbour leans on "
-            "the dropped dish), and any edge measured in a context displaced like this is weaker evidence" + tails
-            + ". The drift of every test is in the JSON (context_drift_mm), and each caption counts the drops above "
-            f"{F.DRIFT_MM:g} mm.")
-    pert = perturbation(reruns[lid]["dep"] for lid in agree)
-    if agree:
-        n, both = len(agree), sum(len(a[0]) for a in agree.values())
-        first, new = sum(len(a[0]) + len(a[1]) for a in agree.values()), sum(len(a[2]) for a in agree.values())
-        same = sum(a[4] for a in agree.values())         # reruns that repeated every drop to the last digit
-        if pert:                                         # a perturbed-release rerun: a robustness measure
-            test += (f" A second run perturbed every release by up to {pert[0]:g} mm laterally and {pert[1]:g}° in "
-                     "yaw, the context and the certifying build left unperturbed, as a robustness measure: over the "
-                     f"{F._plural(n, 'load')} run twice, {both} of {first} edges were reproduced, {first - both} lost "
-                     f"and {new} new, and the two-way pairs agreed in {sum(a[3] for a in agree.values())} of {n}.")
-        elif same == n:
-            test += (f" A second run of the same {F._plural(n, 'load')} repeated every drop to the last digit: the Isaac "
-                     "settle is deterministic here, so a rerun measures no settle noise, and all "
-                     f"{first} edges and the two-way pairs came back unchanged.")
-        else:
-            test += (f" Each test runs once, so a second run of the same loads measures the settle noise: over the "
-                     f"{F._plural(n, 'load')} run twice, {both} of {first} edges came back, "
-                     f"{F._plural(new, 'new edge')} appeared, and the two-way pairs agreed in "
-                     f"{sum(a[3] for a in agree.values())} of {n}"
-                     + (f"; {same} of the reruns repeated every drop to the last digit." if same else "."))
-    rule = ("The ordered-pair test reads these drops: A goes before B when only that order lands both dishes, for one "
-            "of three reasons. Knock: A dropped last into the full load moves B, so A must go in first (a knock edge "
-            "may point at any dish the drop moved, candidate or not). Need: B lands with A in place but not with A "
-            "removed. Block: A lands only with B removed, so B in place would stop it. An edge can carry two reasons, "
-            "so the knock, need and block counts in the captions and the table can add up to more than the edges. "
-            "A two-way pair, each dish having "
-            "to go in before the other, is a cycle: no one-at-a-time order builds the load, and the load gets no build. "
-            "An acyclic graph is certified by the sequential build: the load is rebuilt one dish at a time in a "
-            "topological order of the graph, lowest centre first among the dishes that are free, with the same move "
-            "and the same landing test, and a failed build adds the order it teaches and tries again, up to 8 builds. "
-            "The number of extra constraints, those the build had to add to the graph, is the graph's score: 0 means "
-            "the graph alone orders the load. The waves are the layers of the graph: a dish's wave is the longest path "
-            "to it from a dish nothing must precede, so every dish of a wave can go in once the earlier waves are in. "
-            f"The jointly settled and the built poses are scored like the packed ones, under the three rules at "
-            f"N = {nf}, so packed → settled → built shows what the joint settle, then the build one dish at a time, "
-            "does to S.")
+            "settle or the retraction, and every dish ends inside the cabinet. The graph then comes from the goal "
+            "load alone, the jointly settled poses, and the move of this version: a dish is released at its lowest "
+            f"clear hover, its goal pose raised in {rel_cfg.get('step_mm', 1):g} mm steps along the rack's up axis "
+            f"until it passes the collision checker's {rel_cfg.get('allowance_mm', 1):g} mm penetration allowance "
+            "against every placed dish (at its re-settled pose) and the appliance, the rule the random-load farm uses; "
+            f"past {rel_cfg.get('cap_mm', 60):g} mm it has no clear release and does not land. Isaac settles it "
+            "(150 + 60 ticks). It lands when it comes to rest within the at-goal tolerance of its goal pose (bowls "
+            "and cups 15 mm lateral, 20 mm in height and 15°; plates 18 mm, 20 mm and 16°) with less than 2 mm of "
+            "contact depth, and a placed dish counts as disturbed only when it ends outside its own at-goal "
+            "tolerance of its goal (Version 18: released 3 mm above the goal, any dish moved more than 10 mm or 20° "
+            "disturbed). The context is the rest of the load, re-settled (150 ticks) before each drop; a context "
+            "dish that then lies outside its tolerance has fallen, is parked as well and the context re-settled "
+            "again, so no dish is dropped into a fallen neighbour. Each dish is dropped last into the full load (24 "
+            "drops), and each dish of a candidate pair is dropped with the other one removed (2 drops per pair); the "
+            f"candidates are the pairs whose collision pieces come within {candidate_mm(deps):g} mm of each other at "
+            "the goal poses (FCL, any rack). Every drop stores its margin to the five thresholds (lateral, height, "
+            "tilt, contact depth, and the disturbance of the dishes it moved); a drop within 20 % of any is rerun "
+            f"under three perturbed releases ({rr.get('lateral_mm', 3):g} mm laterally and {rr.get('yaw_deg', 3):g}° "
+            "in yaw around its clear release) and the majority is its verdict.")
+    if rep and any(v for v in rep.values()) and pert:
+        tot = [v for v in rep.values() if v]
+        test += (f" A second run perturbed every release by up to {pert[0]:g} mm and {pert[1]:g}°, as a "
+                 f"robustness measure: over the {F._plural(len(tot), 'load')} run twice, {sum(v[0] for v in tot)} "
+                 f"of {sum(v[1] for v in tot)} tested edges were reproduced.")
+    rule = ("Edges, A before B, for three reasons. Need: with A removed, B falls out of its tolerance in the "
+            "re-settle, so B leans on A. Knock: A dropped last into the full load pushes B out of its tolerance. "
+            "Block: A lands only with B removed. An edge can carry two reasons, so the counts can add up to more than "
+            "the edges. A two-way pair with need both ways is mutual support: each dish falls without the other, so "
+            "the two can only be placed together, and the load is marked place together or re-roll; it gets a "
+            "diagnostic build in which each such pair is released together at its goals and one clear hover, the "
+            "other dishes one at a time. That joint release is not a benchmark move, and its poses are scored as "
+            "built, labelled diagnostic. Any other two-way pair is retested under the three perturbed releases and, "
+            "if it stays, is a cycle: no one-at-a-time order builds the load, and the load gets no build. An acyclic "
+            "graph is certified by the sequential build: the load is rebuilt one dish at a time in a topological "
+            "order of the graph with the same move and landing test, and a failed build adds the order it teaches "
+            "and tries again, up to 8 builds. Every constraint a build adds joins the graph as a learned edge; their "
+            "number, the extra constraints, is the graph's score: 0 means the graph alone orders the load. The waves "
+            "are the layers of the graph: every dish of a wave can go in once the earlier waves are in. The jointly "
+            f"settled and the built poses are scored like the packed ones, under the three rules at N = {nf}, and as "
+            "relative S (each dish's New+J over its own 0° reference, see the random loads).")
     ren = ("The construction follows Ren and Qureshi (IROS 2024, Multi-Stage Monte Carlo Tree Search for Non-Monotone "
            "Object Rearrangement Planning in Narrow Confined Environments): a graph over the goal arrangement, which "
            "must be a DAG, a topological order of it as the placing order, and a cycle meaning that no order exists. "
-           "Their edge comes from the arm's placing tunnel, the space the gripper sweeps on its way to a goal pose; "
-           "this benchmark has no arm, so the settle test of its own move takes the tunnel's place.")
-    legend = ("Left: the graph, one column per wave (in a cyclic load the waves of the graph with its two-way pairs "
-              "removed; one row per kind when there is one wave or none), the dishes no edge orders in a column of "
-              "their own; plates blue, bowls orange, cups green. Every edge is the same solid dark arrow from the "
-              "earlier dish to the later one, its reasons in the JSON edge list; a two-way pair is one double-headed "
-              "edge marked two-way, and the failing dish of a failed build is ringed red. Right: top views of the "
-              "lower and the upper rack at the built poses (the jointly settled poses, the targets, when there was no "
-              "build; the packed poses when the joint gate rejected the load), with the same edges, slightly curved, "
-              "between the dish centres; p, b and c mark plates, bowls and cups.")
-    if not set(sms) <= set(rank):             # loads beyond the picks: say how many were tested
-        nt = sum(not sm["rejected"] for sm in sms.values())
-        nc = sum(bool(sm["cycle"]) for sm in sms.values())
-        legend += (f" The table and the figures cover {F._plural(len(sms), 'load')}: {nt} passed the joint gate and "
-                   f"{'was' if nt == 1 else 'were'} tested, {nc or 'none'} of them with a two-way pair.")
-    figs, rows = [], []
+           "Their edge comes from the arm's placing tunnel; this benchmark has no arm, so the settle test of its own "
+           "move takes the tunnel's place. Their graph never meets a goal in which two objects hold each other up; "
+           "the mutual-support pairs here are that case.")
+    legend = ("Left: the graph, one column per wave (with the two-way pairs removed in a load that has them; one row "
+              "per kind when there is one wave or none), the dishes no edge orders in a column of their own; plates "
+              "blue, bowls orange, cups green. Every edge, learned ones included, is the same solid dark arrow from "
+              "the earlier dish to the later one, its reasons in the JSON edge list; a two-way pair is one "
+              "double-headed edge marked mutual support or two-way (a cycle), and the failing dish of a failed build "
+              "is ringed red. Right: top views of the lower and the upper rack at the built poses (diagnostic-built "
+              "for mutual support; the jointly settled poses when there was no build), with the same edges between "
+              "the dish centres; p, b and c mark plates, bowls and cups.")
+    gone = sorted(d.get("gate_rejected") or {})
+    if gone:
+        legend += (f" The {F._plural(len(gone), 'load')} the joint gate rejected ({', '.join(gone)}) have no graph; "
+                   "their gate records are in Version 18.")
+    figs, rows, cmp_rows = [], [], []
     for x in deps:
         dep = x["dep"]
         lid = dep["load_id"]
         sm = sms[lid]
-        rej = sm["rejected"]
         tag = f"Best {rank[lid] + 1}: " if lid in rank else ""
         kit = dep.get("kit") or {}
-        ks, kd = (kit.get(k) if isinstance(kit.get(k), (int, float)) and not rej else None
-                  for k in ("wall_seconds", "drop_wall_seconds"))
-        nd = len(dep.get("tests") or [])
-        wall = [f"joint gate {mins(sm['gate_s'])}"] if sm["gate_s"] is not None else []
-        wall += [f"{nd} drops {mins(kd)}" if nd else f"drops {mins(kd)}"] if kd is not None else []
-        wall += [f"Kit session {mins(ks)}"] if ks is not None else []
-        wall = f" Isaac time: {', '.join(wall)}." if wall else ""
-        pen, detail = gate_words(dep)
+        ks = kit.get("wall_seconds") if isinstance(kit.get("wall_seconds"), (int, float)) else None
+        tests = dep.get("tests") or []
+        nr = sum(1 for t in tests if t.get("reruns"))
+        nm = sum(1 for t in tests if str(t.get("rerun_reason", "")).startswith("margin"))
+        ncl = sum(1 for t in tests if t.get("no_clear_release"))
+        nfall = sum(1 for t in tests if t.get("parked_fallen"))
+        wall = f" Isaac time: {len(tests)} drops and {kit.get('reruns', 0)} reruns, Kit session {mins(ks)}." if ks else ""
+        pen, _ = gate_words(dep)
         st = s_chain(sm["S"])
+        rs = rel.get(lid) or {}
+        rtxt = (" Relative S " + " → ".join(f"{k} {rs[k]:.3f}" for k in ("packed", "settled", "built") if k in rs) + "."
+                if rs else "")
         ex = sm["extra"]
         exl = (" (" + ", ".join(f"{a} before {b}" for a, b in ex[:6]) + (", …" if len(ex) > 6 else "") + ")"
                if ex else "")
-        dr = F.context_drift(dep)
-        drift = (f" Context drift over {F.DRIFT_MM:g} mm in {dr[0]} of {dr[1]} drops, at most {dr[2]:.1f} mm."
-                 if dr else "")
-        counts = sm["counts"][:1].upper() + sm["counts"][1:] + exl + "." + drift
-        if rej:
-            cap = f", the joint gate rejected this load: {sm['why'].strip().rstrip('.')}{detail}; {sm['counts']}."
-            cap += pen + st + wall
-        elif sm["ok"]:
+        hv = [t["hover_mm"] for t in tests if isinstance(t.get("hover_mm"), (int, float))]
+        hov = (f" Releases: median hover {float(np.median(hv)):.0f} mm, highest {max(hv):.0f} mm; {ncl} of "
+               f"{len(tests)} drops had no clear release; {nfall} contexts had a fallen dish parked; {nr} drops "
+               f"rerun ({nm} for a margin)." if hv else "")
+        counts = sm["counts"][:1].upper() + sm["counts"][1:] + exl + "." + hov
+        if sm["ok"]:
             pool = sm["pooling_built"]
             pl = ("" if pool is None else " No dish pools water at the built poses." if not pool else
                   f" {len(pool)} dish{'es pool' if len(pool) != 1 else ' pools'} water at the built poses "
                   f"({', '.join(map(str, pool))}).")
-            cap = f", {sm['text']}. " + counts + st + pl + pen + wall
-        elif sm["cycle"]:
-            cap = f", {sm['text']}. " + counts + st + pen + wall
+            cap = f", {sm['text']}. " + counts + st + rtxt + pl + pen + wall
+        elif sm["cycle"] or (sm["mutual"] and sm["built_ok"]):
+            cap = f", {sm['text']}. " + counts + st + rtxt + pen + wall
         else:
-            cap = f", {sm['text']} ({sm['failed'] or '?'} ringed red). " + counts + st + pen + wall
+            cap = f", {sm['text']} ({sm['failed'] or '?'} ringed red). " + counts + st + rtxt + pen + wall
         link = f' <a href="data/depgraph_{esc(lid)}.json">edge list (JSON)</a>' if sm["n_edges"] else ""
         figs.append(f"""  <figure>
-    <div class="media"><img src="media/depgraph_{esc(lid)}.png" alt="Dependency graph of load {esc(lid)} from the ordered-pair test in Isaac, by wave, and top views of both racks with the same edges" loading="lazy"></div>
+    <div class="media"><img src="media/depgraph_{esc(lid)}.png" alt="Dependency graph of load {esc(lid)} from the ordered-pair test in Isaac (Version 20 move), by wave, and top views of both racks with the same edges" loading="lazy"></div>
     <figcaption><b>{esc(tag + lid)}</b>{esc(cap)}{link}</figcaption>
   </figure>""")
-        nobuild = rej or sm["cycle"]           # no build: its numbers are dashes; a cyclic graph has no waves
-        status = sm["status"] if sm["ok"] or nobuild else f"{sm['status']}: {sm['failed'] or '?'}"
-        cells = [lid, sm["outcome"] or "–", "–" if rej else sm["n_pairs"],
-                 "–" if rej else "{} ({} / {} / {})".format(sm["n_edges"], *(sm["reasons"][r] for r in F.REASONS))]
-        if agree:                             # edges reproduced by the second run: "8 of 9, +1 new"
-            a = agree.get(lid)
-            cells.append("–" if a is None else f"{len(a[0])} of {len(a[0]) + len(a[1])}"
-                         + (f", +{len(a[2])} new" if a[2] else "") + ("" if a[3] else ", cycles differ"))
-        cells.append("–" if dr is None else f"{dr[0]} of {dr[1]}")
-        cells += ["–" if rej else sm["n_cycles"], "–" if nobuild or sm["n_waves"] is None else sm["n_waves"],
+        cls = two_way_classes(dep)
+        nmut = sum(v == "mutual support" for v in cls.values())
+        status = (sm["status"].replace("_", " ") if sm["ok"] or sm["cycle"] or (sm["mutual"] and sm["built_ok"])
+                  else f"{sm['status'].replace('_', ' ')}: {sm['failed'] or '?'}")
+        nobuild = sm["cycle"]
+        diag = " (built: diagnostic)" if sm["mutual"] and sm["built_ok"] else ""
+        rp = rep.get(lid)
+        cells = [lid, sm["outcome"] or "–", sm["n_pairs"],
+                 "{} ({} / {} / {} / {})".format(sm["n_edges"], *(sm["reasons"].get(r, 0) for r in F.REASONS)),
+                 f"{nr} ({nm} / {nr - nm})", f"{ncl} / {nfall}",
+                 "–" if rp is None else f"{rp[0]} of {rp[1]}",
+                 f"{len(cls) - nmut} / {nmut}", "–" if nobuild or sm["n_waves"] is None else sm["n_waves"],
                  "–" if nobuild else sm["builds"], "–" if nobuild else len(ex), status,
-                 " / ".join(f"{sm['S'][s]['NJ']:.3f}" if (sm["S"][s] or {}).get("NJ") is not None else "–"
-                            for s in ("packed", "settled", "built"))]
+                 " / ".join(f"{sm['S'][k]['NJ']:.3f}" if (sm["S"][k] or {}).get("NJ") is not None else "–"
+                            for k in ("packed", "settled", "built")) + diag,
+                 " / ".join(f"{rs[k]:.3f}" if k in rs else "–" for k in ("packed", "settled", "built")) + diag]
         rows.append("<tr>" + "".join(f"<td>{esc(str(c))}</td>" for c in cells) + "</tr>")
-    missing = [p for p in d["dep_picks"] if p not in {x["dep"]["load_id"] for x in deps}]
-    head = "".join(f"<th>{h}</th>" for h in ("load", "gate", "pairs tested", "edges (knock / need / block)",
-                                             *(((f"edges under a {pert[0]:g} mm / {pert[1]:g}° release" if pert
-                                                 else "edges reproduced"),) if agree else ()),
-                                             f"drift > {F.DRIFT_MM:g} mm", "cycles",
-                                             "waves", "builds", "extra constraints", "status",
-                                             "S under New+J: packed / settled / built"))
+        old = (v18.get(lid) or {}).get("dep")
+        if old is not None:
+            osm = F.dep_summary(old)
+            ocls = two_way_classes(old)
+            orp = reproduced(old, (v18r.get(lid) or {}).get("dep"))
+
+            def pairs_txt(c):
+                return ", ".join(f"{a}–{b} {v}" for (a, b), v in sorted(c.items())) or "none"
+            cmp_rows.append("<tr>" + "".join(f"<td>{esc(str(c))}</td>" for c in (
+                lid, f"{len(test_edges(old))} → {len(test_edges(dep))}",
+                f"{'–' if osm['cycle'] else len(osm['extra'])} → {'–' if nobuild else len(ex)}",
+                f"{pairs_txt(ocls)} → {pairs_txt(cls)}",
+                f"{'–' if orp is None else f'{orp[0]} of {orp[1]}'} → {'–' if rp is None else f'{rp[0]} of {rp[1]}'}",
+                f"{osm['status']} → {sm['status'].replace('_', ' ')}")) + "</tr>")
+    head = "".join(f"<th>{h}</th>" for h in (
+        "load", "gate", "pairs tested", "edges (knock / need / block / learned)", "drops rerun (margin / two-way)",
+        "no clear release / fallen parked",
+        (f"tested edges under a {pert[0]:g} mm / {pert[1]:g}° release" if pert else "tested edges reproduced"),
+        "two-way: cycle / mutual support", "waves", "builds", "extra constraints", "status",
+        "S under New+J: packed / settled / built", "relative S: packed / settled / built"))
     table = f"""  <div class="scroll-x">
     <table class="cases">
       <thead><tr>{head}</tr></thead>
@@ -959,7 +1064,30 @@ def dependency_section(d):
     </table>
   </div>
 """
-    note = (f'  <p class="note">{esc("Not tested yet: " + ", ".join(missing) + ".")}</p>\n' if missing else "")
+    cmp = ""
+    if cmp_rows:
+        o_rep = [reproduced(v18[k]["dep"], v18r[k]["dep"]) for k in v18r if k in v18 and k in rep and rep[k]]
+        n_rep = [rep[k] for k in v18r if k in v18 and k in rep and rep[k]]
+        sent = (f"Over the {F._plural(len(n_rep), 'load')} run with a perturbed release in both versions, "
+                f"{sum(v[0] for v in o_rep if v)} of {sum(v[1] for v in o_rep if v)} tested edges were reproduced in "
+                f"Version 18 and {sum(v[0] for v in n_rep)} of {sum(v[1] for v in n_rep)} in Version 20."
+                if n_rep and all(o_rep) else "")
+        cmp_head = "".join(f"<th>{h}</th>" for h in (
+            "load", "tested edges", "extra constraints", "two-way pairs", "tested edges reproduced under a perturbed "
+            "release", "status"))
+        intro = ("Each cell reads Version 18 → Version 20 (Version 18: release 3 mm above the goal, a dish moved more "
+                 "than 10 mm or 20° disturbed, need from the drops, every two-way pair a cycle). Learned edges are left "
+                 "out of the edge counts. " + sent)
+        cmp = (f'  <h3>Version 18 against Version 20</h3>\n  <p class="prose">{esc(intro)}</p>\n'
+               + f"""  <div class="scroll-x">
+    <table class="cases">
+      <thead><tr>{cmp_head}</tr></thead>
+      <tbody>
+        {chr(10).join('        ' + r for r in cmp_rows).strip()}
+      </tbody>
+    </table>
+  </div>
+""")
     return f"""<section id="dependency-graphs">
   <p class="eyebrow">Dependency graphs</p>
   <h2>Which dish must go in before which: the ordered-pair test in Isaac</h2>
@@ -967,7 +1095,7 @@ def dependency_section(d):
   <p class="prose">{esc(rule)}</p>
   <p class="prose">{esc(ren)}</p>
   <p class="prose">{esc(legend)}</p>
-{table}{note}{chr(10).join(figs)}{resettled_block(d, rank)}
+{table}{cmp}{chr(10).join(figs)}
 </section>"""
 
 
@@ -1084,10 +1212,17 @@ def footer(d):
             "published as JSON" if d["deps"] else "")
     changes = ("Outside the explorer and the appendix the page keeps three rules, Original, New and New+J: the rules "
                "key and cases, the per-dot figures" + (" (now with the cup)" if d["has_cup"] else "")
-               + f" and the random-load tables and figures. Added: {obj}" + (f"; and {deps}" if deps else "") + ".")
+               + f" and the random-load tables and figures. Added: {obj}" + (f"; and {deps}" if deps else "") + ". "
+               "Version 20: the explorer shows New+J only, one curve per entity, as a score or relative to 0°; the "
+               "per-dot captions give the share of the 0° score kept on edge; relative S (each dish's New+J over its "
+               "own 0° reference, floored at 0.05) is a scored column of the random loads and the dependency table, "
+               "not adopted; and the dependency graphs come from the Version 20 move (lowest clear hover, a placed "
+               "dish disturbed only outside its own goal tolerance, need from the removal re-settles, marginal drops "
+               "rerun under three perturbed releases, mutual support told apart from cycles), compared with "
+               "Version 18 in one table.")
     return f"""<footer>
   <p><b>What changed since 9 October.</b> {esc(changes)}</p>
-  <p style="margin-top:8px">Code: <code>code/frigidaire/src/dishsim_frigidaire/dot_rules.py</code> (GPU engine), <code>code/planner/frigidaire/frigidaire_dot_rules_{{bench,grid,loads,tail,restricted,isaac,render,figures,page}}.py</code>, <code>code/planner/frigidaire/frigidaire_dependency_kit.py</code> (Isaac pair tests and builds), <code>code/planner/frigidaire/frigidaire_dependency_score.py</code> (packed{', settled' if d['dep_gate'] else ''} and built poses rescored), <code>code/initialization/frigidaire/frigidaire_random_load_{{kit,farm}}.py</code>. Results: <code>data/results/dot_rules/</code> (the dependency graphs in <code>dependency/pairs/</code>), <code>data/results/random_loads/rl_20261009/</code>. Revision 5 (the original) is still the live scorer; <code>exposure.py</code> is unchanged and nothing is committed.</p>
+  <p style="margin-top:8px">Code: <code>code/frigidaire/src/dishsim_frigidaire/dot_rules.py</code> (GPU engine), <code>code/planner/frigidaire/frigidaire_dot_rules_{{bench,grid,loads,tail,restricted,isaac,render,figures,page}}.py</code>, <code>code/planner/frigidaire/frigidaire_dependency_kit.py</code> (Isaac pair tests and builds), <code>code/planner/frigidaire/frigidaire_dependency_score.py</code> (packed{', settled' if d['dep_gate'] else ''} and built poses rescored), <code>code/planner/frigidaire/frigidaire_dot_rules_relative.py</code> (relative S), <code>code/initialization/frigidaire/frigidaire_random_load_{{kit,farm}}.py</code>. Results: <code>data/results/dot_rules/</code> (the dependency graphs in <code>dependency/pairs_v20/</code>), <code>data/results/random_loads/rl_20261009/</code>. Revision 5 (the original) is still the live scorer; <code>exposure.py</code> is unchanged and nothing is committed.</p>
 </footer>"""
 
 
@@ -1102,98 +1237,286 @@ EXTRA_CSS = """
 """
 
 
-LEVEL_JS = """if (byId("seg-level")) byId("seg-level").addEventListener("click", function(ev){
-  var b = ev.target.closest("button"); if (!b) return;
-  state.level = b.getAttribute("data-level"); setPressed("seg-level", "data-level", state.level);
-  var one = byId("seg-entity").querySelector('[data-entity="dot"]');     /* no object level for a single dot */
-  if (one) { one.disabled = state.level === "object"; one.title = state.level === "object" ? "no object level for a single dot" : ""; }
-  if (state.level === "object" && state.entity === "dot") { state.entity = "plate"; setPressed("seg-entity", "data-entity", "plate"); }
-  draw();
-});"""
+EXPLORER_JS = r"""(function(){
+"use strict";
+/* The explorer (2026-10-14): New+J only, one curve per entity, read from the grid at the nearest nodes.
+   Show "relative to 0°" divides by the same entity at tilt 0 (axis straight down) at the same height, distance and θ,
+   drawn only where that 0° value is at least FLOOR. Level "object" reads a dish from G[kind + "_obj"]. */
+var G = window.GRID;
+var NS = "http://www.w3.org/2000/svg";
+var SCALE = G.scale, DOTS = G.dots, NPTS = G.n_points || 64, FLOOR = 0.05;
+function NFMT(v){ return Number(v).toLocaleString("en-US"); }
+var ENTS = [
+  {key: "dot",   name: "one dot", css: "--v-o",  width: 3},
+  {key: "plate", name: "plate",   css: "--v-j",  width: 2.2},
+  {key: "bowl",  name: "bowl",    css: "--v-jd", width: 2.2},
+  {key: "cup",   name: "cup",     css: "--v-d",  width: 2.2}
+].filter(function(e){ return !!G[e.key]; });
+var SHOWN = {dot: true, plate: true, bowl: true, cup: true};
+var AXES = {
+  tilt:     {label: "tilt (°): 0 = facing the arm, 90 = on edge, 180 = facing away", min: 0, max: 180, unit: "°",   nodes: G.tilts},
+  height:   {label: "height above the disc (cm)",                                  min: 3, max: 26,  unit: " cm", nodes: G.heights},
+  distance: {label: "distance from the disc centre (cm)",                          min: 0, max: 35,  unit: " cm", nodes: G.distances},
+  theta:    {label: "θ: jet angle from vertical (°)",                              min: 5, max: 85,  unit: "°",   nodes: G.thetas}
+};
+var state = {x: "tilt", mode: "scores", level: "dot", tilt: 45, height: 14, distance: 0, theta: 30};
 
+function byId(id){ return document.getElementById(id); }
+function mk(tag, attrs, parent){
+  var e = document.createElementNS(NS, tag), k;
+  for (k in attrs) if (Object.prototype.hasOwnProperty.call(attrs, k)) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function clear(node){ while (node.firstChild) node.removeChild(node.firstChild); }
+function fmt(v, d){ return v == null ? "–" : v.toFixed(d); }
+function nearestIndex(list, v){ var b = 0, i; for (i = 1; i < list.length; i++) if (Math.abs(list[i] - v) < Math.abs(list[b] - v)) b = i; return b; }
 
-def edit_js(js):
-    js = sub1(js, "var SCALE = G.scale, DOTS = G.dots;",
-              'var SCALE = G.scale, DOTS = G.dots, NPTS = G.n_points || 64;\n'
-              'function NFMT(v){ return Number(v).toLocaleString("en-US"); }')
-    js = sub1(js, 'distance: {label: "distance from the disc centre (cm)",          min: -35,',
-              'distance: {label: "distance from the disc centre (cm)",          min: (G.dot_neg ? -35 : 0),')
-    js = sub1(js, 'var state = {x: "tilt", mode: "scores", entity: "plate", tilt: 45,',
-              'var state = {x: "tilt", mode: "scores", entity: "plate", level: "dot", tilt: 45,')
-    js = sub1(js, "var SHOWN = {O: true, D: true, DG: true, DJ: true, N: true, NG: true, NJ: true};",
-              "var SHOWN = {O: true, D: true, DG: true, DJ: true, N: true, NG: true, NJ: true};\n"
-              "var OBJ_RULES = {O: true, N: true, NJ: true};      /* the rules the object level shows */\n"
-              'function inLevel(k){ return state.level !== "object" || !!OBJ_RULES[k]; }')
-    js = sub1(js, 'return SHOWN[v.key] && (state.mode === "scores" || v.key !== "O");',
-              'return SHOWN[v.key] && inLevel(v.key) && (state.mode === "scores" || v.key !== "O");')
-    i = js.index("/* ---- the unit sunflower pattern")
-    j = js.index("function withDiffs(s){")
-    js = js[:i] + """/* ---- every entity from the grid, snapped to the nearest nodes; null where a dish pose was skipped.
-   The dot is unblocked; its arrays add the line counts nG, nJ and New's best-facing normal (mDown, mGap, 0.1°).
-   Level "object" reads a dish from G[kind + "_obj"]: Σ numerators / Σ denominators over its dots (O, N, NJ). ---- */
-var RULE_KEYS = ["O", "D", "DG", "DJ", "N", "NG", "NJ"];
-function hasNeg(){ return state.entity === "dot" && !!G.dot_neg; }
-function gridScores(kind, tilt, hcm, dcm, theta){
-  var obj = state.level === "object" && kind !== "dot", g = G[obj ? kind + "_obj" : kind];
-  if (!g) return undefined;
-  if (dcm < 0) { if (kind === "dot" && G.dot_neg) { g = G.dot_neg; dcm = -dcm; } else return undefined; }
+/* ---- the grid: one flat array per entity, index ((tilt * H + height) * D + distance) * Q + theta ---- */
+function source(key){
+  if (state.level === "object") return key === "dot" ? null : (G[key + "_obj"] || null);
+  return G[key] || null;
+}
+function flat(tilt, hcm, dcm, theta){
   var ti = nearestIndex(G.tilts, tilt), hi = nearestIndex(G.heights, hcm), di = nearestIndex(G.distances, dcm), qi = nearestIndex(G.thetas, theta);
-  var i = ((ti * G.heights.length + hi) * G.distances.length + di) * G.thetas.length + qi;
-  if (g.O[i] < 0) return null;
-  var s = {zG: g.zG ? g.zG[i] : null, zJ: g.zJ ? g.zJ[i] : null, n: kind === "dot" ? 1 : DOTS, obj: obj};
-  RULE_KEYS.forEach(function(k){ s[k] = g[k] ? g[k][i] / SCALE : null; });
-  if (kind === "dot") { s.nG = g.nG ? g.nG[i] : null; s.nJ = g.nJ ? g.nJ[i] : null; s.mDown = g.mDown ? g.mDown[i] / 10 : null; s.mGap = g.mGap ? g.mGap[i] / 10 : null; }
-  return s;
+  return ((ti * G.heights.length + hi) * G.distances.length + di) * G.thetas.length + qi;
 }
-function scoresAt(pose){ return gridScores(state.entity, pose.tilt, pose.height, pose.distance, pose.theta); }
-function snapPose(pose){
-  var d = pose.distance, ad = G.distances[nearestIndex(G.distances, Math.abs(d))];
-  return {tilt: G.tilts[nearestIndex(G.tilts, pose.tilt)], height: G.heights[nearestIndex(G.heights, pose.height)],
-          distance: d < 0 ? (hasNeg() ? -ad : d) : ad, theta: G.thetas[nearestIndex(G.thetas, pose.theta)]};
+function cell(key, pose){      /* {score, ref, rel} or {skip}; null when the entity has no grid at this level */
+  var g = source(key);
+  if (!g) return null;
+  var v = g.NJ[flat(pose.tilt, pose.height, pose.distance, pose.theta)];
+  if (v < 0) return {skip: true};
+  var r = g.NJ[flat(0, pose.height, pose.distance, pose.theta)];
+  var c = {score: v / SCALE, ref: r < 0 ? null : r / SCALE, rel: null};
+  if (c.ref === null) c.noref = true; else if (c.ref < FLOOR) c.small = true; else c.rel = c.score / c.ref;
+  return c;
 }
-""" + js[j:]
-    i, j = between(js, "function xValues(){", "\n}\n")
-    js = js[:i] + """function xValues(){
-  if (state.x === "distance" && hasNeg()) return G.distances.slice(1).reverse().map(function(d){ return -d; }).concat(G.distances);
-  return AXES[state.x].nodes.slice();
+function valueOf(c){ if (!c || c.skip) return null; return state.mode === "scores" ? c.score : c.rel; }
+function why(c){
+  if (!c) return "no object level for a single dot";
+  if (c.skip) return "skipped: the dish would dip below the disc plane";
+  if (state.mode !== "scores" && c.small) return "reference too small (0° score " + fmt(c.ref, 3) + ")";
+  if (state.mode !== "scores" && c.noref) return "no 0° reference: that pose dips below the disc plane";
+  return null;
 }
-""" + js[j:]
-    js = sub1(js, 'half = state.entity === "dot" ? 0.5 : null', "half = null")
-    js = sub1(js, 'if (state.x === "distance" && state.entity !== "dot") xt = [0, 10, 23.3, 35];',
-              'if (state.x === "distance" && !hasNeg()) xt = [0, 10, 23.3, 35];')
-    js = sub1(js, 'if (e < ax.min || (state.entity !== "dot" && e < 0)) return;',
-              "if (e < ax.min || (!hasNeg() && e < 0)) return;")
-    js = sub1(js, 'if (state.entity !== "dot") pts[i].forEach(function(p){', "pts[i].forEach(function(p){")
-    js = sub1(js, 'if (!(state.entity !== "dot" && state.x === "distance" && mx < 0)) {',
-              'if (!(!hasNeg() && state.x === "distance" && mx < 0)) {')
-    js = sub1(js, '    if (state.mode !== "scores" && sr.key === "O") return;',
-              '    if ((state.mode !== "scores" && sr.key === "O") || !inLevel(sr.key)) return;')
-    js = sub1(js, 'chip(ro, (state.entity === "dot" ? "dot" : state.entity) + " at "',
-              'chip(ro, (state.entity === "dot" ? "dot" : state.entity) + (state.level === "object" && state.entity !== "dot" ? ", object level," : "") + " at "')
-    i, j = between(js, '  if (state.entity === "dot") {\n    if (s.m) {', 'of 64 on the disc");\n  }')
-    js = js[:i] + """  if (state.entity === "dot") {
-    if (s.mDown != null) chip(ro, "New's best-facing normal: " + s.mDown.toFixed(1) + "° from straight down, " + s.mGap.toFixed(1) + "° from this dot's normal");
-    if (s.nG != null) chip(ro, "lines: G rules " + NFMT(s.nG) + " of " + NFMT(NPTS) + " fixed points, J rules " + NFMT(s.nJ) + " of " + NFMT(NPTS) + " on the disc");
-  }""" + js[j:]
-    js = sub1(js, ' else chip(ro, "dots with no line: G rules "', ' else if (s.zG != null) chip(ro, "dots with no line: G rules "')
-    i, j = between(js, '  n.textContent = state.entity !== "dot"', "at its spot.\";\n")
-    js = js[:i] + """  var nodes = "Sliders snap to the grid: tilt in " + (G.tilts[1] - G.tilts[0]) + "° steps from " + G.tilts[0] + " to " + G.tilts[G.tilts.length - 1] + "; heights " + G.heights.slice(0, -1).join(", ") + " and " + G.heights[G.heights.length - 1] + " cm; distance in " + (G.distances[1] - G.distances[0]) + " cm steps; θ " + G.thetas.slice(0, -1).join(", ") + " and " + G.thetas[G.thetas.length - 1] + "°; " + NFMT(NPTS) + " lines per set.";
-  n.textContent = state.entity !== "dot"
-    ? nodes + (state.level === "object" ? " Object level: sum over the " + DOTS + " dots of the numerator / sum of the per-dot denominators (Original, New and New+J)." : " Dish score = mean of its " + DOTS + " dots.")
-    : "One unblocked dot, so every line is open: the original is 1 wherever a line carries weight, and New is the dot's own weight over the best-facing weight at its spot. " + nodes;
-""" + js[j:]
-    old = """    var inp = byId("in-" + state.x), v = Number(inp.value), nodes = AXES[state.x].nodes;
-    if (state.entity !== "dot") { var i = nearestIndex(nodes, v) + (ev.key === "ArrowRight" ? 1 : -1); i = Math.max(0, Math.min(nodes.length - 1, i)); v = nodes[i]; }
-    else v = v + (ev.key === "ArrowRight" ? 1 : -1);"""
-    js = sub1(js, old, """    var inp = byId("in-" + state.x), v = Number(inp.value), nodes = xValues();
-    var i = nearestIndex(nodes, v) + (ev.key === "ArrowRight" ? 1 : -1); i = Math.max(0, Math.min(nodes.length - 1, i)); v = nodes[i];""")
-    seg = ('byId("seg-entity").addEventListener("click", function(ev){ var b = ev.target.closest("button"); if (!b) return; '
-           'state.entity = b.getAttribute("data-entity"); setPressed("seg-entity", "data-entity", state.entity); draw(); });')
-    js = sub1(js, seg, seg.replace("if (!b) return;", "if (!b || b.disabled) return;") + "\n" + LEVEL_JS)
-    for gone in ("dotScores", "DOTCACHE", "of 64", "÷ 64"):
-        if gone in js:
-            raise SystemExit(f"JS still contains {gone!r}")
-    return js
+function available(e){ return !!source(e.key); }
+function activeSeries(){ return ENTS.filter(function(e){ return SHOWN[e.key] && available(e); }); }
+function snapPose(p){
+  return {tilt: G.tilts[nearestIndex(G.tilts, p.tilt)], height: G.heights[nearestIndex(G.heights, p.height)],
+          distance: G.distances[nearestIndex(G.distances, p.distance)], theta: G.thetas[nearestIndex(G.thetas, p.theta)]};
+}
+function buildCurve(){
+  return AXES[state.x].nodes.map(function(x){
+    var pose = {tilt: state.tilt, height: state.height, distance: state.distance, theta: state.theta}, c = {};
+    pose[state.x] = x;
+    ENTS.forEach(function(e){ c[e.key] = cell(e.key, pose); });
+    return {x: x, c: c};
+  });
+}
+
+/* ---- drawing ---- */
+var W = 900, H = 430, L = 50, Rm = 118, T = 30, B = 58;
+function sx(ax, x){ return L + (x - ax.min) / (ax.max - ax.min) * (W - L - Rm); }
+function yScale(rows, series){   /* 0 to 1; grown in steps of 0.2 when a relative value passes 1 */
+  var hi = 1, i, j, v, t, ticks = [];
+  for (i = 0; i < rows.length; i++) for (j = 0; j < series.length; j++) { v = valueOf(rows[i].c[series[j].key]); if (v != null && v > hi) hi = v; }
+  if (hi <= 1) return {min: 0, max: 1.05, ticks: [0, 0.2, 0.4, 0.6, 0.8, 1]};
+  hi = Math.ceil(hi * 5 - 1e-9) / 5;
+  for (t = 0; t <= hi + 1e-9; t += 0.2) ticks.push(Math.round(t * 10) / 10);
+  return {min: 0, max: hi + 0.05, ticks: ticks};
+}
+function tickLabel(v){ if (v === 0) return "0"; var a = Math.abs(v), s = Math.abs(a - Math.round(a)) < 1e-9 ? String(Math.round(a)) : String(a).replace(/^0\./, "."); return (v < 0 ? "−" : "") + s; }
+function sy(ys, v){ return T + (ys.max - v) / (ys.max - ys.min) * (H - T - B); }
+var tipPos = null;
+
+function draw(){
+  var svg = byId("chart"), ax = AXES[state.x], rows = buildCurve(), series = activeSeries(), ys = yScale(rows, series);
+  clear(svg);
+  var plotW = W - L - Rm, plotH = H - T - B, i, j;
+  for (i = 0; i < ys.ticks.length; i++) {
+    var yy = sy(ys, ys.ticks[i]);
+    mk("line", {x1: L, x2: W - Rm, y1: yy, y2: yy, stroke: state.mode !== "scores" && ys.ticks[i] === 1 ? "var(--axis)" : "var(--rule)", "stroke-width": "1"}, svg);
+    var tl = mk("text", {x: L - 8, y: yy + 4, "text-anchor": "end", "font-size": "12"}, svg); tl.textContent = tickLabel(ys.ticks[i]);
+  }
+  var xt = {tilt: [0, 30, 60, 90, 120, 150, 180], height: [3, 5, 10, 15, 20, 26], distance: [0, 10, 23.3, 35], theta: [5, 20, 35, 50, 60, 70, 85]}[state.x];
+  mk("line", {x1: L, x2: W - Rm, y1: T + plotH, y2: T + plotH, stroke: "var(--axis)", "stroke-width": "1"}, svg);
+  for (i = 0; i < xt.length; i++) {
+    var xx = sx(ax, xt[i]);
+    mk("line", {x1: xx, x2: xx, y1: T + plotH, y2: T + plotH + 5, stroke: "var(--axis)", "stroke-width": "1"}, svg);
+    var tx = mk("text", {x: xx, y: T + plotH + 20, "text-anchor": "middle", "font-size": "12"}, svg); tx.textContent = String(xt[i]);
+  }
+  var xl = mk("text", {x: L + plotW / 2, y: H - 12, "text-anchor": "middle", "font-size": "13"}, svg); xl.textContent = ax.label;
+  var yl = mk("text", {x: 14, y: T + plotH / 2, "text-anchor": "middle", "font-size": "13", transform: "rotate(-90 14 " + (T + plotH / 2) + ")"}, svg);
+  yl.textContent = state.mode === "scores" ? "New+J score" : "New+J relative to 0°";
+  if (state.x === "distance") {
+    var ex = sx(ax, 23.3);
+    mk("line", {x1: ex, x2: ex, y1: T, y2: T + plotH, stroke: "var(--axis)", "stroke-width": "1", "stroke-dasharray": "2 4"}, svg);
+    var el = mk("text", {x: ex + 5, y: T + 12, "font-size": "11.5"}, svg); el.textContent = "disc edge 23.3 cm";
+  }
+  if (state.x === "theta") {
+    mk("rect", {x: sx(ax, 5), y: T - 10, width: sx(ax, 35) - sx(ax, 5), height: 5, fill: "var(--ink-2)", rx: 1}, svg);
+    var bl = mk("text", {x: sx(ax, 35) + 6, y: T - 5, "font-size": "11.5"}, svg); bl.textContent = "measured arm's jets, 1° to 35°";
+  }
+  var ends = [];
+  for (j = 0; j < series.length; j++) {
+    var sr = series[j], pts = [], seg = [], last = null;
+    for (i = 0; i < rows.length; i++) {
+      var v = valueOf(rows[i].c[sr.key]);
+      if (v == null || isNaN(v)) { if (seg.length) { pts.push(seg); seg = []; } continue; }
+      seg.push([sx(ax, rows[i].x), sy(ys, Math.max(ys.min, Math.min(ys.max, v)))]); last = {x: rows[i].x, v: v};
+    }
+    if (seg.length) pts.push(seg);
+    for (i = 0; i < pts.length; i++) {
+      var d = pts[i].map(function(p, k){ return (k ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1); }).join("");
+      mk("path", {d: d, fill: "none", stroke: "var(" + sr.css + ")", "stroke-width": sr.width, "stroke-linejoin": "round", "stroke-linecap": "round", opacity: ".95"}, svg);
+      pts[i].forEach(function(p){ mk("circle", {cx: p[0], cy: p[1], r: 3.2, fill: "var(" + sr.css + ")", stroke: "var(--plate)", "stroke-width": "1.5"}, svg); });
+    }
+    if (last) ends.push({name: sr.name, y: sy(ys, Math.max(ys.min, Math.min(ys.max, last.v))), x: sx(ax, last.x), css: sr.css, v: last.v});
+  }
+  ends.sort(function(a, b){ return a.y - b.y; });
+  for (i = 0; i < ends.length; i++) { ends[i].ly = ends[i].y; if (i && ends[i].ly - ends[i - 1].ly < 13) ends[i].ly = ends[i - 1].ly + 13; }
+  var over = ends.length ? ends[ends.length - 1].ly - (T + plotH) : 0;
+  if (over > 0) {
+    for (i = 0; i < ends.length; i++) ends[i].ly -= over;
+    for (i = ends.length - 1; i > 0; i--) if (ends[i].ly - ends[i - 1].ly < 13) ends[i - 1].ly = ends[i].ly - 13;
+  }
+  ends.forEach(function(e){
+    if (Math.abs(e.ly - e.y) > 2) mk("line", {x1: e.x + 3, y1: e.y, x2: W - Rm + 10, y2: e.ly, stroke: "var(--axis)", "stroke-width": "1"}, svg);
+    mk("line", {x1: W - Rm + 12, x2: W - Rm + 24, y1: e.ly, y2: e.ly, stroke: "var(" + e.css + ")", "stroke-width": "3"}, svg);
+    var t = mk("text", {x: W - Rm + 30, y: e.ly + 4, "font-size": "12"}, svg);
+    t.textContent = e.name + " " + fmt(e.v, 2);
+  });
+  var pose = snapPose({tilt: state.tilt, height: state.height, distance: state.distance, theta: state.theta}), mxx = sx(ax, pose[state.x]);
+  mk("line", {x1: mxx, x2: mxx, y1: T, y2: T + plotH, stroke: "var(--ink)", "stroke-width": "1", "stroke-opacity": ".55"}, svg);
+  series.forEach(function(sr){ var v = valueOf(cell(sr.key, pose)); if (v == null) return;
+    mk("circle", {cx: mxx, cy: sy(ys, Math.max(ys.min, Math.min(ys.max, v))), r: 5, fill: "var(" + sr.css + ")", stroke: "var(--plate)", "stroke-width": "2"}, svg); });
+  svg.__rows = rows; svg.__ax = ax; svg.__ys = ys; svg.__series = series;
+  drawLegend(); drawReadout(pose, series); drawTable(rows, series); drawNote(rows, series);
+  if (tipPos) hover(tipPos.px, tipPos.py, true);
+}
+function drawLegend(){
+  var lg = byId("legend"); clear(lg);
+  ENTS.forEach(function(e){
+    var b = document.createElement("button"), k = document.createElement("span"), n = document.createElement("span"), ok = available(e);
+    b.type = "button"; b.className = "lg-btn"; b.setAttribute("aria-pressed", SHOWN[e.key] && ok ? "true" : "false");
+    b.disabled = !ok; b.title = ok ? "" : "no object level for a single dot";
+    k.className = "line-key" + (e.key === "dot" ? " thick" : ""); k.style.color = "var(" + e.css + ")";
+    n.className = "lg-name"; n.textContent = e.name;
+    b.appendChild(k); b.appendChild(n);
+    b.addEventListener("click", function(){ if (b.disabled) return; SHOWN[e.key] = !SHOWN[e.key]; draw(); });
+    lg.appendChild(b);
+  });
+  var sk = document.createElement("span"); sk.className = "lg-static";
+  sk.appendChild(document.createTextNode(state.mode === "scores" ? "gap: dish pose skipped (below the disc plane)"
+                                                                 : "gap: pose skipped, or reference too small (0° score under 0.05)"));
+  lg.appendChild(sk);
+}
+function chip(parent, text){ var c = document.createElement("span"); c.className = "chip"; c.appendChild(document.createTextNode(text)); parent.appendChild(c); return c; }
+function drawReadout(pose, series){
+  var ro = byId("readout"); clear(ro);
+  chip(ro, (state.level === "object" ? "object level, " : "") + "at " + pose.tilt + "°, " + pose.height + " cm up, " + pose.distance + " cm out, θ " + pose.theta + "°");
+  series.forEach(function(sr){
+    var c = cell(sr.key, pose), msg = why(c), ch = document.createElement("span"), k = document.createElement("span"), b = document.createElement("b");
+    ch.className = "chip"; k.className = "line-key"; k.style.color = "var(" + sr.css + ")";
+    b.textContent = msg ? "–" : fmt(valueOf(c), 3);
+    ch.appendChild(k); ch.appendChild(b);
+    ch.appendChild(document.createTextNode(" " + sr.name + (msg ? ": " + msg : (state.mode !== "scores" ? " (0° " + fmt(c.ref, 3) + ")" : ""))));
+    ro.appendChild(ch);
+  });
+  if (SHOWN.dot && state.level !== "object" && G.dot && G.dot.nJ) {
+    var nj = G.dot.nJ[flat(pose.tilt, pose.height, pose.distance, pose.theta)];
+    chip(ro, "the dot's J lines: " + NFMT(nj) + " of " + NFMT(NPTS) + " on the disc");
+  }
+}
+function drawTable(rows, series){
+  var tbl = byId("tbl"); clear(tbl);
+  var thead = document.createElement("thead"), tr = document.createElement("tr"), th = document.createElement("th");
+  th.textContent = AXES[state.x].label; tr.appendChild(th);
+  series.forEach(function(sr){ var h = document.createElement("th"); h.textContent = sr.name + (state.mode === "scores" ? "" : " (relative)"); tr.appendChild(h); });
+  thead.appendChild(tr); tbl.appendChild(thead);
+  var tb = document.createElement("tbody");
+  rows.forEach(function(r){
+    var row = document.createElement("tr"), td = document.createElement("td"); td.textContent = String(r.x); row.appendChild(td);
+    series.forEach(function(sr){
+      var c = r.c[sr.key], v = valueOf(c), cl = document.createElement("td");
+      cl.textContent = v != null ? fmt(v, 3) : (c && c.skip ? "skipped" : (c && c.small ? "ref < 0.05" : "–"));
+      row.appendChild(cl);
+    });
+    tb.appendChild(row);
+  });
+  tbl.appendChild(tb);
+}
+function drawNote(rows, series){
+  var n = byId("chart-note"), small = 0;
+  if (state.mode !== "scores") rows.forEach(function(r){ series.forEach(function(sr){ var c = r.c[sr.key]; if (c && !c.skip && (c.small || c.noref)) small++; }); });
+  var nodes = "Sliders snap to the grid: tilt in " + (G.tilts[1] - G.tilts[0]) + "° steps from " + G.tilts[0] + " to " + G.tilts[G.tilts.length - 1] + "; heights " + G.heights.slice(0, -1).join(", ") + " and " + G.heights[G.heights.length - 1] + " cm; distance in " + (G.distances[1] - G.distances[0]) + " cm steps; θ " + G.thetas.slice(0, -1).join(", ") + " and " + G.thetas[G.thetas.length - 1] + "°; " + NFMT(NPTS) + " lines per set.";
+  n.textContent = nodes + (state.level === "object" ? " Object level: sum over the " + DOTS + " dots of the numerator / sum of the per-dot denominators." : " Dish score = mean of its " + DOTS + " dots.")
+    + (state.mode !== "scores" ? " Relative = the score / the same entity's score at 0° (same height, distance and θ)." + (small ? " " + small + " point" + (small > 1 ? "s" : "") + " left out here: reference too small." : "") : "");
+  ["tilt", "height", "distance", "theta"].forEach(function(k){
+    byId("ctl-" + k).classList.toggle("is-x", k === state.x);
+    byId("note-" + k).textContent = k === state.x ? "runs along the x-axis; its slider moves the marker" : "";
+  });
+}
+/* ---- hover: a crosshair snapping to the nearest x, one tooltip with every entity ---- */
+function hover(px, py, keep){
+  var svg = byId("chart"), rows = svg.__rows, ax = svg.__ax, series = svg.__series, tip = byId("tip");
+  if (!rows) return;
+  var rect = svg.getBoundingClientRect(), xv = ax.min + (px / rect.width * W - L) / (W - L - Rm) * (ax.max - ax.min);
+  var b = 0, i; for (i = 1; i < rows.length; i++) if (Math.abs(rows[i].x - xv) < Math.abs(rows[b].x - xv)) b = i;
+  var r = rows[b];
+  var old = svg.querySelector(".crosshair"); if (old) old.parentNode.removeChild(old);
+  var cx = sx(ax, r.x) / W * rect.width;
+  var ch = mk("line", {x1: sx(ax, r.x), x2: sx(ax, r.x), y1: T, y2: H - B, stroke: "var(--muted)", "stroke-width": "1", "class": "crosshair"}, svg);
+  ch.style.pointerEvents = "none";
+  clear(tip);
+  var tt = document.createElement("div"); tt.className = "tt"; tt.textContent = AXES[state.x].label.split(":")[0].split(" (")[0] + " " + r.x + ax.unit; tip.appendChild(tt);
+  series.forEach(function(sr){
+    var c = r.c[sr.key], msg = why(c);
+    var row = document.createElement("div"); row.className = "tr";
+    var k = document.createElement("span"); k.className = "line-key"; k.style.color = "var(" + sr.css + ")"; k.style.width = "20px";
+    var v = document.createElement("span"); v.className = "tv"; v.textContent = msg ? "–" : fmt(valueOf(c), 3);
+    var n = document.createElement("span"); n.className = "tn"; n.textContent = sr.name + (msg ? ": " + msg : "");
+    row.appendChild(k); row.appendChild(v); row.appendChild(n); tip.appendChild(row);
+  });
+  tip.hidden = false;
+  var ww = byId("chart-wrap").clientWidth, tw = tip.offsetWidth;
+  tip.style.left = Math.min(Math.max(0, cx + 14), ww - tw) + "px";
+  tip.style.top = Math.max(0, Math.min(py - 20, rect.height - tip.offsetHeight - 8)) + "px";
+  if (!keep) tipPos = {px: px, py: py};
+}
+function unhover(){ var svg = byId("chart"), old = svg.querySelector(".crosshair"); if (old) old.parentNode.removeChild(old); byId("tip").hidden = true; tipPos = null; }
+/* ---- controls ---- */
+function setPressed(group, attr, value){
+  Array.prototype.forEach.call(byId(group).querySelectorAll("button"), function(b){ b.setAttribute("aria-pressed", b.getAttribute(attr) === value ? "true" : "false"); });
+}
+function onSeg(id, attr, key){
+  if (!byId(id)) return;
+  byId(id).addEventListener("click", function(ev){ var b = ev.target.closest("button"); if (!b || b.disabled) return; state[key] = b.getAttribute(attr); setPressed(id, attr, state[key]); draw(); });
+}
+onSeg("seg-x", "data-x", "x");
+onSeg("seg-mode", "data-mode", "mode");
+onSeg("seg-level", "data-level", "level");
+["tilt", "height", "distance", "theta"].forEach(function(k){
+  var inp = byId("in-" + k), out = byId("out-" + k);
+  function upd(){ state[k] = Number(inp.value); out.textContent = inp.value + AXES[k].unit; draw(); }
+  inp.addEventListener("input", upd);
+  out.textContent = inp.value + AXES[k].unit;
+});
+(function(){
+  var svg = byId("chart");
+  svg.addEventListener("pointermove", function(ev){ var r = svg.getBoundingClientRect(); hover(ev.clientX - r.left, ev.clientY - r.top, false); });
+  svg.addEventListener("pointerleave", unhover);
+  svg.addEventListener("keydown", function(ev){
+    if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
+    ev.preventDefault();
+    var inp = byId("in-" + state.x), nodes = AXES[state.x].nodes;
+    var i = nearestIndex(nodes, Number(inp.value)) + (ev.key === "ArrowRight" ? 1 : -1);
+    inp.value = String(nodes[Math.max(0, Math.min(nodes.length - 1, i))]); inp.dispatchEvent(new Event("input"));
+  });
+})();
+draw();
+})();
+"""
 
 
 def copy_media(figdir, outdir, names):
@@ -1238,6 +1561,11 @@ def main():
     ap.add_argument("--resettled-dir", default=None,
                     help="goals re-settled by a sequential build (<id>.json, <id>.scores.json): a sub-section closing "
                          "the dependency section; omitted: none")
+    ap.add_argument("--compare-dir", default=None,
+                    help="Version 18 ordered-pair records (data/results/dot_rules/dependency/pairs): the comparison "
+                         "table of the dependency section, and the gate-rejected loads named on the page")
+    ap.add_argument("--compare-rerun-dir", default=None,
+                    help="Version 18 perturbed-release records (pairs_perturbed): the comparison's reproduced share")
     ap.add_argument("--picks", default="data/media/dot_rules/isaac/restr_picks.json",
                     help="restricted picks: their top ranks order the dependency section")
     a = ap.parse_args()
@@ -1257,6 +1585,10 @@ def main():
     deps = F.load_dependency(a.dependency_dir) if a.dependency_dir else []
     reruns = {x["dep"]["load_id"]: x for x in F.load_dependency(a.rerun_dir)} if a.rerun_dir else {}
     resettled = F.load_dependency(a.resettled_dir) if a.resettled_dir else []
+    v18 = {x["dep"]["load_id"]: x for x in F.load_dependency(a.compare_dir)} if a.compare_dir else {}
+    v18r = {x["dep"]["load_id"]: x for x in F.load_dependency(a.compare_rerun_dir)} if a.compare_rerun_dir else {}
+    gate_rejected = {k: x["dep"].get("reason") for k, x in v18.items() if x["dep"].get("status") == "gate"
+                     and k not in {y["dep"]["load_id"] for y in deps}}
     pk = F.resolve(a.picks)
     picks = json.loads(pk.read_text()) if pk.is_file() else []
     tops = sorted((p for p in picks if p.get("side") == "top"), key=lambda p: p.get("rank", 99))
@@ -1271,13 +1603,13 @@ def main():
          "farm_dir": str(F.resolve(a.farm_dir)), "picks_dir": a.picks_dir, "restricted_dir": a.restricted_dir,
          "loads_dir": a.loads_dir, "deps": deps, "dep_picks": [p["load_id"] for p in tops],
          "dep_gate": any(isinstance(x["dep"].get("gate"), dict) for x in deps), "reruns": reruns,
+         "v18": v18, "v18_reruns": v18r, "gate_rejected": gate_rejected,
          "resettled": resettled if deps else []}
     head = tpl[:tpl.index('<main class="wrap">')]
     i = tpl.index("</main>") + len("</main>")
     tail_style = tpl[i:tpl.index("<script>", i)]
     tail_style = sub1(tail_style, "</style>", EXTRA_CSS + "</style>")
-    k = tpl.index("<script>\n(function(){")
-    js = edit_js(tpl[k + len("<script>\n"):tpl.rindex("</script>")])
+    js = EXPLORER_JS                                   # the template's explorer script is replaced
     page = (head + '<main class="wrap">\n\n' + header(d) + "\n\n" + rules(d) + "\n\n" + explorer(tpl, d) + "\n\n"
             + perdot(d) + "\n\n" + objlevel_section(d) + "\n\n" + loads_section(d) + "\n\n" + isaac_section(d)
             + "\n\n" + dependency_section(d) + "\n\n" + appendix(d) + "\n\n" + footer(d) + "\n\n</main>\n"

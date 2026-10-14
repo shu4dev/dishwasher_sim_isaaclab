@@ -35,7 +35,8 @@ def main():
     ap.add_argument("--force", action="store_true", help="rescore loads that already have a .scores.json")
     args = ap.parse_args()
     d = args.dependency_dir
-    ids = args.loads or sorted(p.name[:-len(".json")] for p in d.glob("*.json") if not p.name.endswith(".scores.json"))
+    ids = args.loads or sorted(p.name[:-len(".json")] for p in d.glob("*.json")
+                               if not p.name.endswith((".scores.json", ".relative.json")))
     todo = [i for i in ids if args.force or not (d / f"{i}.scores.json").is_file()]
     print(f"{len(ids)} loads in {d}, {len(todo)} to score at N {args.N}, theta {args.theta}", flush=True)
     failed = []

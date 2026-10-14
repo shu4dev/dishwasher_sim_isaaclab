@@ -749,6 +749,95 @@ def within_goal(kind, distance):
     return distance[0] <= lat and distance[1] <= dz and distance[2] <= tilt
 
 
+# The move's release (2026-10-14, research/2026-10-14-newj-curve-and-leaning-pairs.md, Decided): a goal move releases the
+# dish at the LOWEST CLEAR HOVER instead of GOAL_HOVER_M: its goal pose raised in 1 mm steps along its rack's up axis
+# until the pose passes the bench checker's 1 mm penetration allowance (the farm's preflight, checker.pair()["valid"])
+# against every placed dish at its current (re-settled) pose and against the appliance; past 60 mm the move has "no
+# clear release" (not landed, no lateral search). A placed dish at its goal counts as disturbed only when it ends outside
+# its at-goal tolerance of that goal (off_goal). Shared by the dependency pair test, build_sequence and the Frigidaire
+# episode (frigidaire_bench_kit.py); the Bosch rearrange.py is untouched. RELEASE_RULE "gap" (>= 1 mm FCL separation
+# from the dishes, the allowance for the appliance) is the switch's other setting, never run (a 1 mm separation from
+# the appliance is unreachable by a vertical lift for plates leaning on tines; measured 2026-10-14).
+RELEASE_RULE = "allowance"
+RELEASE_CLEAR_M, RELEASE_STEP_M, RELEASE_CAP_M, RELEASE_NEAR_M = .001, .001, .060, .35
+_RELEASE_CHECKER = []
+
+
+def release_checker():
+    """One bench checker for the clear-release search (appliance_bodies builds its own component bodies)."""
+    if not _RELEASE_CHECKER:
+        _RELEASE_CHECKER.append(bench_checker())
+    return _RELEASE_CHECKER[0]
+
+
+def appliance_bodies(checker, frames):
+    """The appliance components (Cabinet, Door, both racks, the basket) as checker bodies at the live ``frames``."""
+    from dishsim_frigidaire.initial_state_candidates import COMPONENT_NAMES
+    return [checker._body(name, frames[name], name) for name in COMPONENT_NAMES]
+
+
+def clearance(checker, body, others, limit=RELEASE_CLEAR_M):
+    """Smallest FCL distance [m] from ``body``'s collision pieces to the ``others`` (checker bodies), searched only until
+    one comes closer than ``limit`` (overlap = 0); inf when no other's AABB comes within ``limit``."""
+    fcl = checker.fcl
+
+    def near(o1, o2, data):
+        if data.done:
+            return True, data.result.min_distance
+        fcl.distance(o1, o2, data.request, data.result)
+        data.done = data.result.min_distance < limit
+        return data.done, data.result.min_distance
+    best, (lo, hi) = float("inf"), body["bounds"]
+    for other in others:
+        if np.any(lo > other["bounds"][1] + limit) or np.any(other["bounds"][0] > hi + limit):
+            continue
+        data = fcl.DistanceData(request=fcl.DistanceRequest(), result=fcl.DistanceResult())
+        body["manager"].distance(other["manager"], data, near)
+        best = min(best, max(float(data.result.min_distance), 0.))
+        if best < limit:
+            break
+    return best
+
+
+def release_blockers(checker, body, dishes, appliance):
+    """Ids of the ``dishes`` and ``appliance`` bodies the released ``body`` collides with under RELEASE_RULE."""
+    if RELEASE_RULE == "gap":
+        return ([d["id"] for d in dishes if clearance(checker, body, [d]) < RELEASE_CLEAR_M]
+                + [a["id"] for a in appliance if not checker.pair(body, a)["valid"]])
+    return [o["id"] for o in [*dishes, *appliance] if not checker.pair(body, o)["valid"]]
+
+
+def near_poses(poses, kinds, centre, skip=()):
+    """{id: pose} of the dishes in ``poses`` (ids in ``kinds``) whose origin lies within RELEASE_NEAR_M of ``centre``:
+    the only ones a release there can touch (a plate is 229 mm across, the lift at most 60 mm)."""
+    c = np.asarray(centre, dtype=float)
+    return {i: p for i, p in poses.items() if i in kinds and i not in skip
+            and float(np.linalg.norm(np.asarray(p["position_m"], dtype=float) - c)) < RELEASE_NEAR_M}
+
+
+def clear_release(checker, members, dishes, appliance, up=(0., 0., 1.)):
+    """The lowest clear hover of a release unit: ``members`` = [(kind, goal pose dict, id)] (one dish; two for the
+    diagnostic joint placement, raised together), ``dishes`` = checker bodies of the placed dishes at their current
+    poses, ``appliance`` = appliance_bodies. Returns ([release pose dicts], hover m, []) or, past RELEASE_CAP_M,
+    (None, None, ids still colliding at the cap): "no clear release"."""
+    up = np.asarray(up, dtype=float) / np.linalg.norm(up)
+    blockers = []
+    for n in range(int(round(RELEASE_CAP_M / RELEASE_STEP_M)) + 1):
+        h = n * RELEASE_STEP_M
+        poses = [{"position_m": (np.asarray(g["position_m"], dtype=float) + h * up).tolist(),
+                  "quaternion_xyzw": [float(v) for v in g["quaternion_xyzw"]]} for _, g, _ in members]
+        blockers = sorted({b for (kind, _, key), pose in zip(members, poses)
+                           for b in release_blockers(checker, checker._body(kind, pose, key), dishes, appliance)})
+        if not blockers:
+            return poses, h, []
+    return None, None, blockers
+
+
+def off_goal(kind, centroid, T, T_goal):
+    """True when a dish at ``T`` lies outside its at-goal tolerance of ``T_goal`` (the goal-judged disturbance)."""
+    return not within_goal(kind, goal_distance(centroid, T, T_goal))
+
+
 def racked_in(points, pose_world, frames):
     """The rack whose containment box holds the dish's visual centroid (10 mm tolerance), else None."""
     from dishsim_frigidaire.random_poses import relative_pose

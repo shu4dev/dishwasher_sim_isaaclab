@@ -57,7 +57,8 @@ KIND_CMAP = {"plate": "Blues", "bowl": "Oranges", "cup": "Greens"}
 RULES3 = ("O", "N", "NJ")                              # the rules shown outside the explorer and the appendix
 RULE_COLOUR = {"O": "#8a9099", "N": "#d55e00", "NJ": "#0072b2"}
 EDGE_DARK = "#333333"                                   # dependency edges: one style, arrow to the later dish
-REASONS = ("knock", "need", "block")                   # why only that order lands both dishes (an edge's JSON attribute)
+REASONS = ("knock", "need", "block", "learned")        # why only that order lands both dishes (an edge's JSON attribute;
+                                                        # learned: a constraint the certifying build added, v20)
 DRIFT_MM = 2.0                                         # the context re-settles in place: more drift before a drop displaced it
 FAIL_RED = "#d00000"
 DEFAULT_ASSETS = ROOT / "data/assets/models/hotec_wheatstraw/v2"
@@ -381,7 +382,8 @@ def load_records(loads_dir, farm):
         if rp is None:
             rp = str(farm["dir"] / "loads" / lid / "result.json")
         da = d.get("accepted") if isinstance(d.get("accepted"), dict) else {}
-        recs.append({"load_id": lid, "S": S,
+        rel = relative_S(Path(path).with_name(name + ".relative.json"), "settled")
+        recs.append({"load_id": lid, "S": S, "S_rel": rel,
                      "W": rule_dict(d.get("W")) or {},
                      "feasible": d.get("feasible"), "pooling_count": d.get("pooling_count"),
                      "N": d.get("N", d.get("n_points")), "theta": d.get("theta", d.get("theta_deg")),
@@ -396,6 +398,14 @@ def load_records(loads_dir, farm):
     for i, r in enumerate(recs):
         r["order_index"] = i + 1
     return recs
+
+
+def relative_S(path, state):
+    """S_rel of one state from frigidaire_dot_rules_relative.py's <name>.relative.json (None when absent)."""
+    try:
+        return float(read_json(path)["states"][state]["S_rel"]) if Path(path).is_file() else None
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
 
 
 def attach_objects(recs):
@@ -435,6 +445,14 @@ def summarize(recs):
                            "bottom5": [recs[int(i)]["load_id"] for i in order[::-1][:5]]}
     pairs = (("O", "N"), ("N", "NJ"), ("O", "NJ"))                      # the three-rule spread and captions
     out["spearman"] = {f"{a}-{b}": spearman(S[a], S[b]) for a, b in pairs} if len(recs) >= 3 else {}
+    if len(recs) and all(x.get("S_rel") is not None for x in recs):     # relative S (2026-10-14), a scored column
+        rel = np.array([x["S_rel"] for x in recs])
+        order = np.argsort(-rel, kind="stable")
+        out["rel"] = {"min": float(rel.min()), "median": float(np.median(rel)), "max": float(rel.max()),
+                      "best": recs[int(order[0])]["load_id"], "worst": recs[int(order[-1])]["load_id"],
+                      "top5": [recs[int(i)]["load_id"] for i in order[:5]]}
+        if len(recs) >= 3:
+            out["spearman"]["NJ-REL"] = spearman(S["NJ"], rel)
     out["pooling_loads"] = sum(1 for x in recs if x["feasible"] is False or (x["pooling_count"] or 0) > 0)
     out["by_id"] = {x["load_id"]: x for x in recs}
     return out
@@ -697,8 +715,11 @@ def fig_spread(recs, summ, out):
     plt = _mpl()
     S = {r: np.array([x["S"][r] for x in recs]) for r in RULES3}
     n = len(recs)
-    fig, axes = plt.subplots(1, 4, figsize=(22, 5.3), gridspec_kw={"width_ratios": [1, 1, 1, 1.12]})
-    fig.subplots_adjust(left=0.04, right=0.97, top=0.88, bottom=0.13, wspace=0.27)
+    has_rel = "rel" in summ                                  # relative S: a fifth panel (2026-10-14)
+    fig, axes = plt.subplots(1, 5 if has_rel else 4, figsize=(27.5 if has_rel else 22, 5.3),
+                             gridspec_kw={"width_ratios": [1, 1, 1, 1.12] + ([1] if has_rel else [])})
+    fig.subplots_adjust(left=0.035 if has_rel else 0.04, right=0.985 if has_rel else 0.97, top=0.88, bottom=0.13,
+                        wspace=0.3 if has_rel else 0.27)
     bins = max(8, min(40, int(round(2 * n ** 0.5))))
     for ax, r in ((axes[0], "N"), (axes[1], "NJ")):
         ax.hist(S[r], bins=bins, color="#56b4e9", edgecolor="#1f5f87", lw=0.8)
@@ -723,7 +744,18 @@ def fig_spread(recs, summ, out):
         ax.set_ylabel(f"S under {NAMES[b]}")
         ax.legend(fontsize=8.5, frameon=False, loc="lower right")
     cb = fig.colorbar(sc, ax=axes[3], fraction=0.05, pad=0.02)
-    cb.set_label("S under New+J (colour of both scatters)")
+    cb.set_label("S under New+J (colour of the scatters)")
+    if has_rel:
+        ax, rel = axes[4], np.array([x["S_rel"] for x in recs])
+        ax.scatter(S["NJ"], rel, c=S["NJ"], cmap="viridis", s=16, edgecolors="none")
+        ia, ib = int(np.argmax(S["NJ"])), int(np.argmax(rel))
+        ax.scatter([S["NJ"][ia]], [rel[ia]], s=120, facecolors="none", edgecolors="k", lw=1.3, label="best by New+J")
+        ax.scatter([S["NJ"][ib]], [rel[ib]], s=120, marker="s", facecolors="none", edgecolors="k", lw=1.3,
+                   label="best by relative")
+        ax.set_title(f"New+J vs relative (Spearman {summ['spearman'].get('NJ-REL', float('nan')):.2f})")
+        ax.set_xlabel("S under New+J")
+        ax.set_ylabel("relative S: New+J / own 0° reference (floor 0.05)")
+        ax.legend(fontsize=8.5, frameon=False, loc="lower right")
     fig.savefig(out)
     plt.close(fig)
     log("wrote", out)
@@ -964,12 +996,15 @@ def dep_summary(dep, scores=None):
     """Counts and words shared by the depgraph figure and the page captions (ordered-pair records)."""
     status = str(dep.get("status") or "?")
     ok, rejected, cycle = status == "ok", status == "gate", status == "cycle"
+    mutual = status == "mutual_support"                    # v20: need both ways, a diagnostic build (pair together)
+    mpairs = [tuple(sorted(map(str, p))) for p in dep.get("mutual_support") or []]
     unsettled = status == "resettle_failed"                # a re-settled goal the sequential build did not reach
     edges, two, count = dep_edges(dep)
     builds = dep.get("builds") or []
     last = builds[-1] if builds else {}
     nb = len(builds) or int((dep.get("kit") or {}).get("builds_run") or 0)
-    failed = None if ok or rejected or cycle or unsettled else (dep.get("failed_dish") or last.get("dish"))
+    failed = None if ok or rejected or cycle or unsettled else (dep.get("failed_dish") or (None if mutual else last.get("dish")))
+    built_ok = bool(dep.get("built_entries"))
     extra = [tuple(map(str, x[:2])) for x in dep.get("extra_constraints") or []]
     gate = dep.get("gate") if isinstance(dep.get("gate"), dict) else {}
     why = str(gate.get("reason") or str(gate.get("outcome") or "").replace("_", " ") or dep.get("reason") or "?")
@@ -989,14 +1024,27 @@ def dep_summary(dep, scores=None):
     elif unsettled:
         text = "the sequential build did not re-settle the goal" + (f" in {_plural(nr, 'build')}" if nr else "")
     elif cycle:
-        text = ("two-way pair" + ("s " if len(two) > 1 else " ") + ", ".join(f"{a} ⇄ {b}" for a, b in two) if two
-                else "a cycle") + ": no valid one-at-a-time order"
+        cyc = [p for p in two if p not in mpairs]
+        text = ("two-way pair" + ("s " if len(cyc) > 1 else " ") + ", ".join(f"{a} ⇄ {b}" for a, b in cyc) if cyc
+                else "a cycle") + ": no valid one-at-a-time order" + (
+                "; mutual support " + ", ".join(f"{a} ⇄ {b}" for a, b in mpairs) if mpairs else "")
+    elif mutual:
+        mv = last.get("moved")
+        text = ("mutual support " + ", ".join(f"{a} ⇄ {b}" for a, b in mpairs) + ": place together or re-roll; "
+                + ("the diagnostic build (each pair released together, not a benchmark move) lands every dish"
+                   if built_ok else "even the diagnostic build fails: " + (
+                       f"placing {failed} moved {', '.join(map(str, mv))}" if last.get("status") == "moved" and mv
+                       else f"{failed or '?'} had no clear release" if any(x.get("no_clear_release") for x in
+                                                                          last.get("steps") or [])
+                       else f"{failed or '?'} did not land")))
     elif ok:
         text = "acyclic, and the build in its order lands every dish"
     else:
         mv = last.get("moved")
+        stuck = [x for x in last.get("steps") or [] if x.get("no_clear_release")]   # v20: no clear release
         how = (f"placing {failed} moved {', '.join(map(str, mv))}" if last.get("status") == "moved" and mv
-               else f"{failed or '?'} did not land")
+               else f"{failed or '?'} had no clear release (blocked by {', '.join(map(str, stuck[-1].get('blockers') or []))})"
+               if stuck else f"{failed or '?'} did not land")
         text = f"acyclic, but no order built in {_plural(nb, 'build')}: {how}"
         if "cycle" in str(dep.get("reason") or ""):        # the build's learned constraints closed a cycle
             text += "; the learned constraints close a cycle"
@@ -1005,10 +1053,16 @@ def dep_summary(dep, scores=None):
     else:
         wv = "–" if nw is None else str(nw) + (" without the two-way pair" + ("s" if len(two) != 1 else "")
                                               if two else " with the cycle broken for the layout" if cycle else "")
-        bl = ("no build" if cycle else f"built in {_plural(nb, 'build')}, {_plural(len(extra), 'extra constraint')}"
+        bl = ("no build" if cycle else
+              f"diagnostic build {'ok' if built_ok else 'failed'} in {_plural(nb, 'build')}, "
+              f"{_plural(len(extra), 'extra constraint')}" if mutual else
+              f"built in {_plural(nb, 'build')}, {_plural(len(extra), 'extra constraint')}"
               if ok else f"no order in {_plural(nb, 'build')}, {_plural(len(extra), 'extra constraint')} learned")
+        lr = f", learned {count['learned']}" if count.get("learned") else ""
+        nm = len(mpairs)
+        tw = (f"cycles {nc - nm if mpairs else nc}" + (f", mutual support {nm}" if nm else ""))
         counts = (f"pairs tested {len(dep.get('pairs_tested') or [])}; edges {len(edges)} (knock {count['knock']}, "
-                  f"need {count['need']}, block {count['block']}); cycles {nc}; waves {wv}; {bl}")
+                  f"need {count['need']}, block {count['block']}{lr}); {tw}; waves {wv}; {bl}")
     S = {}
     for side in ("packed", "settled", "built"):
         rec = (scores or {}).get(side)
@@ -1019,6 +1073,7 @@ def dep_summary(dep, scores=None):
     peaks = [mm[k] for k in ("maximum_settle_penetration_m", "maximum_cycle_penetration_m") if k in mm]
     gs = gate.get("wall_seconds")
     return {"status": status, "ok": ok, "rejected": rejected, "cycle": cycle, "builds": nb, "failed": failed,
+            "mutual": mutual, "mutual_pairs": mpairs, "built_ok": built_ok,
             "extra": extra, "text": text, "counts": counts, "edges": edges, "two_way": two, "reasons": count,
             "n_edges": len(edges), "n_pairs": len(dep.get("pairs_tested") or []), "n_cycles": nc, "waves": waves,
             "n_waves": nw, "S": S, "pooling_built": built.get("pooling") if isinstance(built, dict) else None,
@@ -1061,8 +1116,8 @@ def fig_depgraph(dep, scores, kpts, out, resettled=False):
     from matplotlib.patches import FancyArrowPatch, Patch
     sm = dep_summary(dep, scores)
     rej = sm["rejected"]
-    if sm["ok"] and dep.get("built_entries"):
-        ents, posed = dep["built_entries"], "built"
+    if (sm["ok"] or sm["mutual"]) and dep.get("built_entries"):
+        ents, posed = dep["built_entries"], "diagnostic-built" if sm["mutual"] else "built"
     elif dep.get("entries_settled") and not rej:            # the targets: the jointly settled poses
         ents, posed = dep["entries_settled"], "re-settled goal" if resettled else "jointly settled"
     else:
@@ -1149,7 +1204,8 @@ def fig_depgraph(dep, scores, kpts, out, resettled=False):
             rad = 0.2 if rows else 0.0
         ax.add_patch(FancyArrowPatch(p, q, arrowstyle="<|-|>", mutation_scale=11, color=EDGE_DARK, linewidth=1.6,
                                      shrinkA=8, shrinkB=8, connectionstyle=f"arc3,rad={rad}", zorder=4))
-        ax.annotate("two-way", _arc_mid(ax, p, q, rad), xytext=(6, 0) if same else (0, 5), textcoords="offset points",
+        ax.annotate("mutual support" if (a, b) in sm["mutual_pairs"] else "two-way", _arc_mid(ax, p, q, rad),
+                    xytext=(6, 0) if same else (0, 5), textcoords="offset points",
                     ha="left" if same else "center", va="center" if same else "bottom", fontsize=9,
                     fontweight="bold", color=EDGE_DARK, zorder=8, path_effects=halo)
     crowd = {c: sum(1 for i in ids if col[i] == c) > 12 for c in set(col.values())}   # crowded: labels to the left
@@ -1206,8 +1262,11 @@ def fig_depgraph(dep, scores, kpts, out, resettled=False):
         axr.set_title(f"top, {'lower' if k == 0 else 'upper'} rack: {len(mine)} dishes at their {posed} poses",
                       fontsize=10)
     handles, hmap = [], {}
+    cyc2 = [p for p in two if p not in sm["mutual_pairs"]]
     for style, lab, show in (("-|>", "A before B: only that order lands both dishes (reason in the JSON)", not rej),
-                             ("<|-|>", "two-way pair: no valid one-at-a-time order", bool(two))):
+                             ("<|-|>", "two-way pair: no valid one-at-a-time order", bool(cyc2)),
+                             ("<|-|>", "mutual support: each falls without the other (place together or re-roll)",
+                              bool(two) and len(cyc2) < len(two))):
         if show:
             h = FancyArrowPatch((0, 0), (1, 0), color=EDGE_DARK, linewidth=1.5, label=lab)
             handles.append(h)

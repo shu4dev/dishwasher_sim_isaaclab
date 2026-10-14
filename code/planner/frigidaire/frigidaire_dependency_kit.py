@@ -3,19 +3,31 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Isaac dependency graph of one 24-dish load (boot-first; one load per Kit process).
 
---edges pairs (the default, 2026-10-14): one edge type from ordered-pair drop tests on the goal load alone. Candidate
-pairs: every dish pair whose collision pieces (frigidaire_bench.bench_checker's convex parts) come within PAIR_M =
-20 mm at the target poses, any rack (FCL distance; FCL reports overlapping pieces as -1, recorded as 0 mm). A test
-parks its absent set S off-scene (as build_sequence parks), teleports every other dish to its exact target and
-re-settles that context 150 ticks (its poses = pre), then releases the dropped dish B at its target + the goal hover
-and settles 150 + 60 ticks: landed = the landing rule below and contact depth < 2 mm; disturbed = context dishes moved
-> 10 mm / 20 deg from pre. L(B): S = {B} (B dropped last into the full load), for every dish; R(A, B): S = {A, B},
-for both orientations of every candidate pair; every test runs once. Edges (a before b): knock (B, X) for every X
-that L(B) disturbed; need (A, B) when L(B) landed and R(A, B) did not; block (B, A) when L(B) did not land and R(A, B)
-did; one edge per (a, b) with its reasons. Edges both ways = a cycle (no valid one-at-a-time order): status 'cycle',
-no build. An acyclic graph is certified by build_sequence started from its edges (extra_constraints = what the build
-learned beyond them): status ok | no_order | landing | moved; a failed build keeps the complete graph and names the
-failing dish. Writes <out>/pairs/<load_id>.json (the random sampler: pairs_random/).
+--edges pairs (the default; procedure v20, 2026-10-14, research/2026-10-14-newj-curve-and-leaning-pairs.md; the
+first version, v18, wrote pairs/, pairs_more/, pairs_rerun/, pairs_perturbed/ and is in git history): ordered-pair
+tests on the goal load alone. Candidate pairs: every dish pair whose collision pieces (frigidaire_bench.bench_checker's
+convex parts) come within PAIR_M = 20 mm at the target poses, any rack (FCL distance; overlap recorded as 0 mm).
+A test parks its absent set S off-scene (as build_sequence parks), teleports every other dish to its exact target
+and re-settles that context 150 ticks; a context dish then outside its at-goal tolerance of its target has fallen:
+it is parked too and the context re-settled again (FALL_ROUNDS at most; recorded per test as parked_fallen, with every
+dish's lateral / dz / tilt from its target per round). The dropped dish B is released at its LOWEST CLEAR HOVER
+(frigidaire_bench.clear_release: its target raised in 1 mm steps along its rack's up axis until the pose passes the
+bench checker's 1 mm penetration allowance against every context dish at its re-settled pose and the appliance; past
+60 mm "no clear release": not landed, nothing dropped) and settled 150 + 60 ticks: landed = within the at-goal
+tolerance of its target and contact depth < 2 mm; disturbed = context dishes that end outside their own at-goal
+tolerance of their targets. L(B): S = {B}, for every dish; R(A, B): S = {A, B}, both orientations of every candidate
+pair. Each drop stores its margin to the five thresholds (lateral, height, tilt, contact, disturbance = the moved
+context dishes' goal distances); a drop within MARGIN = 20 % of any is rerun under 3 perturbed releases (3 mm / 3 deg,
+--perturb-* mechanism, seeds 1, 2, 3; 10 S + 1..3 with --perturb-seed S) and the majority is its verdict. Edges
+(a before b): need (B, X) for every X fallen in the first re-settle of L(B)'s context; knock (B, X) for every X the
+verdict of L(B) disturbed; block (B, A) when L(B)'s verdict did not land and R(A, B)'s did; one edge per (a, b) with
+its reasons. A two-way pair with need both ways is mutual support ("place together or re-roll"); any other two-way
+pair has its drops (L(a), L(b), R(a, b), R(b, a)) retested under the 3 perturbed releases and, if it stays, is a
+cycle. Status: cycle (a cycle pair, or a cycle once each mutual pair is one node; no build); mutual_support (a
+diagnostic build_sequence with each mutual pair released together at its targets + one clear hover, the rest one at a
+time: not a benchmark move); otherwise build_sequence started from the edges certifies the graph: ok | no_order |
+landing | moved, a failed build names the failing dish. Every constraint a build learns beyond the edges joins the
+graph with reason "learned" (extra_constraints). Writes <out>/pairs/<load_id>.json (the random sampler: pairs_random/).
 
 --goal built (with --edges pairs, 2026-10-14; the default gate tests the targets as they are): a jointly settled goal
 may hold a two-way pair, two dishes that only settle that way together, so it cannot be built one dish at a time.
@@ -32,7 +44,8 @@ resettle_initial, resettle_rule and original (the pairs record read, or null); e
 
 --perturb-mm X --perturb-deg Y --perturb-seed S (--edges pairs; default 0 0 0 = unperturbed): the settle is
 deterministic (a rerun reproduced every drop bit for bit), so a plain rerun measures nothing. With X or Y > 0 each L
-and R drop commands the dropped dish at its target + the goal hover, yawed U(-Y, Y) deg about the world Z axis
+and R drop commands the dropped dish at its release pose (v20: the lowest clear hover found at the unperturbed
+target; v18: target + the goal hover), yawed U(-Y, Y) deg about the world Z axis
 through its visual centroid, then shifted by a point uniform in the disc of radius X mm in its rack's plane (numpy
 default_rng((S, test number)), reproducible); the context dishes, the resettle and the certifying build are never
 perturbed, and landing is judged against the unperturbed target (and command) with the same tolerances. Per test
@@ -61,7 +74,8 @@ Per load, from the repo root (<id> e.g. r05_00014):
     on closure_failure (the rack-speed flake) gate_unit reruns it once lower first: the same command with
     --order lower_first --out-dir data/results/dot_rules/dependency/restricted/_gate/<id>_lower_first, then give
     (c) that directory if it is accepted
-(c) the graph (24 + 2 x pairs drops of 150 + 210 ticks, then the certifying build: about 25-40 min of Kit per load):
+(c) the graph (24 + 2 x pairs drops of 150 + 210 ticks, the fallen-context, marginal and two-way reruns, then the
+    certifying build: about 35-70 min of Kit per load):
     code/util/run_kit.sh code/planner/frigidaire/frigidaire_dependency_kit.py --sampler restricted --load <id> --gate data/results/dot_rules/dependency/restricted/_gate/<id> --edges pairs --max-wall-seconds 7200 --headless
     (--goal built: the goal re-settled one dish at a time first, 1-8 more builds; --edges build --force: the
     2026-10-13 build-learned graph)
@@ -82,8 +96,13 @@ import traceback
 ROOT = Path(__file__).resolve().parents[3]
 RACK_FRAMES = ("LowerRack", "UpperRack", "SilverwareBasket")
 PAIR_M = .02                      # --edges pairs: candidate pairs' collision pieces within 20 mm at the target poses
-REASONS = ("knock", "need", "block")
-LANDING_TAIL = "contact depth < 2 mm; no placed dish moved > 10 mm / 20 deg"
+REASONS = ("knock", "need", "block", "learned")
+MARGIN = .2                       # a drop within 20 % of any of its five thresholds is rerun under 3 perturbed releases
+RERUN_MM, RERUN_DEG, RERUN_SEEDS = 3., 3., (1, 2, 3)   # seeds 10 S + 1..3 with --perturb-seed S (1, 2, 3 unperturbed)
+MOVED_MM, MOVED_DEG = 1., 1.      # a context dish the drop moved by more: its goal distance enters the disturbance margin
+FALL_ROUNDS = 4                   # context re-settles: the fallen are parked and the context re-settled, at most 4 rounds
+LANDING_TAIL = ("contact depth < 2 mm; released at the lowest clear hover; no placed dish at its goal ends outside its "
+                "at-goal tolerance (a placed dish not at its goal: moved > 10 mm / 20 deg)")
 
 
 class Refused(Exception):
@@ -302,21 +321,43 @@ def candidate_pairs(checker, entries, targets, max_m=PAIR_M):
 
 
 def graph_edges(tests):
-    """({(a, b): [reasons]}, two-way pairs [a, b] with a < b) from the drop tests (module docstring)."""
+    """{(a, b): [reasons]} from the v20 tests (module docstring): knock (B, X) for every X the verdict of L(B) disturbed
+    (ended outside its at-goal tolerance), need (B, X) for every X outside its tolerance after the first re-settle of
+    L(B)'s context, block (B, A) when L(B)'s verdict did not land and R(A, B)'s did."""
     last = {t["dish"]: t for t in tests if not t["removed"]}
     reasons = {}
     for b, t in last.items():
-        for x in t["disturbed"]:
+        for x in t["verdict"]["disturbed"]:
             reasons.setdefault((b, x), set()).add("knock")
+        for x in t["context_rounds"][0]["fallen"]:
+            reasons.setdefault((b, x), set()).add("need")
     for t in tests:
         if t["removed"]:
             a, b = t["removed"][0], t["dish"]
-            if last[b]["landed"] and not t["landed"]:
-                reasons.setdefault((a, b), set()).add("need")
-            elif not last[b]["landed"] and t["landed"]:
+            if not last[b]["verdict"]["landed"] and t["verdict"]["landed"]:
                 reasons.setdefault((b, a), set()).add("block")
-    edges = {e: [r for r in REASONS if r in rs] for e, rs in sorted(reasons.items())}
-    return edges, sorted([a, b] for a, b in edges if a < b and (b, a) in edges)
+    return {e: [r for r in REASONS if r in rs] for e, rs in sorted(reasons.items())}
+
+
+def two_way(edges):
+    """[[a, b], class] for every pair with edges both ways (a < b): mutual_support when both carry need, else cycle."""
+    return [[[a, b], "mutual_support" if "need" in edges[(a, b)] and "need" in edges[(b, a)] else "cycle"]
+            for a, b in sorted(edges) if a < b and (b, a) in edges]
+
+
+def groups_of(pairs):
+    """{dish: representative} merging the given pairs (union-find; representative = smallest id)."""
+    rep = {}
+
+    def find(i):
+        while rep.get(i, i) != i:
+            i = rep[i]
+        return i
+    for a, b in pairs:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            rep[max(ra, rb)] = min(ra, rb)
+    return {i: find(i) for i in {x for p in pairs for x in p}}
 
 
 def first_order(path):
@@ -373,8 +414,9 @@ def perturb(T_cmd, centroid, R_rack, lateral_m, yaw_deg, seed, index):
 
 
 def pairs(args, source, entries, gate, out_path, kit_dir, report, started):
-    """--edges pairs: the ordered-pair drop tests, their graph and its certifying build (module docstring); with
-    --goal built the goal is first re-settled one dish at a time and the tests run on the built poses."""
+    """--edges pairs: the v20 ordered-pair test (module docstring), its graph and its certifying (or, for mutual
+    support, diagnostic) build; with --goal built the goal is first re-settled one dish at a time and the tests run on
+    the built poses."""
     import numpy as np
     import frigidaire_bench as B
     import frigidaire_bench_kit as K
@@ -426,10 +468,13 @@ def pairs(args, source, entries, gate, out_path, kit_dir, report, started):
     runs = [(i, []) for i in ids]                                   # L(B), then R(A, B) both ways per candidate pair
     for a, b, _ in pair_list:
         runs += [(b, [a]), (a, [b])]
-    on = bool(args.perturb_mm or args.perturb_deg)                 # --perturb-*: the L and R drops only
+    on = bool(args.perturb_mm or args.perturb_deg)                 # --perturb-*: the L and R drops
     shaken = (f" perturb {args.perturb_mm:g} mm {args.perturb_deg:g} deg seed {args.perturb_seed}" if on else "")
+    seeds = tuple(10 * args.perturb_seed + s for s in RERUN_SEEDS)
     print(f"pairs {args.load} ({args.sampler}, targets {targets_source}): {len(entries)} dishes, {len(pair_list)} "
-          f"candidate pairs within {PAIR_M * 1e3:.0f} mm, {len(runs)} drops; landing = {rule}"
+          f"candidate pairs within {PAIR_M * 1e3:.0f} mm, {len(runs)} drops; landing = {rule}; release = lowest clear "
+          f"hover ({B.RELEASE_RULE}, {B.RELEASE_STEP_M * 1e3:g} mm steps, cap {B.RELEASE_CAP_M * 1e3:g} mm); marginal "
+          f"reruns {RERUN_MM:g} mm {RERUN_DEG:g} deg seeds {list(seeds)}"
           + (f";{shaken} (offset uniform in the disc, yaw uniform)" if on else ""), flush=True)
     if backend is None:
         backend = K._sequence_scene(args, B, entries, snapshot, kit_dir, report)
@@ -437,110 +482,237 @@ def pairs(args, source, entries, gate, out_path, kit_dir, report, started):
             raise Refused("the extended baseline did not hold")
     park = {i: {"position_m": [3. + .4 * j, 2., .3], "quaternion_xyzw": [0., 0., 0., 1.]} for j, i in enumerate(by_id)}
     limit = LIMITS["peak_penetration_m"]
+    checker = B.release_checker()
+    kind = {i: by_id[i]["kind"] for i in ids}
+    goals = {i: P.pose_T(targets[i]) for i in ids}
+    tol = {i: B.AT_GOAL[kind[i]] for i in ids}
+    rack_R = {i: P.pose_T(frames[by_id[i]["rack"]])[:3, :3] for i in ids}
+    state = {}
 
-    def drop(dish, removed, index):
-        absent = {dish, *removed}
-        for i in ids:                                               # the context: S parked, the rest at the targets
-            backend.set_rigid_pose(backend.objects[i], park[i] if i in absent else targets[i])
-        for _ in range(K.SETTLE_TICKS):
-            backend.tick()
-        context = [i for i in ids if i not in absent]
-        now = backend.poses()
-        pre = {i: P.pose_T(now[i]) for i in context}
-        drift = max((float(np.linalg.norm(pre[i][:3, 3] - np.asarray(targets[i]["position_m"], dtype=float)))
-                     for i in context), default=0.)
-        T_goal = P.pose_T(targets[dish])
-        T_cmd = T_goal.copy()
-        T_cmd[2, 3] += B.GOAL_HOVER_M
-        kind = by_id[dish]["kind"]
-        T_drop, off = T_cmd, (0., 0., 0.)
-        if on:                                                      # landing stays judged against T_goal and T_cmd
-            T_drop, off = perturb(T_cmd, centroids[kind], P.pose_T(frames[by_id[dish]["rack"]])[:3, :3],
-                                  args.perturb_mm * 1e-3, args.perturb_deg, args.perturb_seed, index)
-        backend.set_rigid_pose(backend.objects[dish], P.pose_dict(T_drop))
+    def gd(i, T):
+        return B.goal_distance(centroids[kind[i]], T, goals[i])
+
+    def mm3(d):
+        return [round(d[0] * 1e3, 1), round(d[1] * 1e3, 1), round(d[2], 1)]
+
+    def context(absent0):
+        """Park ``absent0``, every other dish at its target, re-settle 150 ticks; while a context dish ends outside its
+        at-goal tolerance (fallen), park it too and re-settle again (FALL_ROUNDS at most). (poses, absent, rounds)."""
+        absent, rounds = set(absent0), []
+        while True:
+            for i in ids:
+                backend.set_rigid_pose(backend.objects[i], park[i] if i in absent else targets[i])
+            for _ in range(K.SETTLE_TICKS):
+                backend.tick()
+            now = backend.poses()
+            drift = {i: gd(i, P.pose_T(now[i])) for i in ids if i not in absent}
+            fallen = sorted(i for i, d in drift.items() if not B.within_goal(kind[i], d))
+            rounds.append({"parked": sorted(absent - set(absent0)), "fallen": fallen,
+                           "drift": {i: mm3(d) for i, d in drift.items()}})
+            if not fallen or len(rounds) >= FALL_ROUNDS:
+                return now, absent, rounds
+            absent |= set(fallen)
+
+    def drop(dish, removed, index, seed=None, mm=0., deg=0.):
+        """One drop of ``dish`` with ``removed`` absent (module docstring), released at its lowest clear hover above
+        the target (with ``seed``: that release pose perturbed by ``mm`` / ``deg``, as --perturb-* does)."""
+        now, absent, rounds = context({dish, *removed})
+        ctx = [i for i in ids if i not in absent]
+        pre = {i: P.pose_T(now[i]) for i in ctx}
+        if "appliance" not in state:
+            state["appliance"] = B.appliance_bodies(checker, now)
+        off = (0., 0., 0.)
+        close = B.near_poses({i: now[i] for i in ctx}, kind, targets[dish]["position_m"])
+        bodies = [checker._body(kind[i], pose, i) for i, pose in close.items()]
+        release, hover, blockers = B.clear_release(checker, [(kind[dish], targets[dish], dish)], bodies,
+                                                   state["appliance"], rack_R[dish][:, 2])
+        if release is not None and seed is not None:                # the release pose perturbed (the --perturb-*
+            T, off = perturb(P.pose_T(release[0]), centroids[kind[dish]], rack_R[dish], mm * 1e-3, deg, seed, index)
+            release = [P.pose_dict(T)]                              # mechanism); landing judged against the target
+        out = {"dish": dish, "removed": list(removed), "index": index, "seed": seed,
+               "parked_fallen": sorted(absent - {dish, *removed}), "context_rounds": rounds,
+               "context_valid": not rounds[-1]["fallen"],
+               "context_drift_mm": round(max((float(np.linalg.norm(pre[i][:3, 3] - goals[i][:3, 3])) * 1e3 for i in ctx),
+                                             default=0.), 1),
+               "dx_mm": round(off[0], 2), "dy_mm": round(off[1], 2), "yaw_deg": round(off[2], 2)}
+        if release is None:                                         # no clear release: not landed, nothing dropped
+            out.update(landed=False, no_clear_release=True, hover_mm=None, blockers=blockers, lateral_mm=None,
+                       dz_mm=None, tilt_deg=None, contact_mm=None, disturbed=[], moved={}, margins={}, marginal=[])
+            return out
+        backend.set_rigid_pose(backend.objects[dish], release[0])
         for _ in range(K.SETTLE_TICKS + K.WINDOW_TICKS):
             backend.tick()
         now = backend.poses()
-        post = {i: P.pose_T(now[i]) for i in [*context, dish]}
-        dist = B.goal_distance(centroids[kind], post[dish], T_goal)
-        dev = float(np.linalg.norm(post[dish][:3, 3] - T_cmd[:3, 3]))
+        post = {i: P.pose_T(now[i]) for i in [*ctx, dish]}
+        dist = gd(dish, post[dish])
+        dev = float(np.linalg.norm(post[dish][:3, 3] - np.asarray(release[0]["position_m"], dtype=float)))
         deep = float(max((d for name, d in backend.latest_contact["depths_m"].items() if dish in name.split("|")),
                          default=0.))
-        moved = R.disturbed_items({**pre, dish: T_goal}, post, dish)
-        return {"dish": dish, "removed": list(removed), "landed": bool(landing(kind, dist, dev)) and deep < limit,
-                "lateral_mm": round(dist[0] * 1e3, 1), "dz_mm": round(dist[1] * 1e3, 1), "tilt_deg": round(dist[2], 1),
-                "contact_mm": round(deep * 1e3, 2),
-                "disturbed": {i: [round(float(np.linalg.norm(post[i][:3, 3] - pre[i][:3, 3])) * 1e3, 1),
-                                  round(R.rot_angle_deg(pre[i], post[i]), 1)] for i in moved},
-                "context_drift_mm": round(drift * 1e3, 1),
-                "dx_mm": round(off[0], 2), "dy_mm": round(off[1], 2), "yaw_deg": round(off[2], 2)}
+        after = {i: gd(i, post[i]) for i in ctx}
+        moved = {}
+        for i in ctx:
+            dp, dr = float(np.linalg.norm(post[i][:3, 3] - pre[i][:3, 3])) * 1e3, R.rot_angle_deg(pre[i], post[i])
+            if dp > MOVED_MM or dr > MOVED_DEG:
+                moved[i] = {"moved_mm": round(dp, 1), "moved_deg": round(dr, 1), "goal": mm3(after[i])}
+        t = tol[dish]
+        margins = {"lateral": (t[0] - dist[0]) / t[0], "height": (t[1] - dist[1]) / t[1],
+                   "tilt": (t[2] - dist[2]) / t[2], "contact": (limit - deep) / limit}
+        near = [(tol[i][c] - after[i][c]) / tol[i][c] for i in moved for c in range(3)]
+        margins["disturbance"] = min(near, key=abs) if near else None
+        out.update(landed=bool(landing(kind[dish], dist, dev)) and deep < limit, no_clear_release=False,
+                   hover_mm=round(hover * 1e3), blockers=[], lateral_mm=round(dist[0] * 1e3, 1),
+                   dz_mm=round(dist[1] * 1e3, 1), tilt_deg=round(dist[2], 1), contact_mm=round(deep * 1e3, 2),
+                   disturbed=sorted(i for i in ctx if not B.within_goal(kind[i], after[i])), moved=moved,
+                   margins={k: None if v is None else round(v, 3) for k, v in margins.items()},
+                   marginal=[k for k, v in margins.items() if v is not None and abs(v) <= MARGIN])
+        return out
+
+    def verdict(t):
+        """The single drop's verdict, or the majority of its 3 perturbed reruns."""
+        rs = t.get("reruns")
+        if not rs:
+            t["verdict"] = {"landed": t["landed"], "disturbed": t["disturbed"], "source": "single"}
+        else:
+            hits = [x for r in rs for x in r["disturbed"]]
+            t["verdict"] = {"landed": sum(r["landed"] for r in rs) * 2 > len(rs),
+                            "disturbed": sorted(x for x in set(hits) if hits.count(x) * 2 > len(rs)),
+                            "source": f"majority of {len(rs)} perturbed releases"}
+        return t
+
+    def label(t):
+        return f"{t['dish']} " + (f"without {t['removed'][0]}" if t["removed"] else "last")
+
+    def show(t, head):
+        print(f"{head} {label(t)}" + (f" seed {t['seed']} offset {t['dx_mm']} {t['dy_mm']} mm yaw {t['yaw_deg']} deg"
+                                      if t["seed"] is not None else "")
+              + (f" parked fallen {t['parked_fallen']}" if t["parked_fallen"] else "")
+              + (f": no clear release (blockers {t['blockers']})" if t["no_clear_release"] else
+                 f": hover {t['hover_mm']} mm landed {t['landed']} lateral {t['lateral_mm']} dz {t['dz_mm']} mm tilt "
+                 f"{t['tilt_deg']} deg contact {t['contact_mm']} mm disturbed {t['disturbed'] or '-'} marginal "
+                 f"{t['marginal'] or '-'}")
+              + f" need {t['context_rounds'][0]['fallen'] or '-'} drift {t['context_drift_mm']} mm "
+                f"({time.monotonic() - t0:.0f} s)", flush=True)
+
+    def rerun(t, why):
+        if t.get("reruns"):
+            return False
+        t["reruns"], t["rerun_reason"] = [], why
+        for sd in seeds:
+            r = drop(t["dish"], t["removed"], t["index"], sd, RERUN_MM, RERUN_DEG)
+            t["reruns"].append(r)
+            show(r, f"  rerun ({why})")
+        verdict(t)
+        print(f"  verdict {label(t)}: landed {t['verdict']['landed']} disturbed {t['verdict']['disturbed'] or '-'} "
+              f"({t['verdict']['source']})", flush=True)
+        return True
 
     tests, t0 = [], time.monotonic()
     for k, (dish, removed) in enumerate(runs, 1):
-        t = drop(dish, removed, k)
-        tests.append(t)
-        print(f"test {k}/{len(runs)} {dish} " + (f"without {removed[0]}" if removed else "last") +
-              (f" offset {t['dx_mm']} {t['dy_mm']} mm yaw {t['yaw_deg']} deg" if on else "") +
-              f": landed {t['landed']} lateral {t['lateral_mm']} dz {t['dz_mm']} mm tilt {t['tilt_deg']} deg "
-              f"contact {t['contact_mm']} mm drift {t['context_drift_mm']} mm disturbed {t['disturbed'] or '-'} "
-              f"({time.monotonic() - t0:.0f} s)", flush=True)
+        t = drop(dish, removed, k, args.perturb_seed if on else None, args.perturb_mm, args.perturb_deg)
+        tests.append(verdict(t))
+        show(t, f"test {k}/{len(runs)}")
     drop_seconds = time.monotonic() - t0
-    edges, cycles = graph_edges(tests)
+    for t in tests:                                                 # margins: 3 perturbed releases, majority
+        if t["marginal"]:
+            rerun(t, "margin " + "+".join(t["marginal"]))
+    margin_seconds = time.monotonic() - t0 - drop_seconds
+    edges = graph_edges(tests)
+    for _ in range(3):                                              # two-way pairs without need both ways: retested
+        todo = [p for p, cls in two_way(edges) if cls == "cycle"]
+        fresh = [rerun(t, "two-way " + "-".join(p)) for p in todo for t in tests
+                 if (not t["removed"] and t["dish"] in p) or (t["removed"] and {t["dish"], t["removed"][0]} == set(p))]
+        if not any(fresh):
+            break
+        edges = graph_edges(tests)
+    retest_seconds = time.monotonic() - t0 - drop_seconds - margin_seconds
+    pairs2 = two_way(edges)
+    mutual = [p for p, cls in pairs2 if cls == "mutual_support"]
+    cycles = [p for p, cls in pairs2 if cls == "cycle"]
     goal_order = sorted(edges)
-    count = {r: sum(r in rs for rs in edges.values()) for r in REASONS}
-    waves = layers(ids, goal_order)
+    count = {r: sum(r in rs for rs in edges.values()) for r in REASONS[:3]}
+    rep = groups_of(mutual)
+    node = {i: rep.get(i, i) for i in ids}
+    contracted = sorted({(node[a], node[b]) for a, b in goal_order if node[a] != node[b]})
+    open_order = [e for e in goal_order if node[e[0]] != node[e[1]]]   # the graph minus the mutual pairs' own edges
+    waves = layers(ids, open_order) if layers(sorted(set(node.values())), contracted) is not None else None
     n_waves = max(waves.values()) + 1 if waves is not None else None
     print(f"graph: {len(edges)} edges ({', '.join(f'{r} {n}' for r, n in count.items())}), cycles {cycles or '-'}, "
-          f"waves {n_waves if n_waves is not None else 'none'}", flush=True)
+          f"mutual support {mutual or '-'}, waves {n_waves if n_waves is not None else 'none'}", flush=True)
 
-    builds, extra, order, poses_world, built_entries, failed = [], [], [], targets, [], None
+    builds, extra, order, poses_world, built_entries, failed, diagnostic = [], [], [], targets, [], None, False
     if waves is None:
         status = "cycle"
         reason = "no valid one-at-a-time order: " + (
             "two-way pairs " + ", ".join(f"{a} <-> {b}" for a, b in cycles) if cycles
-            else "the edges form a cycle through more than two dishes")
+            else "the edges form a cycle through more than two dishes") + (
+            f"; mutual support {', '.join(f'{a} <-> {b}' for a, b in mutual)}" if mutual else "")
     else:
-        built, record, _ = K.build_sequence(backend, B, P, by_id, targets, centroids, landing, initial=goal_order)
+        together = [sorted(i for i in ids if node[i] == r) for r in sorted(set(rep.values()))]
+        diagnostic = bool(together)
+        built, record, _ = K.build_sequence(backend, B, P, by_id, targets, centroids, landing, initial=open_order,
+                                            together=together)
         builds = record["builds"]
         for k, b in enumerate(builds):
-            print(f"build {k + 1}: {b['status']} {b['dish'] or ''} {b['moved'] or ''}", flush=True)
+            print(f"{'diagnostic ' if diagnostic else ''}build {k + 1}: {b['status']} {b['dish'] or ''} "
+                  f"{b['moved'] or ''}", flush=True)
         learned = sorted(tuple(x) for x in record["learned"])
-        extra = sorted(set(learned) - set(goal_order))
+        extra = sorted(set(learned) - set(open_order))
         order = record.get("order") or builds[-1]["order"]
         if built == "ok":
-            status = "ok"
             poses_world = record["poses_world"]
             built_entries = local_entries(P, entries, frames, poses_world)
         else:
-            status = "no_order" if len(builds) >= K.SEQUENCE_BUILDS else builds[-1]["status"]
             failed = builds[-1]["dish"]
-        reason = (record["reason"] + f"; {len(extra)} constraint(s) learned beyond the graph's {len(goal_order)} edges"
-                  + ("; the learned constraints close a cycle" if layers(ids, learned) is None else ""))
-    dep = {"load_id": args.load, "sampler": args.sampler, "source": rel(source), "status": status, "reason": reason,
-           "pairs_tested": pair_list, "tests": tests,
-           "edges": [{"a": a, "b": b, "reasons": rs} for (a, b), rs in edges.items()], "cycles": cycles,
-           "goal_order": [list(x) for x in goal_order], "order": order, "builds": builds,
-           "extra_constraints": [list(x) for x in extra], "waves": waves, "n_waves": n_waves,
-           "acyclic": waves is not None, "failed_dish": failed, "entries": entries, "targets_source": targets_source,
-           "targets_world": targets, "poses_world": poses_world, "entries_settled": entries_settled,
-           "built_entries": built_entries, "frames": frames, "landing_rule": rule,
+        tail = (f"; {len(extra)} constraint(s) learned beyond the graph's {len(open_order)} edges"
+                + ("; the learned constraints close a cycle" if layers(ids, learned) is None else ""))
+        if diagnostic:
+            status = "mutual_support"
+            reason = (f"place together or re-roll: mutual support {', '.join(f'{a} <-> {b}' for a, b in mutual)}; "
+                      f"diagnostic build (each pair released together, not a benchmark move): {record['reason']}{tail}")
+        else:
+            status = "ok" if built == "ok" else "no_order" if len(builds) >= K.SEQUENCE_BUILDS else builds[-1]["status"]
+            reason = record["reason"] + tail
+        for a, b in extra:                                          # learned constraints join the graph
+            edges[(a, b)] = edges.get((a, b), []) + ["learned"]
+        if built == "ok" and layers(ids, open_order + extra) is not None:
+            waves = layers(ids, open_order + extra)
+            n_waves = max(waves.values()) + 1
+    dep = {"load_id": args.load, "sampler": args.sampler, "source": rel(source), "procedure": "v20", "status": status,
+           "reason": reason, "pairs_tested": pair_list, "tests": tests,
+           "edges": [{"a": a, "b": b, "reasons": rs} for (a, b), rs in sorted(edges.items())],
+           "two_way": [{"pair": p, "class": cls, "reasons_ab": edges.get(tuple(p), []),
+                        "reasons_ba": edges.get(tuple(p[::-1]), [])} for p, cls in pairs2],
+           "cycles": cycles, "mutual_support": mutual, "goal_order": [list(x) for x in goal_order], "order": order,
+           "builds": builds, "diagnostic": diagnostic, "extra_constraints": [list(x) for x in extra], "waves": waves,
+           "n_waves": n_waves, "acyclic": waves is not None, "failed_dish": failed, "entries": entries,
+           "targets_source": targets_source, "targets_world": targets, "poses_world": poses_world,
+           "entries_settled": entries_settled, "built_entries": built_entries, "frames": frames, "landing_rule": rule,
            "thresholds": {"at_goal": {k: {"lateral_mm": round(v[0] * 1e3, 3), "dz_mm": round(v[1] * 1e3, 3),
                                           "tilt_deg": v[2]} for k, v in B.AT_GOAL.items()},
-                          "disturb_mm": round(R.DISTURB_POS_M * 1e3, 3), "disturb_deg": R.DISTURB_ROT_DEG,
-                          "contact_limit_mm": round(limit * 1e3, 3), "hover_mm": round(B.GOAL_HOVER_M * 1e3, 3),
+                          "disturbed": "a context dish outside its at-goal tolerance of its target after the drop",
+                          "contact_limit_mm": round(limit * 1e3, 3),
+                          "release": {"rule": B.RELEASE_RULE, "allowance_mm": round(checker.penetration_limit_m * 1e3, 3),
+                                      "step_mm": round(B.RELEASE_STEP_M * 1e3, 3), "cap_mm": round(B.RELEASE_CAP_M * 1e3, 3),
+                                      "near_m": B.RELEASE_NEAR_M},
+                          "margin": MARGIN, "rerun": {"lateral_mm": RERUN_MM, "yaw_deg": RERUN_DEG, "seeds": list(seeds)},
+                          "moved_mm": MOVED_MM, "moved_deg": MOVED_DEG, "fall_rounds": FALL_ROUNDS,
                           "context_ticks": K.SETTLE_TICKS, "drop_ticks": K.SETTLE_TICKS + K.WINDOW_TICKS,
                           "physics_hz": 120, "candidate_mm": round(PAIR_M * 1e3, 3)},
            "perturbation": perturbation(args),
            "gate": gate_info(args, gate) if gate is not None else None, **resettle,
            "kit": {"wall_seconds": round(time.monotonic() - started, 1), "drops": len(tests),
-                   "drop_wall_seconds": round(drop_seconds, 1), "builds_run": len(builds), **kit_resettle},
+                   "reruns": sum(len(t.get("reruns") or []) for t in tests),
+                   "drop_wall_seconds": round(drop_seconds, 1), "margin_wall_seconds": round(margin_seconds, 1),
+                   "retest_wall_seconds": round(retest_seconds, 1), "builds_run": len(builds), **kit_resettle},
            "generated_utc": datetime.now(timezone.utc).isoformat()}
     write_record(args, out_path, dep)
+    reruns = sum(bool(t.get("reruns")) for t in tests)
     report.update(result="PASS", status=status, dependency=rel(out_path),
-                  reason=head + f"status {status} pairs {len(pair_list)} drops {len(tests)} edges {len(edges)} "
-                         f"(knock {count['knock']} need {count['need']} block {count['block']}) cycles {len(cycles)} "
-                         f"builds {len(builds)} extra {len(extra)} waves {n_waves if n_waves is not None else 'none'} "
-                         f"targets {targets_source}{shaken}")
+                  reason=head + f"status {status} pairs {len(pair_list)} drops {len(tests)} reruns {reruns} edges "
+                         f"{len(edges)} (knock {count['knock']} need {count['need']} block {count['block']} learned "
+                         f"{len(extra)}) cycles {len(cycles)} mutual {len(mutual)} builds {len(builds)}"
+                         f"{' diagnostic' if diagnostic else ''} extra {len(extra)} waves "
+                         f"{n_waves if n_waves is not None else 'none'} targets {targets_source}{shaken}")
 
 
 def gate_failed(args, source, entries, gate, out_path, report, status="gate", reason=None, **fields):
