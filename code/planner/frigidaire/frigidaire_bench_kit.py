@@ -431,7 +431,7 @@ def start(args, B, report):
 
 # --------------------------------------------------------------------------- --sequence
 
-def build_sequence(backend, B, P, by_id, targets, centroids, landing):
+def build_sequence(backend, B, P, by_id, targets, centroids, landing, initial=()):
     """Build a load in Isaac one dish at a time, lowest centre first (a valid order for "rests on"), each commanded
     at its target pose + the goal hover and settled like a move (150 + 60 ticks): every dish must pass ``landing``
     (the goal: within the at-goal tolerance of its jointly settled pose; an own load: within the episode's settle
@@ -439,7 +439,9 @@ def build_sequence(backend, B, P, by_id, targets, centroids, landing):
     > 10 mm / 20 deg. Dense HOTEC loads lean on each other (shingled plates, tilted upper bowls), so "any order" is
     impossible (a solo-clearance rule banned the standard upper bowl pair and adjacent plates); this certifies ONE
     order. The built poses become the targets, and their support edges become the goal-order constraints the
-    planners see. ``targets`` = {id: world pose dict}; returns (status, record, bans)."""
+    planners see. ``targets`` = {id: world pose dict}; ``initial`` = (a before b) constraints the learned set starts
+    from (an acyclic set, e.g. a dependency graph's edges; empty for the benchmark), so record["learned"] includes
+    them; returns (status, record, bans)."""
     import numpy as np
     from dishsim import rearrange as R
     from dishsim_frigidaire.random_poses import LIMITS
@@ -497,7 +499,7 @@ def build_sequence(backend, B, P, by_id, targets, centroids, landing):
             placed.append(oid)
         return "ok", None, None, steps
 
-    learned, builds, status, bans = set(), [], None, []
+    learned, builds, status, bans = set(map(tuple, initial)), [], None, []
     order = topo(learned)
     for _ in range(SEQUENCE_BUILDS):
         status, x, moved, steps = build(order)

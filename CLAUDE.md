@@ -271,7 +271,3 @@ and stop jobs by PID, never broad `pkill -f` in the shared container.
 ## Research workflow (repo)
 - Files: research/ (lit notes), plans/ (plans), data/results/<slug>.md (run notes). Templates: research/TEMPLATE.md, plans/TEMPLATE.md.
 - Runners: experiment-runner for experiments, refactorer for structure changes. Invoke with the plan path.
-- How to run things here (FILL IN):
-  - Environment: <conda activate X | uv run | docker compose run ...>
-  - Smoke run, under 2 min: <command>
-  - Data / checkpoints / logs: <paths>
