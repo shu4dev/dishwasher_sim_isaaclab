@@ -38,6 +38,18 @@ repo's data roots are symlinks there and the root disk must gain nothing. The co
 as root, so files it writes are root-owned: clean them via `docker exec dishsim-isaac rm`,
 never host sudo.
 
+**Brev box** (`isaac-launchable-2dd875`, 1x L4, 32 vCPU, 128 GB; runs happen there since
+2026-10-08, recipe under "Research workflow (repo)"): the compose.yaml, 2 TB-drive and shared-GPU
+rules above do not apply (user, 2026-10-08). The image `dishsim-isaac:4.5.0` is built from
+`code/util/docker/Dockerfile`; the long-lived container `dishsim-isaac` bind-mounts the repo at
+`/workspace/dishsim`. Up to about 14 parallel Kit workers, one physical core each (cpus j and
+j+16, pinned with taskset inside the container; a host taskset only pins the docker CLI); leave
+cores 14 and 15 for GPU or scoring jobs. The RTX renderer segfaults there when Kit enables Hydra
+(driver 595.71 is newer than Isaac Sim 4.5 supports; found 2026-10-09), so every
+`--enable_cameras` run, `kit_smoke.py` included, crashes; physics-only Kit runs work, and stills
+come from `code/planner/frigidaire/frigidaire_dot_rules_render.py` (Warp ray tracing of the same
+meshes).
+
 **Git is handled by the user, not by Claude** — no branches, commits, or pushes from
 sessions; end each work phase with a summary and a suggested commit message (imperative
 ~50-char subject, no AI attribution/co-author lines).
@@ -253,6 +265,19 @@ and stop jobs by PID, never broad `pkill -f` in the shared container.
   `robot/` + `frigidaire_robot_*`/`frigidaire_grasp_test.py` (`code/frigidaire/docs/robot.md`), the top-5 load,
   `docs/scoring_note/`.
 
+## Dot Score Rules page (2026-10-08)
+
+The user's page https://claude.ai/artifact/F5vrhrNM4XnUk3ZXhJycY2 (private until the user shares
+it; the 2026-10-08 original, N = 64, is `docs/Dot Score Rules/`). Version 20 (2026-10-14) is live,
+built on the Brev box from `data/media/dot_rules/page_v20`. Rebuild with
+`frigidaire_dot_rules_figures.py`, then `frigidaire_dot_rules_page.py`; exact flags are in the
+Commands table of `results/2026-10-14-newj-curve-and-leaning-pairs.md` (pass level dirs such as
+`grid/N0262144`, not the root; always give `frigidaire_dot_rules_grid.py` an `--out`, its default
+overwrites the old levels). Publish to the same URL with `root` = the page dir and a files map of
+`media/*.png`, `media/*.jpg`, `data/depgraph_*.json` (set a dropped file to null); index.html must
+stay under 15 MB (the page script palettises PNGs above 10 MiB). Each version's plan, run note and
+open questions are in plans/, results/ and research/.
+
 ## Ground rules
 
 - `data/assets/`, `data/media/`, `data/results/`, `data/logs/`, `data/outputs/` are gitignored; never commit them.
@@ -269,5 +294,14 @@ and stop jobs by PID, never broad `pkill -f` in the shared container.
   ports, or installs that restructure the container.
 
 ## Research workflow (repo)
-- Files: research/ (lit notes), plans/ (plans), data/results/<slug>.md (run notes). Templates: research/TEMPLATE.md, plans/TEMPLATE.md.
+- Files: research/ (lit notes), plans/ (plans), results/ (run notes; the ones written to data/results/ before 2026-10-15 moved here). Templates: research/TEMPLATE.md, plans/TEMPLATE.md.
 - Runners: experiment-runner for experiments, refactorer for structure changes. Invoke with the plan path.
+- How to run things here: plan on the Mac, run on the Brev box (see "Brev box" above). It bills while running: start it only to run, stop it right after.
+  - Environment: the `dishsim-isaac` container on the box, which runs what is pushed on `plan` (the user commits and pushes, see the git rule above).
+    1. Mac: `brev start isaac-launchable-2dd875`; wait until `ssh isaac-launchable-2dd875 true` works (`brev refresh` if the hostname changed).
+    2. `ssh isaac-launchable-2dd875`, then `cd ~/isaac-launchable/dishwasher_sim_isaaclab && git pull --ff-only` (public repo, no credentials).
+    3. From the repo root: `code/util/run_kit.sh <script> --headless` (Kit) or `code/util/run_py.sh <script>` (Kit-free); both docker exec into the container. Long or parallel jobs: `setsid nohup docker exec -w /workspace/dishsim -e OMP_NUM_THREADS=2 dishsim-isaac taskset -c <j>,<j+16> nice -n 10 code/util/run_kit.sh ... > data/logs/<area>/<log>.log 2>&1 &`.
+    4. Write results/<slug>.md and end with a suggested commit message. The box has no GitHub credentials, so commits made there leave through the Mac: `git pull --ff-only brev plan && git push` (remote `brev` = `isaac-launchable-2dd875:isaac-launchable/dishwasher_sim_isaaclab`).
+    5. Mac: `brev stop isaac-launchable-2dd875`.
+  - Smoke run, under 2 min: `code/util/run_py.sh -m pytest code/tests/ -q` (Kit-free, about 70 s on corallab, not yet timed on the box; `kit_smoke.py` needs cameras and crashes there).
+  - Data / checkpoints / logs: on the box only, gitignored under data/: outputs `data/results/<area>/`, media and pages `data/media/<area>/`, logs `data/logs/<area>/`.
