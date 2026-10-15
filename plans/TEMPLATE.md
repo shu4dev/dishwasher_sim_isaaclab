@@ -1,5 +1,5 @@
 # <title>
-Slug: <date>-<slug> | From: research/<slug>.md
+Slug: <date>-<slug> | From: research/<slug>.md, plans/<parent>.md, or results/<parent>.md
 
 ## Goal
 One sentence: what works when this is done.

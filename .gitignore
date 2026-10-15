@@ -4,9 +4,6 @@
 /data
 wandb/
 
-/plans
-/research
-
 # root-level convenience symlink to the pose viewer
 /index.html
 
