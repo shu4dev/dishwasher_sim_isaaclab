@@ -99,22 +99,38 @@ def grid_payload(grid):
     return out
 
 
-def rel_stats(grid, key="NJ", floor=.05):
-    """New+J relative to 0 deg over the grid (dot level): per entity the cells whose 0 deg value (same height,
-    distance, theta) is at least ``floor``, the share above 1 and the largest relative value."""
-    nT, sc = len(grid["tilts"]), float(grid["scale"])
-    out = {}
-    for ent in ("dot", "plate", "bowl", "cup", "plate_obj", "bowl_obj", "cup_obj"):
-        if ent not in grid:
-            continue
-        a = np.asarray(grid[ent][key], dtype=float).reshape(nT, -1) / sc
-        ref = a[0]
-        ok = (ref >= floor) & (a >= 0)
-        rel = np.where(ok, a / np.where(ref > 0, ref, 1.), np.nan)
-        v = rel[~np.isnan(rel)]
-        out[ent] = {"cells": int(v.size), "above": float((v > 1 + 1e-9).mean()), "max": float(v.max()),
-                    "small_refs": int(((ref >= 0) & (ref < floor)).sum()), "refs": int((ref >= 0).sum())}
-    return out
+def kind_best(grid, theta=30, key="NJ"):
+    """Each entity's best New+J over every tilt, height and distance at ``theta`` (2026-10-21, the explorer's relative
+    view; at the object level these are the load score's kind ceilings). Skipped poses are negative. Standard library."""
+    nT, nH, nD, nQ = (len(grid[k]) for k in ("tilts", "heights", "distances", "thetas"))
+    qi = grid["thetas"].index(theta)
+    return {ent: max(grid[ent][key][((t * nH + hi) * nD + di) * nQ + qi] for t in range(nT) for hi in range(nH)
+                     for di in range(nD)) / float(grid["scale"])
+            for ent in ("dot", "plate", "bowl", "cup", "plate_obj", "bowl_obj", "cup_obj") if ent in grid}
+
+
+REL_BUTTON = "relative to the kind's best"
+REL_CAPTION = ("New+J scores, or each relative to its kind's best: the same entity's highest score over every tilt, "
+               "height and distance of the grid at the chosen θ and level, one constant per curve except along θ. Gaps: "
+               "a dish pose skipped because the dish would dip below the disc plane. On the θ axis, the dark bar marks 1° "
+               "to 35°: the jets of the one lower arm with published angles. On the distance axis, the dotted line marks "
+               "the disc edge.")
+
+
+def relative_prose(grid):
+    """The explorer prose on Show = relative to the kind's best (2026-10-21), the constants from kind_best."""
+    kb = kind_best(grid)
+    obj = ", ".join(f"{k} {kb[k + '_obj']:.3f}" for k in ("plate", "bowl", "cup") if k + "_obj" in kb)
+    dot = ", ".join(f"{k} {kb[k]:.3f}" for k in ("plate", "bowl", "cup") if k in kb)
+    at30 = (f"At θ 30° the object-level constants are {obj} (dot level: {dot}; the single dot's best is 1). They are "
+            "the load score's ceilings: a dish in a load scores its object-level New+J over its kind's constant, "
+            "clipped at 1 and 0 when it pools water, and the load scores the mean over its dishes. " if obj else
+            f"At θ 30° the constants are {dot}; the single dot's best is 1. ")
+    return ("Show switches between the score and the score relative to the kind's best: one constant per entity, level "
+            "and θ, the entity's highest score over every tilt, height and distance of the grid at that θ. " + at30 +
+            "Along tilt, height and distance a relative curve is the score curve rescaled: it keeps its shape, reaches 1 "
+            "only at the kind's best spot and never passes it, so distance from the arm stays a penalty; along θ each "
+            "point divides by its own θ's constant. ")
 
 
 def above_and_max(grid, grid_dir, perdot):
@@ -198,7 +214,7 @@ def header(d):
             "that sees one spray point above a dot that sees all of them. New divides by the best-facing dot at the "
             "same spot instead of by the dot's own weight, and New+J does the same over near-vertical jets only. The "
             "page compares these three rules; the appendix keeps all seven, and the explorer shows New+J alone, one "
-            "curve per dot or dish, as a score or relative to the same dish facing the arm. Every result uses "
+            "curve per dot or dish, as a score or relative to its kind's best. Every result uses "
             f"N = {d['Nf']} lines per set. {obj} Then completely random 24-dish loads, each settled and gated in "
             "Isaac and ranked under the three rules, and the five best and five worst loads under New+J from two "
             f"samplers, shown in the Isaac scene.{deps} The appendix proves that New+G and New+J become the same "
@@ -259,34 +275,18 @@ empty    a dot with no line, or W = 0, scores 0</div>
 
 def explorer(tpl, d):
     """The explorer (2026-10-14): New+J only, one curve per entity (dot, plate, bowl, cup), Show = score | relative to
-    0 deg, Level = dot | object; the other six rules stay in the grid file and the appendix."""
+    the kind's best (2026-10-21; was the best tilt at the spot, and before that 0 deg), Level = dot | object; the other
+    six rules stay in the grid file and the appendix."""
     i, j = between(tpl, '<section id="explorer">', "</section>")
     sec, g = tpl[i:j], d["grid"]
-    st = rel_stats(g)
-    dishes = [e for e in ("plate", "bowl", "cup") if e in st]
+    dishes = [e for e in ("plate", "bowl", "cup") if e in g]
     who = ", ".join(f"the {e}" for e in dishes[:-1]) + f" and the {dishes[-1]}"
-    objs = [e for e in dishes if f"{e}_obj" in st]
-    top_obj = max(objs, key=lambda e: st[f"{e}_obj"]["max"]) if objs else None
-    cup_o = ""
-    if "cup" in g:
-        o = [(t, F.grid_at(g, "cup", t, 14, 0, 30)["O"]) for t in g["tilts"]]
-        bt, bv = max(o, key=lambda x: x[1])
-        cup_o = (f" 0° is the grid's facing pose, not each dish's best: under Original, 14 cm over the disc centre, the "
-                 f"cup scores most at {bt}° ({bv:.3f} against {o[0][1]:.3f} at 0°).")
     prose = (f"One rule, New+J, one curve per entity: one unblocked dot, {who}, all read from one grid computed with "
              f"N = {d['Nf']} lines per set (tilt in 5° steps from 0° to 180°, nine heights, distance in 5 cm steps, ten "
              "jet angles). Pick which slider runs along the x-axis; the other three set the pose. Click a legend entry "
              "to hide or show an entity. Each dish is alone, with its own mesh as the only blocker, and its food-contact "
-             "centre sits at the chosen height and distance; past 90° the food side turns away from the arm. Show "
-             "switches between the score and the score relative to 0°: the same entity at 0° (axis straight down, "
-             "facing the arm) at the same height, distance and θ, so every curve is 1 at 0°. A point is drawn only "
-             "where that 0° score is at least 0.05; below it the curve has a gap, reference too small (30 to 35 cm out, "
-             "where even the facing dish barely sees the disc)." + cup_o + " A relative value passes 1 in "
-             + ", ".join(f"{100 * st[e]['above']:.2f} % of the {e}'s cells (at most {st[e]['max']:.2f})"
-                         for e in ["dot", *dishes] if e in st).replace(" dot's", " single dot's")
-             + " that have a reference" + (f", and at the object level the {top_obj} reaches "
-                                           f"{st[top_obj + '_obj']['max']:.2f}" if top_obj else "")
-             + "; the axis then grows. "
+             "centre sits at the chosen height and distance; past 90° the food side turns away from the arm. "
+             + relative_prose(g) +
              "Level switches a dish between the dot level, the mean of its 500 dot scores, and the object level, the "
              "sum of its 500 numerators over the sum of its 500 denominators; a single dot has no object level. "
              "Original, D, D+G, D+J, New and New+G are kept in the grid file and the appendix.")
@@ -295,7 +295,7 @@ def explorer(tpl, d):
     sec = sub1(sec, '<button type="button" data-mode="scores" aria-pressed="true">scores</button><button type="button" '
                     'data-mode="diff" aria-pressed="false">difference from the original</button>',
                '<button type="button" data-mode="scores" aria-pressed="true">score</button><button type="button" '
-               'data-mode="rel" aria-pressed="false">relative to 0°</button>')
+               f'data-mode="rel" aria-pressed="false">{REL_BUTTON}</button>')
     a, b = between(sec, '        <span class="ctl-label">For</span>', "        </div>\n")
     level = ('        <span class="ctl-label">Level</span>\n'
              '        <div class="seg" id="seg-level" role="group" aria-label="Dot level or object level">\n'
@@ -307,11 +307,7 @@ def explorer(tpl, d):
     sec = sub1(sec, 'aria-label="The five dot-score rules against the chosen slider.',
                'aria-label="New+J of the dot and the dishes against the chosen slider.')
     a, b = between(sec, "<figcaption>", "</figcaption>")
-    cap = ("New+J scores, or each relative to the same entity at 0°. Gaps: a dish pose skipped because the dish would "
-           "dip below the disc plane, or, relative, a 0° score under 0.05 (reference too small). On the θ axis, the "
-           "dark bar marks 1° to 35°: the jets of the one lower arm with published angles. On the distance axis, the "
-           "dotted line marks the disc edge.")
-    sec = sec[:a] + "<figcaption>" + esc(cap) + "</figcaption>" + sec[b:]
+    sec = sec[:a] + "<figcaption>" + esc(REL_CAPTION) + "</figcaption>" + sec[b:]
     return sec
 
 
@@ -1219,7 +1215,9 @@ def footer(d):
                "not adopted; and the dependency graphs come from the Version 20 move (lowest clear hover, a placed "
                "dish disturbed only outside its own goal tolerance, need from the removal re-settles, marginal drops "
                "rerun under three perturbed releases, mutual support told apart from cycles), compared with "
-               "Version 18 in one table.")
+               "Version 18 in one table. Version 22: the explorer's relative view divides by the best tilt at the spot "
+               "instead of 0°. Version 23: it divides by one constant per kind and θ, the kind's best over every tilt, "
+               "height and distance (at θ 30° and the object level, the ceilings the load score divides by).")
     return f"""<footer>
   <p><b>What changed since 9 October.</b> {esc(changes)}</p>
   <p style="margin-top:8px">Code: <code>code/frigidaire/src/dishsim_frigidaire/dot_rules.py</code> (GPU engine), <code>code/planner/frigidaire/frigidaire_dot_rules_{{bench,grid,loads,tail,restricted,isaac,render,figures,page}}.py</code>, <code>code/planner/frigidaire/frigidaire_dependency_kit.py</code> (Isaac pair tests and builds), <code>code/planner/frigidaire/frigidaire_dependency_score.py</code> (packed{', settled' if d['dep_gate'] else ''} and built poses rescored), <code>code/planner/frigidaire/frigidaire_dot_rules_relative.py</code> (relative S), <code>code/initialization/frigidaire/frigidaire_random_load_{{kit,farm}}.py</code>. Results: <code>data/results/dot_rules/</code> (the dependency graphs in <code>dependency/pairs_v20/</code>), <code>data/results/random_loads/rl_20261009/</code>. Revision 5 (the original) is still the live scorer; <code>exposure.py</code> is unchanged and nothing is committed.</p>
@@ -1234,17 +1232,20 @@ EXTRA_CSS = """
 @media (max-width:760px){ .tiles.two{grid-template-columns:1fr} }
 .seg button:disabled{opacity:.4;cursor:not-allowed}
 .seg button:disabled:hover{color:var(--ink-2)}
+footer code{overflow-wrap:anywhere}
 """
 
 
 EXPLORER_JS = r"""(function(){
 "use strict";
 /* The explorer (2026-10-14): New+J only, one curve per entity, read from the grid at the nearest nodes.
-   Show "relative to 0°" divides by the same entity at tilt 0 (axis straight down) at the same height, distance and θ,
-   drawn only where that 0° value is at least FLOOR. Level "object" reads a dish from G[kind + "_obj"]. */
+   Show "relative to the kind's best" (2026-10-21) divides by one constant per entity, level and θ: the entity's largest
+   score over every tilt, height and distance of the grid at that θ (skipped poses left out), so a relative curve keeps
+   the score curve's shape along tilt, height and distance and never passes 1; at θ 30° and the object level these are
+   the load score's kind ceilings. Level "object" reads a dish from G[kind + "_obj"]. */
 var G = window.GRID;
 var NS = "http://www.w3.org/2000/svg";
-var SCALE = G.scale, DOTS = G.dots, NPTS = G.n_points || 64, FLOOR = 0.05;
+var SCALE = G.scale, DOTS = G.dots, NPTS = G.n_points || 64;
 function NFMT(v){ return Number(v).toLocaleString("en-US"); }
 var ENTS = [
   {key: "dot",   name: "one dot", css: "--v-o",  width: 3},
@@ -1281,22 +1282,23 @@ function flat(tilt, hcm, dcm, theta){
   var ti = nearestIndex(G.tilts, tilt), hi = nearestIndex(G.heights, hcm), di = nearestIndex(G.distances, dcm), qi = nearestIndex(G.thetas, theta);
   return ((ti * G.heights.length + hi) * G.distances.length + di) * G.thetas.length + qi;
 }
+function kindBest(g, theta){  /* the largest score over every tilt, height and distance at θ (the flat index's last axis) */
+  var b = -1, i;
+  for (i = nearestIndex(G.thetas, theta); i < g.NJ.length; i += G.thetas.length) if (g.NJ[i] > b) b = g.NJ[i];
+  return b;
+}
 function cell(key, pose){      /* {score, ref, rel} or {skip}; null when the entity has no grid at this level */
   var g = source(key);
   if (!g) return null;
   var v = g.NJ[flat(pose.tilt, pose.height, pose.distance, pose.theta)];
   if (v < 0) return {skip: true};
-  var r = g.NJ[flat(0, pose.height, pose.distance, pose.theta)];
-  var c = {score: v / SCALE, ref: r < 0 ? null : r / SCALE, rel: null};
-  if (c.ref === null) c.noref = true; else if (c.ref < FLOOR) c.small = true; else c.rel = c.score / c.ref;
-  return c;
+  var r = kindBest(g, pose.theta);
+  return {score: v / SCALE, ref: r / SCALE, rel: r > 0 ? v / r : null};
 }
 function valueOf(c){ if (!c || c.skip) return null; return state.mode === "scores" ? c.score : c.rel; }
 function why(c){
   if (!c) return "no object level for a single dot";
   if (c.skip) return "skipped: the dish would dip below the disc plane";
-  if (state.mode !== "scores" && c.small) return "reference too small (0° score " + fmt(c.ref, 3) + ")";
-  if (state.mode !== "scores" && c.noref) return "no 0° reference: that pose dips below the disc plane";
   return null;
 }
 function available(e){ return !!source(e.key); }
@@ -1347,7 +1349,7 @@ function draw(){
   }
   var xl = mk("text", {x: L + plotW / 2, y: H - 12, "text-anchor": "middle", "font-size": "13"}, svg); xl.textContent = ax.label;
   var yl = mk("text", {x: 14, y: T + plotH / 2, "text-anchor": "middle", "font-size": "13", transform: "rotate(-90 14 " + (T + plotH / 2) + ")"}, svg);
-  yl.textContent = state.mode === "scores" ? "New+J score" : "New+J relative to 0°";
+  yl.textContent = state.mode === "scores" ? "New+J score" : "New+J relative to the kind's best";
   if (state.x === "distance") {
     var ex = sx(ax, 23.3);
     mk("line", {x1: ex, x2: ex, y1: T, y2: T + plotH, stroke: "var(--axis)", "stroke-width": "1", "stroke-dasharray": "2 4"}, svg);
@@ -1407,8 +1409,7 @@ function drawLegend(){
     lg.appendChild(b);
   });
   var sk = document.createElement("span"); sk.className = "lg-static";
-  sk.appendChild(document.createTextNode(state.mode === "scores" ? "gap: dish pose skipped (below the disc plane)"
-                                                                 : "gap: pose skipped, or reference too small (0° score under 0.05)"));
+  sk.appendChild(document.createTextNode("gap: dish pose skipped (below the disc plane)"));
   lg.appendChild(sk);
 }
 function chip(parent, text){ var c = document.createElement("span"); c.className = "chip"; c.appendChild(document.createTextNode(text)); parent.appendChild(c); return c; }
@@ -1420,7 +1421,7 @@ function drawReadout(pose, series){
     ch.className = "chip"; k.className = "line-key"; k.style.color = "var(" + sr.css + ")";
     b.textContent = msg ? "–" : fmt(valueOf(c), 3);
     ch.appendChild(k); ch.appendChild(b);
-    ch.appendChild(document.createTextNode(" " + sr.name + (msg ? ": " + msg : (state.mode !== "scores" ? " (0° " + fmt(c.ref, 3) + ")" : ""))));
+    ch.appendChild(document.createTextNode(" " + sr.name + (msg ? ": " + msg : (state.mode !== "scores" ? " (kind's best " + fmt(c.ref, 3) + ")" : ""))));
     ro.appendChild(ch);
   });
   if (SHOWN.dot && state.level !== "object" && G.dot && G.dot.nJ) {
@@ -1439,7 +1440,7 @@ function drawTable(rows, series){
     var row = document.createElement("tr"), td = document.createElement("td"); td.textContent = String(r.x); row.appendChild(td);
     series.forEach(function(sr){
       var c = r.c[sr.key], v = valueOf(c), cl = document.createElement("td");
-      cl.textContent = v != null ? fmt(v, 3) : (c && c.skip ? "skipped" : (c && c.small ? "ref < 0.05" : "–"));
+      cl.textContent = v != null ? fmt(v, 3) : (c && c.skip ? "skipped" : "–");
       row.appendChild(cl);
     });
     tb.appendChild(row);
@@ -1447,11 +1448,10 @@ function drawTable(rows, series){
   tbl.appendChild(tb);
 }
 function drawNote(rows, series){
-  var n = byId("chart-note"), small = 0;
-  if (state.mode !== "scores") rows.forEach(function(r){ series.forEach(function(sr){ var c = r.c[sr.key]; if (c && !c.skip && (c.small || c.noref)) small++; }); });
+  var n = byId("chart-note");
   var nodes = "Sliders snap to the grid: tilt in " + (G.tilts[1] - G.tilts[0]) + "° steps from " + G.tilts[0] + " to " + G.tilts[G.tilts.length - 1] + "; heights " + G.heights.slice(0, -1).join(", ") + " and " + G.heights[G.heights.length - 1] + " cm; distance in " + (G.distances[1] - G.distances[0]) + " cm steps; θ " + G.thetas.slice(0, -1).join(", ") + " and " + G.thetas[G.thetas.length - 1] + "°; " + NFMT(NPTS) + " lines per set.";
   n.textContent = nodes + (state.level === "object" ? " Object level: sum over the " + DOTS + " dots of the numerator / sum of the per-dot denominators." : " Dish score = mean of its " + DOTS + " dots.")
-    + (state.mode !== "scores" ? " Relative = the score / the same entity's score at 0° (same height, distance and θ)." + (small ? " " + small + " point" + (small > 1 ? "s" : "") + " left out here: reference too small." : "") : "");
+    + (state.mode !== "scores" ? " Relative = the score / the same entity's best score over every tilt, height and distance at this θ, at most 1." : "");
   ["tilt", "height", "distance", "theta"].forEach(function(k){
     byId("ctl-" + k).classList.toggle("is-x", k === state.x);
     byId("note-" + k).textContent = k === state.x ? "runs along the x-axis; its slider moves the marker" : "";

@@ -1,0 +1,40 @@
+# Run note: re-posing sampler, upright plates (2026-10-15, plan `plans/2026-10-15-reposing-sampler-five-samples.md`, parents `results/2026-10-15-insertion-drop-dependency.md`, `results/2026-10-15-sequential-goals-dependency-graphs.md`)
+- **Did not work as planned: 0 valid of 20 packings attempted.** All 20 stopped in the sampler at 18-22 of 24 placed (median 20), so none reached the swaps, library, refinement or clips. A plate lowered upright stops on the tine tips 85-90 mm above its upright pose; let go 20 mm higher, it drops into its slot. Of 97 placed plates, 58 leaned 15-40° (median 30°), 38 stayed within 15° of upright (mostly rear bank) and 1 tipped further, landing 27-67 mm from the packed pose. A plate leaning ~30° overhangs the next 3-4 slots on its lean side (+x), so any plate whose slot is there is blocked at its start for good. A random order puts some plate in before its lean-side neighbours in every packing. Deferral cannot undo a placed dish, and re-posing ran out of plate slots: 113 of 147 plate calls found no free pose with a clear descent.
+- **Left out at the stop:** 63 plates (51 blocked by a placed plate, 43 of them at the start; 12 by a bowl) and 21 bowls (13 blocked by a bowl or plate, 5 knocked a placed dish, 3 landed out of tolerance); no cup. Re-posing: 271 calls, 209 re-posed drops, 121 of them went in. The dish each packing stopped on: a plate in 13 packings, a bowl in 7.
+- **Kit-free screen (box, 322 packings, 132 s on 14 cores), per kind, before any Isaac job.** Against the appliance alone, no dish is blocked at its start (the ceiling cap removes last run's 233 Cabinet blocks). Plates: all 2576 stop on the tines 85-90 mm (median 90) above their upright pose. Bowls: 2417 of 2576 reach their packed pose; 159 stop on the appliance 15-80 mm up. Cups: all 2576 reach their packed pose. In each packing's first random order, with earlier dishes at their packed poses, a placed dish blocks 1169 plates (45 %) at the start and 305 lower, and 825 bowls (32 %) at the start and 109 lower.
+- **Dry run and probe (box, Kit-free):** the plate family formula reproduces r07_00012's packed plates to 1e-16. For lean < 0 the plate top sits 63-68 mm toward +x. The Reposer loads in 7 s and screens in 0.3-7.6 s per call. An upright plate stops 65-90 mm up at any x: the family's lean-0 pose goes deepest (65-70 mm), and the plan's 3 mm lean bias puts the rim on the next tine (90 mm).
+- **Commands (box repo root):**
+  - Loop: `setsid nohup python3 code/planner/frigidaire/frigidaire_dependency_kit.py --sampler restricted --sample --target-valid 5 --max-packings 20 --release insertion --edges swaps --library 10 --out-dir data/results/dot_rules/dependency/samples --max-wall-seconds 11872 > data/logs/dot_rules/samples/scheduler.out 2>&1 &`. It runs as host python; each Kit job is `docker exec ... taskset -c j,j+16 nice -n 10 code/util/run_kit.sh ... --load <id>`.
+  - Screen and dry run: `docker exec -w /workspace/dishsim dishsim-isaac code/util/run_py.sh data/logs/dot_rules/samples/screen_reposing.py 14` (likewise `dryrun_reposing.py`, `probe_upright.py`).
+  - Page (Mac): `python3 code/planner/frigidaire/frigidaire_dependency_page.py --state data/logs/dot_rules/samples/scheduler_state.json --failures data/results/dot_rules/dependency/samples --failed-clip r07_00012=data/media/dot_rules/dependency_samples/r07_00012_failed --screen data/logs/dot_rules/samples/screen_reposing.json --out data/media/dot_rules/dependency_page_samples`.
+- **Key output:** `[RESULT] STOP --sample: 0 valid of 20 attempted (none)` (23:50:14Z). Every main log ends `[RESULT] PASS <id> goal built status resettle_failed ...` with no traceback or `invalid pointer`; mains took 300-778 s.
+- **Page:** same artifact https://claude.ai/artifact/AkiJZLtFZnFtXYUxSEHJmm, version 3.
+  - With no valid sample it shows the yield table (all 20 packings with their reason) and a failure panel: the pilot's last sampler build as a 102.6 s clip, the dishes left out and why, re-posing, plate settling, and the screen per kind.
+  - The selector, tuple (load still and S, graph with conditional fans, witness), clips, checker and library are built but stay hidden until a sample is valid.
+  - The height-sweep panels and their 8 media files are gone. index.html is 46,781 B plus 2 media files, 1,047,662 B in all. Checked in the browser pane at desktop and phone width; its JS parses in node.
+- **Files changed:**
+  - `frigidaire_bench.py`: `insertion_release` rewritten (move pose, tub-ceiling cap, dish-blocked vs appliance-stopped, release 20 mm above the lowest clear step), plus `ceiling_height`, `lean_side`, `upright_pose`, `move_local`, `path_info`, `shown_lifts`.
+  - `frigidaire_bench_kit.py`: `build_sequence` with a shared attempt and the re-posing sampler (`moves=`, `order=`, `repose=`, `trace=`, undo, deferral).
+  - `frigidaire_dependency_kit.py`: `Reposer`, conditional `any_of` in `predict`/`obeying_order`, `verdict`, `--refine`, `--sample`, swap states saved.
+  - `frigidaire_dependency_clips.py`: load still, conditional clips, chosen racks.
+  - `frigidaire_dependency_page.py`: rewritten. Scripts and logs are in `data/logs/dot_rules/samples/`.
+- **Decided without the user:**
+  - Only a placed dish (or a blocked start) blocks the descent; the appliance just stops it.
+  - The upright pose is the family's lean-0 pose, moved 3 mm toward the lean side.
+  - "Free" re-poses mean free against the dishes placed so far (`free_iter`); plates get one candidate per slot.
+  - A failed release is undone: the dish is parked, the placed dishes are put back, 60 ticks, and its frames are cut.
+  - A step-2 confirmation also drops a after b.
+  - The sampler's block/knock pairs join the swap candidates.
+  - The loop runs as host python with a 02:50Z deadline.
+- **Deviations:**
+  - The first wave screened re-poses against the unplaced dishes too. It was killed at 23:31 after 11 of 14 failed at 17-21 placed, and rerun; it is kept in `samples_wave0/`.
+  - The first screen run fork-bombed: `ensure_usd` re-execs every pool worker (load 300). It was killed after 10 min and fixed.
+  - The dry runs ran on the box. The refine, library, clips and score paths never ran in Kit.
+- **Missing / next:** no valid sample, graph or library. Under the upright move, each plate bank has to fill from its lean side (+x) outward. Two candidates for the next plan: a lean-side-first plate order, or re-posing only into slots no placed plate overhangs.
+- **Box:**
+  - Before my window it ran idle 20:53-22:43Z; I did not start it, and the coordinator stopped it. I added the @reboot self-stop at 22:43:06Z.
+  - `brev start` 23:03:50Z; self-stop running from boot and logging every minute; `brev stop` 23:52:23Z; STOPPED 23:59:52Z (48.5 min start to stop).
+  - `brev ls`: `isaac-launchable-2dd875  STOPPED  COMPLETED  NOT READY  hsk8nbk0s  g6.8xlarge  L4`.
+  - The box clone (3c64fec) holds the 5 code files uncommitted.
+- **Yield:** 0 valid / 20 attempted (r07_00012 and the next 19 in `sequential_fresh_order.txt`). All 20 failed in the sampler for the overhang reason above; none failed in a graph or library check.
+- Suggested commit message: `Add re-posing sampler and upright insertion move`

@@ -51,6 +51,10 @@ FRONT_RIGHT_MAX_X_M = .165          # front-right lower bowls (user). Poses at x
 DROPPED_SLOTS = ("lower_mid",)      # the unstable mid-zone bowl (runs v10, v13)
 GOAL_HOVER_M = .003                 # goal-track commands release 3 mm above the settled goal
 AT_GOAL = {"bowl": (.015, .020, 15.), "cup": (.015, .020, 15.), "plate": (.018, .020, 16.)}  # lateral, dz, tilt
+# AT_GOAL doubled, with a 4 mm contact limit (the gates' 2 mm doubled): the dependency kit's swaps, library and learning
+# under --tolerance library (plans/2026-10-16-doubled-tolerance-rerun.md); the bench's own rule above is untouched
+AT_GOAL_LIBRARY = {"bowl": (.030, .040, 30.), "cup": (.030, .040, 30.), "plate": (.036, .040, 32.)}
+CONTACT_LIBRARY_M = .004
 SEARCH = {"max_sweeps": 2, "top": 6, "random": 2, "min_gain": 1e-4}
 OUT = ROOT / "data/results/benchmark/frigidaire_hotec"
 MEDIA = ROOT / "data/media/benchmark/frigidaire_hotec"
@@ -744,8 +748,8 @@ def goal_distance(centroid, T_actual, T_goal):
     return float(np.hypot(d[0], d[1])), float(abs(d[2])), float(np.degrees(np.arccos(cos)))
 
 
-def within_goal(kind, distance):
-    lat, dz, tilt = AT_GOAL[kind]
+def within_goal(kind, distance, table=AT_GOAL):
+    lat, dz, tilt = table[kind]
     return distance[0] <= lat and distance[1] <= dz and distance[2] <= tilt
 
 
@@ -833,9 +837,167 @@ def clear_release(checker, members, dishes, appliance, up=(0., 0., 1.)):
     return None, None, blockers
 
 
-def off_goal(kind, centroid, T, T_goal):
-    """True when a dish at ``T`` lies outside its at-goal tolerance of ``T_goal`` (the goal-judged disturbance)."""
-    return not within_goal(kind, goal_distance(centroid, T, T_goal))
+# The insertion move (2026-10-15 b, plans/2026-10-15-reposing-sampler-five-samples.md, Decided; the dependency kit's
+# --release insertion only, the bench keeps clear_release; the first version, plans/2026-10-15-insertion-drop-dependency.md,
+# released H above the target and failed on any blocked step). The dish starts at its MOVE POSE (move_local: a plate
+# upright in its slot, any other dish at its packed pose) raised so its lowest collision point sits INSERT_ABOVE_RIM_M
+# above its rack's rim wire centre (geometry.py rim_height), the start capped so its highest collision point stays under
+# the tub ceiling (geometry.py TubCeiling), never below the move pose. It descends along the rack's up axis through the
+# multiples of INSERT_STEP_M above the move pose, then the move pose, each step checked by release_blockers (the 1 mm
+# allowance against the placed dishes and the appliance). The first blocked step ends the descent: a placed dish among
+# its blockers, or a blocked start, BLOCKS the move (nothing is released); the appliance alone stops it, the dish resting
+# there (no blocked step: it reaches the move pose). The dish is released at rest INSERT_GAP_M above its lowest clear
+# pose (never above the start). Geometric only: nothing is simulated during the descent.
+INSERT_STEP_M, INSERT_ABOVE_RIM_M, INSERT_GAP_M, INSERT_LEAN_BIAS_M = .005, .020, .020, .003
+RIM_KEY = {"LowerRack": "lower_rack", "UpperRack": "upper_rack"}
+_COLLISION_POINTS, _UPRIGHT, _CEILING = {}, {}, []
+
+
+def collision_points(kind):
+    """The dish kind's collision-mesh vertices [m] in its body frame (every enabled collider of its tableware USD,
+    transformed as loading.collision_parts does), cached."""
+    if kind not in _COLLISION_POINTS:
+        from pxr import Usd, UsdGeom, UsdPhysics
+        stage = Usd.Stage.Open(tableware()[kind])
+        root = stage.GetDefaultPrim()
+        cache = UsdGeom.XformCache()
+        inverse = cache.GetLocalToWorldTransform(root).GetInverse()
+        pts = []
+        for prim in Usd.PrimRange(root):
+            if not (prim.IsA(UsdGeom.Mesh) and prim.HasAPI(UsdPhysics.CollisionAPI)):
+                continue
+            if UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr().Get() is False:
+                continue
+            m = np.asarray(cache.GetLocalToWorldTransform(prim) * inverse).T
+            pts.append(np.asarray(UsdGeom.Mesh(prim).GetPointsAttr().Get(), dtype=float) @ m[:3, :3].T + m[:3, 3])
+        _COLLISION_POINTS[kind] = np.concatenate(pts)
+    return _COLLISION_POINTS[kind]
+
+
+def ceiling_height(frames, up):
+    """The tub ceiling's underside (geometry.py _cabinet: the TubCeiling box) as a height along ``up``, at the live
+    Cabinet frame in ``frames``."""
+    if not _CEILING:
+        from dishsim_frigidaire import geometry
+        box = next(s for s in geometry._cabinet()["solids"] if s["name"] == "TubCeiling")
+        _CEILING.append(np.array([box["center"][0], box["center"][1], box["center"][2] - box["size"][2] / 2]))
+    f = frames["Cabinet"]
+    point = quat_matrix(f["quaternion_xyzw"]) @ _CEILING[0] + np.asarray(f["position_m"], dtype=float)
+    return float(np.asarray(up, dtype=float) @ point)
+
+
+def rack_heights(frames, rack):
+    """(up, rim_z, top_z) of ``rack`` at the live ``frames``: its up axis (world) and, as heights along it, its rim wire
+    centre (geometry.py rim_height) and the tub ceiling's underside (ceiling_height; until 2026-10-15 b the RACK_BOX
+    top)."""
+    from dishsim_frigidaire.geometry import PARAMETERS
+    f = frames[rack]
+    up = quat_matrix(f["quaternion_xyzw"])[:, 2]
+    base = float(up @ np.asarray(f["position_m"], dtype=float))
+    return up, base + PARAMETERS[RIM_KEY[rack]]["rim_height"], ceiling_height(frames, up)
+
+
+def lifted(pose, h, up):
+    """``pose`` raised ``h`` m along the unit vector ``up``."""
+    return {"position_m": (np.asarray(pose["position_m"], dtype=float) + h * np.asarray(up, dtype=float)).tolist(),
+            "quaternion_xyzw": [float(v) for v in pose["quaternion_xyzw"]]}
+
+
+def lean_side(variant):
+    """+1 when a plate family variant ('lean-24_offset0.004') leans its top toward +x of the rack (lean < 0: rotation
+    about Y by 90 - lean > 90 deg), -1 otherwise."""
+    lean = float(variant.split("lean", 1)[1].split("_", 1)[0])
+    return 1 if lean < 0 else -1
+
+
+def upright_pose(slot, side):
+    """A plate's UPRIGHT pose in its lower-rack ``slot`` ('lower_<bank>_<gap>'), rack-local {position_m,
+    quaternion_xyzw}: the plate family's pose at lean 0 and offset 0 (frigidaire_hotec_exposure_search.candidate_families:
+    rotation about Y by 90 deg, the plate's mid-height point over the gap's mid x at the bank's y, its lowest visual point
+    2 mm above LOWER_PLATE_FLOOR), moved INSERT_LEAN_BIAS_M along the rack x toward ``side`` (lean_side). Cached."""
+    key = (slot, side)
+    if key not in _UPRIGHT:
+        X = HX()
+        pts = X.visual_points(ASSETS / "plate.usda")
+        teeth, rows = X.lower_tine_positions()
+        mids = (teeth[:-1] + teeth[1:]) / 2
+        _, bank, gap = slot.split("_")
+        y = (float((rows[0] + rows[1]) / 2) + X.HL.FRONT_PLATE_INSET_Y if bank == "front"
+             else float((rows[-2] + rows[-1]) / 2))
+        orient = X.rotation("Y", math.radians(90.))
+        shift = orient @ np.array([0., 0., float(pts[:, 2].max()) / 2])
+        c = X._candidate("plate", "LowerRack", slot, float(mids[int(gap)]) + side * INSERT_LEAN_BIAS_M - shift[0],
+                         y - shift[1], orient, pts, X.LOWER_PLATE_FLOOR, f"upright{side:+d}")
+        _UPRIGHT[key] = {"position_m": [float(v) for v in c["position"]],
+                         "quaternion_xyzw": [float(v) for v in c["quaternion_xyzw"]]}
+    return _UPRIGHT[key]
+
+
+def move_local(entry):
+    """The insertion move's pose of a rack-local entry (kind, slot, variant, position, quaternion_xyzw): a plate upright
+    in its slot, 3 mm toward its packed lean's side (upright_pose; its packed lean is not a target), a bowl or cup at its
+    packed pose."""
+    if entry["kind"] == "plate":
+        return upright_pose(entry["slot"], lean_side(entry["variant"]))
+    return {"position_m": [float(v) for v in entry["position"]],
+            "quaternion_xyzw": [float(v) for v in entry["quaternion_xyzw"]]}
+
+
+def insertion_release(checker, members, dishes, appliance, up, rim_z, top_z=None, gap_m=INSERT_GAP_M):
+    """The insertion move (above) of a release unit: ``members`` = [(kind, world move pose, id)], ``dishes`` = checker
+    bodies of the placed dishes at their current poses, ``appliance`` = appliance_bodies, ``rim_z`` and ``top_z`` heights
+    along ``up`` (rack_heights). Returns {poses: release pose dicts or None (blocked), lift: the release lift [m] or None,
+    blockers: the ids colliding at the first blocked step ([] when none), lifts: every lift checked [m] (the start first,
+    the blocked step last), start, lowest: the lowest clear lift or None, blocked: None | 'start' | 'dish', stop:
+    'target' (no blocked step) | 'appliance' (the appliance stopped the descent) | None}."""
+    up = np.asarray(up, dtype=float) / np.linalg.norm(up)
+    along = [posed_points(collision_points(kind), g["position_m"], g["quaternion_xyzw"]) @ up for kind, g, _ in members]
+    start = rim_z + INSERT_ABOVE_RIM_M - min(float(a.min()) for a in along)
+    if top_z is not None:
+        start = min(start, top_z - max(float(a.max()) for a in along))
+    start = max(start, 0.)
+    grid = [start] + [k * INSERT_STEP_M for k in range(int(math.floor(start / INSERT_STEP_M - 1e-9)), -1, -1)]
+    ids = {d["id"] for d in dishes}
+    lifts, lowest, blockers = [], None, []
+    for n, h in enumerate(grid):
+        lifts.append(h)
+        poses = [lifted(g, h, up) for _, g, _ in members]
+        hit = sorted({b for (kind, _, key), pose in zip(members, poses)
+                      for b in release_blockers(checker, checker._body(kind, pose, key), dishes, appliance)})
+        if hit:
+            if n == 0 or ids.intersection(hit):
+                return {"poses": None, "lift": None, "blockers": hit, "lifts": lifts, "start": start, "lowest": None,
+                        "blocked": "start" if n == 0 else "dish", "stop": None}
+            blockers = hit
+            break
+        lowest = h
+    clear = lifts[:-1] if blockers else lifts
+    release = min((h for h in clear if h >= lowest + gap_m - 1e-9), default=start)
+    return {"poses": [lifted(g, release, up) for _, g, _ in members], "lift": release, "blockers": blockers,
+            "lifts": lifts, "start": start, "lowest": lowest, "blocked": None,
+            "stop": "appliance" if blockers else "target"}
+
+
+def path_info(m):
+    """An insertion move's per-drop record [mm] (insertion_release's dict); a blocked move adds blocked ('start' |
+    'dish'), blocked_step (counted from the start) and blocked_lift_mm."""
+    mm = lambda v: None if v is None else round(v * 1e3, 1)                     # noqa: E731
+    out = {"start_lift_mm": mm(m["start"]), "path_steps": len(m["lifts"]), "lowest_lift_mm": mm(m["lowest"]),
+           "release_lift_mm": mm(m["lift"]), "stop": m["stop"], "rests_on": m["blockers"] if m["stop"] else []}
+    if m["blocked"]:
+        out.update(blocked=m["blocked"], blocked_step=len(m["lifts"]), blocked_lift_mm=mm(m["lifts"][-1]))
+    return out
+
+
+def shown_lifts(m):
+    """The lifts a clip shows of an insertion move: from the start down to the release, or to the blocked step."""
+    return m["lifts"] if m["poses"] is None else [h for h in m["lifts"] if h >= m["lift"] - 1e-9]
+
+
+def off_goal(kind, centroid, T, T_goal, table=AT_GOAL):
+    """True when a dish at ``T`` lies outside its at-goal tolerance (``table``) of ``T_goal`` (the goal-judged
+    disturbance)."""
+    return not within_goal(kind, goal_distance(centroid, T, T_goal), table)
 
 
 def racked_in(points, pose_world, frames):

@@ -431,7 +431,43 @@ def start(args, B, report):
 
 # --------------------------------------------------------------------------- --sequence
 
-def build_sequence(backend, B, P, by_id, targets, centroids, landing, initial=(), together=()):
+UNDO_TICKS = 60                                         # the re-posing sampler: 0.5 s after an attempt is undone
+BACKTRACKS_PER_DISH = 2                                 # build_sequence(backtrack=): backtracks a dish may trigger
+
+
+def plate_bank(entry, side):
+    """(bank, rank) of a plate entry (plans/2026-10-16-lean-side-plate-order.md): bank = (rack, row, lean side) from its
+    slot 'lower_<row>_<gap>' and variant (``side`` = frigidaire_bench.lean_side: +1 when its top leans toward the rack's
+    +x); rank = -side * gap (the tine gaps are numbered along +x), so the bank's chain, the slot furthest on the lean side
+    first and outward from there, is its plates by rank. Standard library only."""
+    _, row, gap = entry["slot"].split("_")
+    s = side(entry["variant"])
+    return (entry["rack"], row, s), -s * int(gap)
+
+
+def chain_order(order, by_id, side):
+    """The lean-side plate order (plans/2026-10-16-lean-side-plate-order.md): ``order`` (a uniformly random permutation of
+    the dish ids) with the positions each plate bank holds refilled by that bank's plates in chain order (plate_bank), so
+    each plate leans onto the one before; bowls, cups and the positions of each bank stay where the permutation put them.
+    Returns (order, {plate id: {bank, index (0 = the lean-side end), slot}}). Standard library only."""
+    banks = {}
+    for i in order:
+        if by_id[i]["kind"] == "plate":
+            banks.setdefault(plate_bank(by_id[i], side)[0], []).append(i)
+    out, chains = list(order), {}
+    for bank, plates in banks.items():
+        chain = sorted(plates, key=lambda i: plate_bank(by_id[i], side)[1])
+        for n, i in zip(sorted(order.index(p) for p in plates), chain):
+            out[n] = i
+        for k, i in enumerate(chain):
+            chains[i] = {"bank": f"{bank[0]} {bank[1]} {'+x' if bank[2] > 0 else '-x'}", "index": k,
+                         "slot": by_id[i]["slot"]}
+    return out, chains
+
+
+def build_sequence(backend, B, P, by_id, targets, centroids, landing, initial=(), together=(), fixed=None, stop=None,
+                   release="clear", on_path=None, moves=None, order=None, repose=None, trace=None, chains=None,
+                   backtrack=0, goal_table=None, contact_m=None):
     """Build a load in Isaac one dish at a time, lowest centre first (a valid order for "rests on"), each released at
     its LOWEST CLEAR HOVER above the target (B.clear_release, 2026-10-14: the 1 mm checker allowance against the placed
     dishes and the appliance, 1 mm steps, 60 mm cap; past it "no clear release" = not landed) and settled like a move
@@ -445,11 +481,51 @@ def build_sequence(backend, B, P, by_id, targets, centroids, landing, initial=()
     ``targets`` = {id: world pose dict}; ``initial`` = (a before b) constraints the learned set starts from (an acyclic
     set, e.g. a dependency graph's edges; empty for the benchmark), so record["learned"] includes them; ``together`` =
     dish groups released as ONE step at their targets + one shared clear hover (the dependency test's diagnostic build
-    of a mutual-support pair, disjoint groups; never a benchmark move); returns (status, record, bans)."""
+    of a mutual-support pair, disjoint groups; never a benchmark move); ``fixed`` = one build in exactly this order of
+    dish ids, nothing learned (the dependency library, 2026-10-15), and ``stop`` = that build ends with status
+    'stopped' once that many dishes are placed; returns (status, record, bans). An ok record carries ``support``, the
+    final contacts (a before b, b rests on a). ``release`` = "clear" (the bench's move, above) or "insertion",
+    B.insertion_release (2026-10-15 b, the dependency kit only): lowered toward its move pose (``moves`` {id: world pose},
+    default the target; a plate upright in its slot) from above the rim in 5 mm steps until the appliance stops it, and
+    released 20 mm above that; a descent a placed dish blocks, or a blocked start, = not landed (no_clear_release, with
+    blocked, blocked_step and blocked_lift_mm), and the own-load deviation is measured from the target instead of the
+    release pose. ``on_path`` (ids, [[pose per id] per step]) gets each unit's descent before its release (the recorder's
+    frames).
+    ``repose`` with ``order`` (insertion only; plans/2026-10-15-reposing-sampler-five-samples.md): ONE build in that order
+    of dish ids. A dish that does not go in (a blocked descent, no landing, a disturbed placed dish) is undone (it is
+    parked, the placed dishes are put back where they were before it, UNDO_TICKS) and re-posed: ``repose(dish, entries,
+    placed, now)`` (entries = {id: its rack-local entry now}) returns up to 5 other poses [{entry, target, move}], tried in
+    turn, the first that goes in wins; if none does, the dish goes to the back of the order with its own pose; the build
+    fails when every dish left has failed since the last placement. ``trace`` (mark() / cut(n)) drops an undone attempt's
+    recorded frames. The record adds ``entries``, ``targets`` and ``moves`` (the pose each dish went in with),
+    ``attempts`` and ``reposed``. ``chains`` (chain_order's, plans/2026-10-16-lean-side-plate-order.md): a plate that
+    found no slot goes after the plates still queued that have not failed since the last placement instead of the back
+    of the order (to the back when every queued plate has: re-inserting it among failed plates looped forever).
+    ``backtrack`` = N > 0 (plans/2026-10-16-backtracking-sampler-learning-loop.md): a dish that did not go in at its own
+    pose or any re-pose names its blockers (the placed dishes that blocked a descent of one of its tries, or that one of
+    its tries moved); the N most recently placed of them are undone (parked, the other placed dishes put back where they
+    were, UNDO_TICKS), the dish goes in (its own pose, then re-poses), and the undone dishes go back in their order, each
+    at the pose it had, deferred like a failed dish if it fails now. Up to N dishes go out in all: a dish the undo moved
+    (it rested on an undone one) goes out and back with them, and so does a placed dish that blocks the dish once the
+    first ones are out (one they hid lower down: 'revealed', 2026-10-16, after the first Kit wave); with no room left, or
+    nothing new named, everything is put back (the backtrack is abandoned or failed) and the dish is deferred. At most
+    BACKTRACKS_PER_DISH backtracks per dish; the build fails only when every dish left failed since the last placement.
+    The record adds ``backtracks`` [{dish, n, undone, placed, outcome placed | failed | abandoned, back, deferred,
+    moved, rested, revealed, still}].
+    ``goal_table`` / ``contact_m`` (plans/2026-10-16-doubled-tolerance-rerun.md; default B.AT_GOAL and the 2 mm LIMITS
+    contact depth): the at-goal table of the disturbance judgment and the contact-depth limit of every landing. Each
+    landed step also records d_mm (its visual centroid minus its goal's, world, mm) and rack_mm (its rack's displacement
+    since the build's empty racks, mm), so a rack-local judgment can be made afterwards."""
     import numpy as np
     from dishsim import rearrange as R
     from dishsim_frigidaire.random_poses import LIMITS
+    table = goal_table or B.AT_GOAL
+    contact_limit = LIMITS["peak_penetration_m"] if contact_m is None else contact_m
     checker = B.release_checker()
+    targets = dict(targets)
+    moves = dict(moves or targets)
+    entries = {i: dict(e) for i, e in by_id.items()}
+    park = {i: {"position_m": [3. + .4 * j, 2., .3], "quaternion_xyzw": [0., 0., 0., 1.]} for j, i in enumerate(by_id)}
     rep = {}
     for group in together:                                  # disjoint groups (pairs) placed as one step
         for i in sorted(group):
@@ -488,67 +564,261 @@ def build_sequence(backend, B, P, by_id, targets, centroids, landing, initial=()
                         heapq.heappush(heap, (height[b], b))
         return out if len(out) == len(members) else None
 
-    def build(order):
-        for j, i in enumerate(by_id):                      # clear the racks: every dish parked apart
-            backend.set_rigid_pose(backend.objects[i], {"position_m": [3. + .4 * j, 2., .3], "quaternion_xyzw": [0., 0., 0., 1.]})
+    def park_all():
+        for i in by_id:                                    # clear the racks: every dish parked apart
+            backend.set_rigid_pose(backend.objects[i], park[i])
         for _ in range(60):
             backend.tick()
         frames = backend.poses()
-        appliance = B.appliance_bodies(checker, frames)
+        return frames, B.appliance_bodies(checker, frames)
+
+    def attempt(r, placed, frames, appliance):
+        """One release of unit ``r`` into the racks holding ``placed``: (status ok | landing | moved, its steps, moved)."""
+        unit = members[r]
+        now = backend.poses()
+        pre = {i: P.pose_T(now[i]) for i in placed}
+        at_goal = {i for i in placed if not B.off_goal(kinds[i], centroids[kinds[i]], pre[i], goals[i], table)}
+        close = (B.near_poses({i: now[i] for i in placed}, kinds, targets[r]["position_m"]) if release == "clear"
+                 else {i: now[i] for i in placed})          # the insertion path reaches further: every placed dish
+        dishes = [checker._body(kinds[i], pose, i) for i, pose in close.items()]
+        up = P.pose_T(frames[entries[r]["rack"]])[:3, 2]
+        path = {}
+        if release == "clear":
+            poses_rel, hover, blockers = B.clear_release(checker, [(kinds[i], targets[i], i) for i in unit], dishes,
+                                                         appliance, up)
+        else:                                              # the insertion move toward the move pose
+            up, rim_z, top_z = B.rack_heights(frames, entries[r]["rack"])
+            m = B.insertion_release(checker, [(kinds[i], moves[i], i) for i in unit], dishes, appliance, up, rim_z, top_z)
+            poses_rel, hover, blockers, path = m["poses"], m["lift"], m["blockers"], B.path_info(m)
+            if on_path is not None:
+                on_path(unit, [[B.lifted(moves[i], h, up) for i in unit] for h in B.shown_lifts(m)])
+        pair = unit if len(unit) > 1 else None
+        if poses_rel is None:                              # no clear release (or a blocked descent): not landed
+            return "landing", [{"id": i, "hover_mm": None, "no_clear_release": True, "blockers": blockers,
+                                "together": pair, "disturbed": [], **path} for i in unit], None
+        for i, pose in zip(unit, poses_rel):
+            backend.set_rigid_pose(backend.objects[i], pose)
+        for _ in range(SETTLE_TICKS + WINDOW_TICKS):
+            backend.tick()
+        now = backend.poses()
+        post = {i: P.pose_T(now[i]) for i in placed}
+        old = R.disturbed_items(pre, post, None)           # dishes not at their goal keep the old rule
+        moved = sorted({i for i in placed if i in at_goal and B.off_goal(kinds[i], centroids[kinds[i]], post[i], goals[i],
+                                                                         table)}
+                       | {i for i in old if i not in at_goal})
+        landed, steps = True, []
+        for i, pose in zip(unit, poses_rel):
+            Tn = P.pose_T(now[i])
+            dist = B.goal_distance(centroids[kinds[i]], Tn, goals[i])
+            ref = pose if release == "clear" else targets[i]           # insertion: the deviation from the target
+            dev = float(np.linalg.norm(np.asarray(now[i]["position_m"]) - np.asarray(ref["position_m"])))
+            deep = max((d for name, d in backend.latest_contact["depths_m"].items() if i in name.split("|")), default=0.)
+            c, rk = np.asarray(centroids[kinds[i]], dtype=float), entries[i]["rack"]
+            d = (Tn[:3, :3] @ c + Tn[:3, 3]) - (goals[i][:3, :3] @ c + goals[i][:3, 3])
+            shift = np.asarray(now[rk]["position_m"], dtype=float) - np.asarray(frames[rk]["position_m"], dtype=float)
+            steps.append({"id": i, "lateral_mm": round(dist[0] * 1e3, 1), "dz_mm": round(dist[1] * 1e3, 1),
+                          "tilt_deg": round(dist[2], 1), "settle_dev_mm": round(dev * 1e3, 1),
+                          "contact_mm": round(deep * 1e3, 2), "hover_mm": round(hover * 1e3), "together": pair,
+                          "disturbed": moved, "d_mm": [round(float(v) * 1e3, 1) for v in d],
+                          "rack_mm": [round(float(v) * 1e3, 2) for v in shift], **path})
+            landed = landed and bool(landing(kinds[i], dist, dev)) and deep < contact_limit
+        if repose is not None:                             # the sampler: the joint gate's 1 mm preflight on the settled
+            ids = [*placed, *unit]                         # dishes, pairwise (plans/2026-10-16-labelled-views-overlap-rule.md)
+            bodies = [checker._body(kinds[i], now[i], i) for i in ids]
+            over = []
+            for n, a in enumerate(bodies):
+                for b in [*bodies[n + 1:], *appliance]:            # the preflight's dish-appliance pairs too (2nd run:
+                    res = checker.pair(a, b)                       # r07 failed the gate on plate_06/SilverwareBasket)
+                    if not res["valid"]:
+                        over.append([a["id"], b["id"], round(res["max_penetration_m"] * 1e3, 2)])
+            for s in steps:
+                s["overlap"] = over
+            landed = landed and not over                   # a hit is a failed landing: undone and re-posed
+        if moved:
+            return "moved", steps, moved
+        return ("ok" if landed else "landing"), steps, None
+
+    def build(order):
+        frames, appliance = park_all()
         placed, steps = [], []
-        for r in order:
-            unit = members[r]
-            now = backend.poses()
-            pre = {i: P.pose_T(now[i]) for i in placed}
-            at_goal = {i for i in placed if not B.off_goal(kinds[i], centroids[kinds[i]], pre[i], goals[i])}
-            close = B.near_poses({i: now[i] for i in placed}, kinds, targets[r]["position_m"])
-            dishes = [checker._body(kinds[i], pose, i) for i, pose in close.items()]
-            up = P.pose_T(frames[by_id[r]["rack"]])[:3, 2]
-            release, hover, blockers = B.clear_release(checker, [(kinds[i], targets[i], i) for i in unit], dishes,
-                                                       appliance, up)
-            pair = unit if len(unit) > 1 else None
-            if release is None:                            # no clear release: not landed, nothing dropped
-                steps += [{"id": i, "hover_mm": None, "no_clear_release": True, "blockers": blockers,
-                           "together": pair, "disturbed": []} for i in unit]
-                return "landing", r, None, steps
-            for i, pose in zip(unit, release):
-                backend.set_rigid_pose(backend.objects[i], pose)
-            for _ in range(SETTLE_TICKS + WINDOW_TICKS):
-                backend.tick()
-            now = backend.poses()
-            post = {i: P.pose_T(now[i]) for i in placed}
-            old = R.disturbed_items(pre, post, None)       # dishes not at their goal keep the old rule
-            moved = sorted({i for i in placed if i in at_goal and B.off_goal(kinds[i], centroids[kinds[i]], post[i], goals[i])}
-                           | {i for i in old if i not in at_goal})
-            landed = True
-            for i, pose in zip(unit, release):
-                dist = B.goal_distance(centroids[kinds[i]], P.pose_T(now[i]), goals[i])
-                dev = float(np.linalg.norm(np.asarray(now[i]["position_m"]) - np.asarray(pose["position_m"])))
-                deep = max((d for name, d in backend.latest_contact["depths_m"].items() if i in name.split("|")), default=0.)
-                steps.append({"id": i, "lateral_mm": round(dist[0] * 1e3, 1), "dz_mm": round(dist[1] * 1e3, 1),
-                              "tilt_deg": round(dist[2], 1), "settle_dev_mm": round(dev * 1e3, 1),
-                              "contact_mm": round(deep * 1e3, 2), "hover_mm": round(hover * 1e3), "together": pair,
-                              "disturbed": moved})
-                landed = landed and bool(landing(kinds[i], dist, dev)) and deep < LIMITS["peak_penetration_m"]
-            if moved:
-                return "moved", r, moved, steps
-            if not landed:
-                return "landing", r, None, steps
-            placed += unit
+        for n, r in enumerate(order):
+            if stop is not None and n >= stop:
+                return "stopped", None, None, steps
+            status, s, moved = attempt(r, placed, frames, appliance)
+            steps += s
+            if status != "ok":
+                return status, r, moved, steps
+            placed += members[r]
         return "ok", None, None, steps
 
+    def put_back(dishes, snap, out=()):
+        """``out`` parked, ``dishes`` teleported to their poses in ``snap``, UNDO_TICKS (the re-posing sampler's undo)."""
+        for i in out:
+            backend.set_rigid_pose(backend.objects[i], park[i])
+        for i in dishes:
+            backend.set_rigid_pose(backend.objects[i], snap[i])
+        for _ in range(UNDO_TICKS):
+            backend.tick()
+
+    def sample(order):
+        """The re-posing sampler's one build (docstring): (status, failing dish, moved, steps, attempts, placed,
+        backtracks)."""
+        frames, appliance = park_all()
+        placed, steps, attempts, queue, stuck = [], [], [], list(order), set()
+        own = {i: (targets[i], moves[i], goals[i], entries[i]) for i in by_id}
+        backs, used = [], {}
+
+        def go_in(r, reposes=True, phase=None):
+            """r at its current pose, then (``reposes``) up to 5 re-poses, the first that goes in wins; when none does r
+            is back at its own pose. ((status, steps, moved) of the last try, the placed dishes its tries named)."""
+            tries, k, last, named = [None], 0, None, []
+            while k < len(tries):
+                cand = tries[k]
+                if cand is not None:                       # a re-posed candidate: its move, its landing target
+                    targets[r], moves[r], entries[r] = cand["target"], cand["move"], cand["entry"]
+                    goals[r] = P.pose_T(cand["target"])
+                mark = trace.mark() if trace is not None else None
+                before = backend.poses()
+                status, s, moved = attempt(r, placed, frames, appliance)
+                last = (status, s, moved)
+                attempts.append({"dish": r, "try": k, "slot": entries[r].get("slot"), "variant": entries[r].get("variant"),
+                                 "status": status, "placed": len(placed), "moved": moved, "step": s[-1],
+                                 **({"phase": phase} if phase else {})})
+                if status == "ok":
+                    return last, named
+                named += [y for y in [*(s[-1].get("blockers") or []), *(moved or [])] if y in placed and y not in named]
+                if not s[-1].get("no_clear_release"):      # something was dropped: undo it
+                    put_back(placed, before, out=members[r])
+                if trace is not None:
+                    trace.cut(mark)
+                if k == 0 and reposes:
+                    tries += repose(r, dict(entries), list(placed), backend.poses())
+                k += 1
+            targets[r], moves[r], goals[r], entries[r] = own[r]   # back to its own pose
+            return last, named
+
+        def moved_by_undo(keep, snap):
+            """The dishes left in that the undo moved (attempt's rule: at its goal before and outside it now, or not at
+            its goal and moved > 10 mm / 20 deg)."""
+            now = backend.poses()
+            pre = {i: P.pose_T(snap[i]) for i in keep}
+            post = {i: P.pose_T(now[i]) for i in keep}
+            at_goal = {i for i in keep if not B.off_goal(kinds[i], centroids[kinds[i]], pre[i], goals[i], table)}
+            old = R.disturbed_items(pre, post, None)
+            return sorted({i for i in at_goal if B.off_goal(kinds[i], centroids[kinds[i]], post[i], goals[i], table)}
+                          | {i for i in old if i not in at_goal})
+
+        def back_track(r, named):
+            """The backtrack (docstring) of r: the undone dishes that did not go back (r is in), or None (it failed).
+            Up to ``backtrack`` dishes go out in all: the most recently placed of the blockers r named, then any dish the
+            undo moved (it rested on an undone one, so it goes out and back with them) and any placed dish r's tries
+            name once the first ones are out (a blocker lower down that the first one hid)."""
+            full = list(placed)
+            undone = sorted(named, key=full.index)[-backtrack:]           # the most recently placed blockers
+            snap, mark = backend.poses(), (trace.mark() if trace is not None else None)
+            rec = {"dish": r, "n": used[r], "undone": undone, "placed": len(full), "attempt": len(attempts)}
+            backs.append(rec)
+
+            def failed(outcome, **kw):                     # everything back as it was
+                placed[:] = full
+                put_back(full, snap, out=members[r])
+                if trace is not None:
+                    trace.cut(mark)
+                rec.update(outcome=outcome, undone=undone, **kw)
+                return None
+            while True:
+                keep = [i for i in full if i not in undone]
+                placed[:] = keep
+                put_back(keep, snap, out=undone)
+                hit = moved_by_undo(keep, snap)
+                if hit:                                    # a dish left in rested on an undone one
+                    if len(undone) + len(hit) > backtrack:
+                        return failed("abandoned", moved=hit)
+                    rec.setdefault("rested", []).extend(hit)
+                    undone = sorted(undone + hit, key=full.index)
+                    continue
+                last, more = go_in(r, phase=f"backtrack {used[r]}")
+                if last[0] == "ok":
+                    break
+                more = [y for y in more if y not in undone]
+                if not more or len(undone) >= backtrack:   # still blocked: by nothing new, or no room left
+                    return failed("failed", status=last[0], still=more)
+                rec.setdefault("revealed", []).extend(sorted(more, key=full.index)[-(backtrack - len(undone)):])
+                undone = sorted(undone + sorted(more, key=full.index)[-(backtrack - len(undone)):], key=full.index)
+            rec["undone"] = undone
+            placed.extend(members[r])
+            steps[:] = [s for s in steps if s["id"] not in undone] + last[1]
+            back, out = [], []
+            for u in undone:                               # back in their order, each at the pose it had
+                lu, _ = go_in(u, reposes=False, phase=f"back after {r}")
+                if lu[0] == "ok":
+                    placed.extend(members[u])
+                    steps.extend(lu[1])
+                    back.append(u)
+                else:
+                    out.append(u)
+            rec.update(outcome="placed", back=back, deferred=out)
+            return out
+
+        def defer(r):
+            if chains and kinds[r] == "plate":             # the lean-side order: after the plates still queued that
+                last = max((n for n, i in enumerate(queue) if kinds[i] == "plate" and i not in stuck), default=None)
+                queue.insert(len(queue) if last is None else last + 1, r)    # have not failed since the last placement,
+            else:                                          # else at the back (so the bowls and cups get their turn)
+                queue.append(r)
+
+        while queue:
+            r = queue.pop(0)
+            last, named = go_in(r)
+            if last[0] == "ok":
+                placed.extend(members[r])
+                steps.extend(last[1])
+                stuck.clear()
+                continue
+            if backtrack and named and used.get(r, 0) < BACKTRACKS_PER_DISH:
+                used[r] = used.get(r, 0) + 1
+                out = back_track(r, named)
+                if out is not None:                        # r is in; an undone dish that did not go back waits its turn
+                    stuck.clear()
+                    for u in out:
+                        defer(u)
+                    continue
+            stuck.add(r)                                   # at its own pose, later in the order
+            if all(i in stuck for i in [r, *queue]):
+                return last[0], r, last[2], steps + last[1], attempts, placed, backs
+            defer(r)
+        return "ok", None, None, steps, attempts, placed, backs
+
     learned, builds, status, bans = set(map(tuple, initial)), [], None, []
-    order = topo(learned)
-    for _ in range(SEQUENCE_BUILDS):
+    if repose is not None:                                 # the re-posing sampler: one build, nothing learned
+        status, x, moved, steps, attempts, placed, backs = sample(list(order))
+        for a in attempts:                                 # dishes seen interacting: the swaps' extra candidates (a
+            if a["status"] == "moved":                     # knock, a descent blocked at its start or lower down)
+                learned |= {(a["dish"], y) for y in a["moved"]}
+            elif a["step"].get("blocked"):
+                learned |= {(y, a["dish"]) for y in a["step"]["blockers"] if y in by_id}
+        for b in backs:                                    # a backtrack's undo that moved a dish left in: it needs them
+            learned |= {(u, y) for u in b["undone"] for y in b.get("moved") or []}
+        builds.append({"order": placed + ([x] if x else []), "status": status, "dish": x, "moved": moved,
+                       "steps": steps, "attempts": attempts, "backtracks": backs})
+        order = None
+    else:
+        order = topo(learned) if fixed is None else list(fixed)
+    for _ in range(SEQUENCE_BUILDS if fixed is None else 1):
         if order is None:
             break
         status, x, moved, steps = build(order)
         builds.append({"order": [i for r in order for i in members[r]], "status": status, "dish": x, "moved": moved,
                        "steps": steps})
-        if status == "ok":
+        if status == "ok" or fixed is not None:
             break
         if status == "moved":                               # x must go in before what it knocked
             learned |= {(x, y) for y in moved}
+        elif release != "clear" and steps and steps[-1].get("blocked_step"):
+            blockers = steps[-1]["blockers"]                # insertion: a blocked descent is learned like a knock, x
+            if not blockers or any(y not in by_id for y in blockers):   # before the dishes that block it; an
+                break                                       # appliance block no order can fix ends the sequencing
+            learned |= {(x, y) for y in blockers}
         else:                                               # x did not land: it leans on its neighbours, so
             later = sorted({y for i in members[x] for y in near[i] if node(y) != x   # they go in first
                             and (x, y) not in learned and (y, x) not in learned})
@@ -568,7 +838,7 @@ def build_sequence(backend, B, P, by_id, targets, centroids, landing, initial=()
         flat = builds[-1]["order"]
         pos = {i: n for n, i in enumerate(flat)}
         contact = [tuple(e) for e in P.support_edges(sorted(pairs), final, flat) if pos[e[0]] < pos[e[1]]]
-        record.update(order=flat, poses_world={oid: final[oid] for oid in flat},
+        record.update(order=flat, poses_world={oid: final[oid] for oid in flat}, support=sorted(contact),
                       goal_order=sorted(set(contact) | learned),
                       reason=f"built in {len(builds)} build(s), {len(set(contact) | learned)} order constraints "
                              f"({len(learned)} learned), max lateral {max(s['lateral_mm'] for s in steps)} mm")
@@ -581,6 +851,22 @@ def build_sequence(backend, B, P, by_id, targets, centroids, landing, initial=()
             bans.append([B.cand_key(e)])
         record["reason"] = (f"no order built the load in {len(builds)} build(s): last {last['status']} "
                             f"at {last['dish']} {last['moved'] or ''}")
+    if repose is not None:
+        tries, backs = builds[-1]["attempts"], builds[-1]["backtracks"]
+        record.update(entries=entries, targets=targets, moves=moves, attempts=tries, backtracks=backs,
+                      reposed={i: {"slot": entries[i].get("slot"), "variant": entries[i].get("variant"),
+                                   "from_slot": by_id[i].get("slot"), "from_variant": by_id[i].get("variant")}
+                               for i in by_id if B.cand_key(entries[i]) != B.cand_key(by_id[i])})
+        bt = (f"; {len(backs)} backtrack(s), {sum(b['outcome'] == 'placed' for b in backs)} placed their dish"
+              if backtrack else "")
+        if status != "ok":
+            mine = [a for a in tries if a["dish"] == x]
+            record["reason"] = (f"the re-posing sampler placed {len(placed)} of {len(by_id)}: {x} did not go in "
+                                f"({status}; {len(mine)} attempts, own pose and re-poses) and no dish left went in since "
+                                f"the last placement; {len(tries)} attempts in all{bt}")
+        else:
+            record["reason"] = (f"placed {len(placed)} of {len(by_id)} in {len(tries)} attempts "
+                                f"({len(record['reposed'])} re-posed), {len(record['support'])} support contacts{bt}")
     return status, record, bans
 
 
