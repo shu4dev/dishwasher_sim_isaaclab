@@ -51,10 +51,6 @@ FRONT_RIGHT_MAX_X_M = .165          # front-right lower bowls (user). Poses at x
 DROPPED_SLOTS = ("lower_mid",)      # the unstable mid-zone bowl (runs v10, v13)
 GOAL_HOVER_M = .003                 # goal-track commands release 3 mm above the settled goal
 AT_GOAL = {"bowl": (.015, .020, 15.), "cup": (.015, .020, 15.), "plate": (.018, .020, 16.)}  # lateral, dz, tilt
-# AT_GOAL doubled, with a 4 mm contact limit (the gates' 2 mm doubled): the dependency kit's swaps, library and learning
-# under --tolerance library (plans/2026-10-16-doubled-tolerance-rerun.md); the bench's own rule above is untouched
-AT_GOAL_LIBRARY = {"bowl": (.030, .040, 30.), "cup": (.030, .040, 30.), "plate": (.036, .040, 32.)}
-CONTACT_LIBRARY_M = .004
 SEARCH = {"max_sweeps": 2, "top": 6, "random": 2, "min_gain": 1e-4}
 OUT = ROOT / "data/results/benchmark/frigidaire_hotec"
 MEDIA = ROOT / "data/media/benchmark/frigidaire_hotec"
@@ -758,12 +754,10 @@ def within_goal(kind, distance, table=AT_GOAL):
 # until the pose passes the bench checker's 1 mm penetration allowance (the farm's preflight, checker.pair()["valid"])
 # against every placed dish at its current (re-settled) pose and against the appliance; past 60 mm the move has "no
 # clear release" (not landed, no lateral search). A placed dish at its goal counts as disturbed only when it ends outside
-# its at-goal tolerance of that goal (off_goal). Shared by the dependency pair test, build_sequence and the Frigidaire
-# episode (frigidaire_bench_kit.py); the Bosch rearrange.py is untouched. RELEASE_RULE "gap" (>= 1 mm FCL separation
-# from the dishes, the allowance for the appliance) is the switch's other setting, never run (a 1 mm separation from
-# the appliance is unreachable by a vertical lift for plates leaning on tines; measured 2026-10-14).
-RELEASE_RULE = "allowance"
-RELEASE_CLEAR_M, RELEASE_STEP_M, RELEASE_CAP_M, RELEASE_NEAR_M = .001, .001, .060, .35
+# its at-goal tolerance of that goal (off_goal). Shared by build_sequence (the bench's sequence gates) and the Frigidaire
+# episode (frigidaire_bench_kit.py); the Bosch rearrange.py is untouched. (A 1 mm FCL separation instead of the
+# allowance was never run: it is unreachable by a vertical lift for plates leaning on tines; measured 2026-10-14.)
+RELEASE_STEP_M, RELEASE_CAP_M, RELEASE_NEAR_M = .001, .060, .35
 _RELEASE_CHECKER = []
 
 
@@ -780,34 +774,9 @@ def appliance_bodies(checker, frames):
     return [checker._body(name, frames[name], name) for name in COMPONENT_NAMES]
 
 
-def clearance(checker, body, others, limit=RELEASE_CLEAR_M):
-    """Smallest FCL distance [m] from ``body``'s collision pieces to the ``others`` (checker bodies), searched only until
-    one comes closer than ``limit`` (overlap = 0); inf when no other's AABB comes within ``limit``."""
-    fcl = checker.fcl
-
-    def near(o1, o2, data):
-        if data.done:
-            return True, data.result.min_distance
-        fcl.distance(o1, o2, data.request, data.result)
-        data.done = data.result.min_distance < limit
-        return data.done, data.result.min_distance
-    best, (lo, hi) = float("inf"), body["bounds"]
-    for other in others:
-        if np.any(lo > other["bounds"][1] + limit) or np.any(other["bounds"][0] > hi + limit):
-            continue
-        data = fcl.DistanceData(request=fcl.DistanceRequest(), result=fcl.DistanceResult())
-        body["manager"].distance(other["manager"], data, near)
-        best = min(best, max(float(data.result.min_distance), 0.))
-        if best < limit:
-            break
-    return best
-
-
 def release_blockers(checker, body, dishes, appliance):
-    """Ids of the ``dishes`` and ``appliance`` bodies the released ``body`` collides with under RELEASE_RULE."""
-    if RELEASE_RULE == "gap":
-        return ([d["id"] for d in dishes if clearance(checker, body, [d]) < RELEASE_CLEAR_M]
-                + [a["id"] for a in appliance if not checker.pair(body, a)["valid"]])
+    """Ids of the ``dishes`` and ``appliance`` bodies the released ``body`` collides with: past the checker's 1 mm
+    penetration allowance (checker.pair()["valid"])."""
     return [o["id"] for o in [*dishes, *appliance] if not checker.pair(body, o)["valid"]]
 
 
@@ -820,10 +789,10 @@ def near_poses(poses, kinds, centre, skip=()):
 
 
 def clear_release(checker, members, dishes, appliance, up=(0., 0., 1.)):
-    """The lowest clear hover of a release unit: ``members`` = [(kind, goal pose dict, id)] (one dish; two for the
-    diagnostic joint placement, raised together), ``dishes`` = checker bodies of the placed dishes at their current
-    poses, ``appliance`` = appliance_bodies. Returns ([release pose dicts], hover m, []) or, past RELEASE_CAP_M,
-    (None, None, ids still colliding at the cap): "no clear release"."""
+    """The lowest clear hover of a release unit: ``members`` = [(kind, goal pose dict, id)] (one dish), ``dishes`` =
+    checker bodies of the placed dishes at their current poses, ``appliance`` = appliance_bodies. Returns ([release
+    pose dicts], hover m, []) or, past RELEASE_CAP_M, (None, None, ids still colliding at the cap): "no clear
+    release"."""
     up = np.asarray(up, dtype=float) / np.linalg.norm(up)
     blockers = []
     for n in range(int(round(RELEASE_CAP_M / RELEASE_STEP_M)) + 1):
@@ -837,10 +806,10 @@ def clear_release(checker, members, dishes, appliance, up=(0., 0., 1.)):
     return None, None, blockers
 
 
-# The insertion move (2026-10-15 b, plans/2026-10-15-reposing-sampler-five-samples.md, Decided; the dependency kit's
-# --release insertion only, the bench keeps clear_release; the first version, plans/2026-10-15-insertion-drop-dependency.md,
-# released H above the target and failed on any blocked step). The dish starts at its MOVE POSE (move_local: a plate
-# upright in its slot, any other dish at its packed pose) raised so its lowest collision point sits INSERT_ABOVE_RIM_M
+# The insertion move (2026-10-15 b, plans/2026-10-15-reposing-sampler-five-samples.md, Decided; the dependency kit's move,
+# the bench keeps clear_release; the first version, plans/2026-10-15-insertion-drop-dependency.md, released H above the
+# target and failed on any blocked step). The dish starts at its MOVE POSE (move_local: a plate upright in its slot, any
+# other dish at its packed pose) raised so its lowest collision point sits INSERT_ABOVE_RIM_M
 # above its rack's rim wire centre (geometry.py rim_height), the start capped so its highest collision point stays under
 # the tub ceiling (geometry.py TubCeiling), never below the move pose. It descends along the rack's up axis through the
 # multiples of INSERT_STEP_M above the move pose, then the move pose, each step checked by release_blockers (the 1 mm

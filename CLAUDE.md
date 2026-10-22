@@ -253,45 +253,42 @@ moves, Isaac settle per move, end check = retract both racks + containment. Kit-
 paths into the container only through `rel()` (a `/home/...` path lands in the container's writable layer),
 and stop jobs by PID, never broad `pkill -f` in the shared container.
 
-## Cleanup state and landmines (2026-09-29)
+## Cleanup state (hold folders)
 
-- Hold folders on the 2 TB drive: `dishsim/_trash_20260917/` (only `outputs/viewer_validation`, 675 MiB, the
-  retired PDF exporters' offline browser, is left of value; delete after 2026-10-17) and
-  `dishsim/_trash_20260929/` (v3-era experiment results + HOTEC v2-v5, 1.3 GiB; `MANIFEST.txt`; undo = `mv`
-  back to the same relative path under `repo_data/`; delete after 2026-10-29). The 98 byte-identical media
-  copies deleted the same day are listed with sha256 and surviving copy in its
-  `MANIFEST_4a_media_duplicates.txt` (undo = `cp -p` the survivor back; the v2-v5 survivors live in this hold folder).
-  On the Brev box `data/_trash_20261021/` holds what the 2026-10-21 asset restructure dropped (the old
-  `models/frigidaire_fdpc4221as{,_v2}` twins and their delivery JSON, the four stale bosch800 `mug` caches,
-  16 unreferenced CoACD dirs, the ArtVIP variants other than dishwasher_2 and the retired `_rl` copy;
-  `MANIFEST.txt`, undo = `mv` back); delete after 2026-11-21. The Mac's pre-refactor fragments sit in its own
-  `data/_trash_20261021/`.
-- The archive tooling (`archive_assets.py`, `restore_assets.py`, `latest.json`, the tarballs) is gone since
-  2026-10-21; the dataset's history on the hub keeps the 20260910 tarballs, whose `assets` kind also packs the pinned
-  Bosch instances. `hf upload` publishes everything in `data/assets`: keep `data/results/` and evidence out of it.
-- `package_frigidaire.py --check` and `frigidaire_asset_evidence.py` moved to
-  `data/assets/frigidaire_fdpc4221as/source/` (2026-10-21). The check was red on 2026-09-29 (4 assembly gates)
-  pending the two-job Kit evidence refresh (physics-only then render-only): `mcts.py` and `robot/` postdate the
-  2026-09-28 evidence hashes, and any edit to a top-level `code/frigidaire/src/dishsim_frigidaire` file stales it.
-  Batch package edits before refreshing.
-- Benchmark history traces (`stopped_20260928`, `pre_rebuild_20260928`, `history_planner_20260929`,
-  `smoke_20260923`) are `*trace.jsonl.xz`; robot-era arm meshes were removed from the caches (2026-09-29).
-- In progress and untracked (commit before any cleanup; `git clean` would destroy it): `mcts.py`,
-  `robot/` + `frigidaire_robot_*`/`frigidaire_grasp_test.py` (`code/frigidaire/docs/robot.md`), the top-5 load,
-  `docs/scoring_note/`.
+Hold folders (each with a `MANIFEST.txt`; undo = `mv` back): on the 2 TB drive `dishsim/_trash_20260917/` (delete after 2026-10-17) and `dishsim/_trash_20260929/` (v3-era results + HOTEC v2-v5; delete after 2026-10-29), on the Brev box `data/_trash_20261021/` (what the 2026-10-21 asset restructure dropped; delete after 2026-11-21), and the Mac's own `data/_trash_20261021/`.
 
-## Dot Score Rules page (2026-10-08)
+## Pages and the fair score (2026-10-22)
 
-The user's page https://claude.ai/artifact/F5vrhrNM4XnUk3ZXhJycY2 (private until the user shares
-it; the 2026-10-08 original, N = 64, is `docs/Dot Score Rules/`). Version 20 (2026-10-14) is live,
-built on the Brev box from `data/media/dot_rules/page_v20`. Rebuild with
-`frigidaire_dot_rules_figures.py`, then `frigidaire_dot_rules_page.py`; exact flags are in the
-Commands table of `results/2026-10-14-newj-curve-and-leaning-pairs.md` (pass level dirs such as
-`grid/N0262144`, not the root; always give `frigidaire_dot_rules_grid.py` an `--out`, its default
-overwrites the old levels). Publish to the same URL with `root` = the page dir and a files map of
-`media/*.png`, `media/*.jpg`, `data/depgraph_*.json` (set a dropped file to null); index.html must
-stay under 15 MB (the page script palettises PNGs above 10 MiB). Each version's plan, run note and
-open questions are in plans/, results/ and research/.
+The user's two pages, private until the user shares them: **Dot Score Rules**
+https://claude.ai/artifact/F5vrhrNM4XnUk3ZXhJycY2, Version 23 (2026-10-21: the rules, the New+J explorer with
+"relative to the kind's best", the per-dot figures; the 2026-10-08 original, N = 64, is `docs/Dot Score Rules/`), and
+**Dependency graphs** https://claude.ai/artifact/AkiJZLtFZnFtXYUxSEHJmm, Version 13 (2026-10-21: the valid
+physical-cause sample r05_00027 and every packing the run tried).
+
+- **Fair score** (`code/frigidaire/docs/exposure.md`, beside revision 5): a dish's object-level New+J over its kind's
+  ceiling, the best the kind reaches alone anywhere under the arm at θ 30° (plate 0.8718, bowl 0.5481, cup 0.2134; the
+  middle arm uses the same constants), clipped at 1, and 0 for a dish that pools (interior more than 2 mm below its rim);
+  a load's S is the plain mean over its dishes, "surface reached" the area-weighted mean.
+  `frigidaire_dot_rules_relative.py` writes it into the saved `.relative.json` files.
+- **Samples and graph** (`frigidaire_dependency_kit.py --sample`, reference `code/frigidaire/docs/dependency.md`): a
+  restricted packing is built one dish at a time by the insertion move (lowered from 20 mm above the rim in 5 mm steps,
+  plates upright, let go 20 mm above where the rack stops it), in a random order with each plate bank filled from its
+  lean side, with re-posing, deferral and the joint gate's 1 mm overlap rule after each drop. Valid = the built poses
+  pass the joint gate, the witness order rebuilds all 24 in a fresh Kit process, and every arrow is a physical cause (a
+  hard support confirmed by drops, or a covered insertion path).
+- **Rebuild** (Mac, Kit-free): `python3 code/planner/frigidaire/frigidaire_dependency_page.py --records
+  r05_00027=data/results/dot_rules/dependency/samples_v5/r05_00027.json --clips
+  r05_00027=data/media/dot_rules/dependency_samples_v6/r05_00027 --state
+  data/logs/dot_rules/samples_v6b/scheduler_state_merged.json --out <dir>` gives Version 13 byte for byte;
+  `python3 code/planner/frigidaire/frigidaire_dot_rules_page.py --grid-payload data/media/dot_rules/page_v22/index.html
+  --figures-dir data/media/dot_rules/page_v22/media --out <dir>` gives Version 23 except the numbers only the box's grid
+  holds (header tiles, the rules' cases, the per-dot captions: nan). On the box `frigidaire_dot_rules_figures.py`, then
+  `frigidaire_dot_rules_page.py --grid-dir data/results/dot_rules/grid/N0262144 --grid-obj-dir
+  data/results/dot_rules/grid_obj/N0262144` build everything (pass level dirs, not the root; always give
+  `frigidaire_dot_rules_grid.py` an `--out`, its default overwrites the old levels).
+- **Publish** with the Artifact tool to the same URL, `root` = the page dir and a files map of its `media/*` (set a
+  dropped file to null); index.html must stay under 15 MB (the Dot Score Rules page script palettises PNGs above
+  10 MiB). Each version's plan, run note and open questions are in plans/, results/ and research/.
 
 ## Ground rules
 

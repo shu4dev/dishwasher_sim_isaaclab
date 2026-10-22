@@ -1,34 +1,24 @@
 #!/usr/bin/env python3
-"""The "Dependency graphs" page of the re-posing sampler's samples (plans/2026-10-15-reposing-sampler-five-samples.md; the
-lean-side plate order, plans/2026-10-16-lean-side-plate-order.md; backtracking and the learning loop,
-plans/2026-10-16-backtracking-sampler-learning-loop.md): one HTML file with every sample's records embedded as JSON, the
-clips under media/ (Kit-free, standard library only; runs anywhere). A built sample whose library verdict is invalid is
-shown too, labelled with the orders that broke its graph; the panel on why the sampler stopped shows whenever packings did
-not build (--failure-note: that round's explanation; the plate chains come from the witness). Validity: every obeying
-library order built all 24 and every violation failed somewhere (the library table shows the dish it failed at beside the
-predicted one); an obeying order that failed taught a learned edge (drawn dotted) and the next round's fresh orders
-re-checked the graph, so a sample is valid when its last round passed.
+"""The "Dependency graphs" page of the physical-cause samples (plans/2026-10-16-physical-cause-graph.md; the labelled views
+and the graph variants, plans/2026-10-16-labelled-views-overlap-rule.md; the kind-ceiling score,
+plans/2026-10-21-kind-ceiling-score.md): one HTML file and its media (Kit-free, standard library only; rsvg-convert draws
+the graph PNGs).
 
-Per valid sample, behind a sample selector, the tuple: the load (a both-racks still of the built goal and its S), the
-graph (the swap-tested edges along the witness order with their reasons; a conditional edge, b needs one of {a, C...},
-drawn as a fan from every dish that lets b go in) and the witness animation; under it the per-edge clips (and each
-conditional edge's confirmation clips), an order checker and the library table judged by the refined graph. The yield of
-the run (every packing attempted and how it ended) comes from the sampler's state file. The height-sweep panels of the
-2026-10-15 insertion run are gone (its run note keeps them).
+Per valid sample, behind a sample selector: the load from four angles (its S and the joint-gate numbers in the caption),
+the witness rebuilt in a fresh Isaac process (video), and the prerequisite arrows along the witness order and layered as
+a DAG, each in three variants behind a toggle (direct, reduction, closure); then every packing the run tried, from the
+--sample scheduler's state, and how it was measured.
 
-    python3 code/planner/frigidaire/frigidaire_dependency_page.py --records r07_00012=data/results/dot_rules/dependency/samples/r07_00012.json ... --clips r07_00012=data/media/dot_rules/dependency_samples/r07_00012 ... --state data/logs/dot_rules/samples/scheduler_state.json --out data/media/dot_rules/dependency_page_samples
+    python3 code/planner/frigidaire/frigidaire_dependency_page.py --records r05_00027=data/results/dot_rules/dependency/samples_v5/r05_00027.json --clips r05_00027=data/media/dot_rules/dependency_samples_v6/r05_00027 --state data/logs/dot_rules/samples_v6b/scheduler_state_merged.json --out data/media/dot_rules/dependency_page_kind
 
-Writes <out>/index.html and <out>/media/<key>_<file> (the clips, posters and load still named in each <clips>/clips.json);
-a <load_id>.scores.json beside a record (frigidaire_dependency_score.py) adds its S; prints [RESULT].
+Writes <out>/index.html and <out>/media/<key>_<file> (the load still, the witness video and poster named in
+<clips>/clips.json, six graph PNGs); a <load_id>.scores.json beside a record (frigidaire_dependency_score.py) adds the
+absolute S, a <load_id>.relative.json (frigidaire_dot_rules_relative.py) the kind-ceiling S; prints [RESULT].
 """
 import argparse
 import json
 from pathlib import Path
 import shutil
-import sys
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from frigidaire_dependency_kit import judge_order  # noqa: E402  (stdlib only at import)
 
 MAX_FILE = 15 * 2 ** 20
 
@@ -51,10 +41,9 @@ def keyed(items, what):
 
 def scores_of(record_path, load_id):
     """S per rule (O, N, NJ) of the packing's packed poses and of the built goal (the record's entries_settled) when
-    frigidaire_dependency_score.py wrote <load_id>.scores.json beside the record, else None; with the rescaled S
-    ("rel": S_rel_best of frigidaire_dot_rules_relative.py --reference best, 2026-10-16) when <load_id>.relative.json
-    beside it has one; with the kind-ceiling score ("kind": S, S_area, S_by_kind, n_pooling of --reference kind,
-    2026-10-21) and the ceilings when it has those."""
+    frigidaire_dependency_score.py wrote <load_id>.scores.json beside the record, else None; with the kind-ceiling score
+    ("kind": S, S_area, S_by_kind, n_pooling of frigidaire_dot_rules_relative.py, 2026-10-21) and the ceilings when
+    <load_id>.relative.json beside it has those."""
     path = record_path.parent / f"{load_id}.scores.json"
     if not path.is_file():
         return None
@@ -65,180 +54,13 @@ def scores_of(record_path, load_id):
     rr = json.loads(rel.read_text()) if rel.is_file() else {}
     states = rr.get("states", {})
     for key, state in (("packed", "packed"), ("built", "settled")):
-        if out[key] and "S_rel_best" in (states.get(state) or {}):
-            out[key]["rel"] = round(states[state]["S_rel_best"], 4)
         if out[key] and "S" in (states.get(state) or {}):
             out[key]["kind"] = {k: states[state][k] for k in ("S", "S_area", "S_by_kind", "n_pooling")}
     out["ceilings"] = rr.get("ceilings_kind")
     return out
 
 
-def media(clips, prefix, name):
-    return f"media/{prefix}{name}" if name else None
-
-
-def page_data(rec, clips, prefix, scores):
-    wit = rec["witness"]
-    pos = {i: n for n, i in enumerate(wit["order"])}
-    clips = clips or {}
-    E = {(e["a"], e["b"]): e for e in rec["edges"]}
-    confirmed = {}
-    for c in (rec.get("refinement") or {}).get("confirmations") or []:
-        if c["confirmed"]:
-            k = f"{c['edge'][0]}>{c['edge'][1]}|{c['c']}"
-            cc = clips.get("conditional", {}).get(k)
-            confirmed.setdefault(tuple(c["edge"]), []).append(
-                {"c": c["c"], "clip": media(clips, prefix, cc and cc["file"]), "poster": media(clips, prefix, cc and cc["poster"])})
-    edges = []
-    for e in rec["edges"]:
-        c = clips.get("edges", {}).get(f"{e['a']}>{e['b']}")
-        edges.append({k: e[k] for k in ("a", "b", "reason", "step", "fails", "support", "learned", "detail",
-                                          "placed_before", "affected", "swap")}
-                     | {"margin": e["margin"]["min"], "any_of": e.get("any_of"), "fan": confirmed.get((e["a"], e["b"]), []),
-                        "round": e.get("round"), "from_order": e.get("from_order"),
-                        "clip": media(clips, prefix, c and c["file"]), "poster": media(clips, prefix, c and c["poster"])})
-    taught = {x["order"]: x for r in (rec.get("learning") or {}).get("rounds") or [] for x in r["diagnoses"]}
-    lib = []
-    for x in rec["library"]:
-        pr, ok, _ = judge_order(x, E)
-        o = x.get("outcome")
-        t = taught.get(x["index"])
-        lib.append({k: x[k] for k in ("index", "kind", "order", "edge")}
-                   | {"predicted": pr["predicted"], "predicted_position": pr["predicted_position"],
-                      "first_predicted": x.get("predicted"), "as_predicted": ok, "round": x.get("round") or 0,
-                      "taught": t and t["edge"], "taught_why": t and (t["why"] or "; ".join(f"{c[0]} > {c[1]}: {c[3]}"
-                                                                                             for c in t["rejected"])),
-                      "outcome": None if o is None else {k: o.get(k) for k in ("status", "failed_dish", "failed_position",
-                                                                                "placed", "moved")}})
-    learn = rec.get("learning") or {}
-    learning = {"max": learn.get("max_rounds"), "edges": learn.get("edges_added", 0),
-                "rounds": [{"round": r["round"], "from": r["from_orders"], "edges": r["edges"], "orders": len(r["orders"])}
-                           for r in learn.get("rounds") or []], "unlearnable": learn.get("unlearnable")}
-    s = rec.get("reposing") or {}
-    tries = s.get("attempts") or []
-    backs = s.get("backtracks") or []
-    ents = {e["id"]: e for e in rec.get("entries_chosen") or rec["entries"]}
-    steps = wit.get("steps") or []
-    w = clips.get("witness")
-    ref = rec.get("refinement")
-    swaps = rec.get("swaps") or []
-    return {"key": rec["load_id"], "load": rec["load_id"], "generated": rec.get("generated_utc", "")[:10], "valid": rec.get("valid"),
-            "release": rec.get("release") or {"mode": "clear"},
-            "dishes": sorted(({"id": i, "kind": e["kind"], "rack": e["rack"], "short": short(i)} for i, e in ents.items()),
-                             key=lambda d: pos.get(d["id"], 99)),
-            "witness": {"order": wit["order"], "support": wit["support"], "learned": wit["learned"],
-                        "plate_order": wit.get("plate_order") or "random", "chains": wit.get("chains"),
-                        "clip": media(clips, prefix, w and w["file"]), "poster": media(clips, prefix, w and w["poster"]),
-                        "seconds": w["seconds"] if w else None,
-                        "lowest_mm": [s_.get("lowest_lift_mm") for s_ in steps],
-                        "dev_mm": max((s_.get("settle_dev_mm") or 0) for s_ in steps) if steps else None},
-            "still": media(clips, prefix, clips.get("load")), "score": scores,
-            "sampler": {"attempts": len(tries), "failed": sum(t["status"] != "ok" for t in tries),
-                        "blocked": sum(bool(t["step"].get("blocked")) for t in tries),
-                        "deferred": sorted({t["dish"] for t in tries if t["status"] != "ok"}),
-                        "reposed": [{"id": i, "from": f"{r['from_slot']} {r['from_variant']}", "to": f"{r['slot']} {r['variant']}"}
-                                    for i, r in sorted((s.get("reposed") or {}).items())],
-                        "order": s.get("order"), "backtrack": s.get("backtrack"),
-                        "backtracks": [{k: b.get(k) for k in ("dish", "undone", "outcome", "back", "deferred", "moved")}
-                                       for b in backs]},
-            "goal_delta": (rec.get("goal_delta") or {}).get("max"), "edges": edges,
-            "swaps": {"tested": len(swaps), "failed": sum(x["failed"] for x in swaps),
-                      "invalid_context": sum(not x["context_valid"] for x in swaps),
-                      "near": sum("near" in x["source"] for x in swaps),
-                      "learned": sum("learned" in x["source"] for x in swaps)},
-            "library": lib, "learning": learning,
-            "verdict": {k: v for k, v in (rec.get("verdict") or {}).items() if k not in ("rows", "mismatches")},
-            "refinement": None if not ref else {"edges": ref["edges"], "fresh": ref["fresh"], "ok": ref["ok"]},
-            "thresholds": rec.get("thresholds", {}).get("at_goal"), "tolerance": tolerance_of(rec),
-            "rejudged": None if not rec.get("rejudged") else {
-                k: rec["rejudged"].get(k) for k in ("from", "from_tolerance", "edges_before", "edges_after", "dropped",
-                                                    "untested_step2", "marginal_unrerun", "learned_dropped",
-                                                    "verdict_before")}}
-
-
-def tolerance_of(rec):
-    """{name, text} of the record's at-goal tolerance (plans/2026-10-16-doubled-tolerance-rerun.md; bench before it)."""
-    t = rec.get("thresholds") or {}
-    tol = "; ".join(f"{k} {v['lateral_mm']:g} mm lateral / {v['dz_mm']:g} mm height / {v['tilt_deg']:g}°"
-                    for k, v in (t.get("at_goal") or {}).items())
-    return {"name": rec.get("tolerance") or "bench", "text": f"{tol}; contact under {t.get('contact_limit_mm', 2.):g} mm"}
-
-
-def yield_of(state):
-    """Every packing the sampler attempted, from its state file: [{load, stage, reason, orders}]."""
-    if not state:
-        return []
-    rule = state.get("plate_order") or "random"
-    return [{"load": k, "stage": v["stage"], "reason": v.get("reason"), "orders": v.get("orders"), "rule": rule,
-             "backtracks": v.get("backtracks"), "rounds": v.get("rounds"), "tolerance": state.get("tolerance") or "bench",
-             "resumed": k in (state.get("resumed") or [])}
-            for k, v in state["packings"].items() if v.get("started") is not None]
-
-
-def failure_of(folder, screen):
-    """Why the sampler stopped, over every record in ``folder`` that did not build: dishes placed per packing, the dishes
-    left out by kind and by how their last attempt ended, the re-posing calls that found no candidate, the placed plates'
-    faces from vertical and settle deviations (each witness's last frame), and the Kit-free screen per kind."""
-    import math
-    import statistics
-    rows = [json.loads(p.read_text()) for p in sorted(folder.glob("r*.json"))]
-    rows = [d for d in rows if d.get("status") == "resettle_failed" and d.get("reposing")]
-    if not rows:
-        return None
-    placed, left, why, calls, faces, devs, backs = [], {}, {}, {}, [], [], {}
-    for d in rows:
-        tries = d["reposing"]["attempts"]
-        build = (d.get("resettle_builds") or [{}])[0].get("order") or []      # the sampler's build: placed + stuck
-        ok = set(build[:-1]) if build else {t["dish"] for t in tries if t["status"] == "ok"}   # (a backtrack can undo
-        placed.append(len(ok))                                                # a dish that had gone in)
-        last = {t["dish"]: t for t in tries if t["dish"] not in ok}
-        for i, t in last.items():
-            kind, s = i.split("_")[0], t["step"]
-            left[kind] = left.get(kind, 0) + 1
-            by = sorted({x.split("_")[0] for x in s.get("blockers") or [] if "_" in x})
-            k = (f"{kind}: descent blocked by a placed {' or '.join(by) or 'dish'}" + (" at its start" if s.get("blocked") == "start"
-                 else " on the way down") if s.get("blocked") else f"{kind}: " + ("knocked a placed dish" if t["status"] == "moved"
-                                                                               else "landed out of tolerance"))
-            why[k] = why.get(k, 0) + 1
-        for c in d["reposing"].get("repose_calls") or []:
-            kind = c["dish"].split("_")[0]
-            n, z = calls.get(kind, (0, 0))
-            calls[kind] = (n + 1, z + (c["found"] == 0))
-        devs += [t["step"]["settle_dev_mm"] for t in tries if t["status"] == "ok" and t["dish"].startswith("plate")]
-        for b in d["reposing"].get("backtracks") or []:
-            backs[b["outcome"]] = backs.get(b["outcome"], 0) + 1
-        traj = folder / "_kit" / d["load_id"] / "traj" / "witness.json"
-        if traj.is_file():
-            w = json.loads(traj.read_text())
-            f = w["frames"][-1]
-            for n, i in enumerate(w["ids"]):
-                if i.startswith("plate") and f[7 * n] <= 2:
-                    qx, qy = f[7 * n + 3], f[7 * n + 4]
-                    faces.append(math.degrees(math.asin(min(1., abs(1 - 2 * (qx * qx + qy * qy))))))
-    out = {"packings": len(rows), "placed": sorted(placed), "left": left,
-           "why": sorted(([k, v] for k, v in why.items()), key=lambda x: -x[1]),
-           "calls": {k: {"calls": n, "none": z} for k, (n, z) in calls.items()},
-           "faces": {"n": len(faces), "upright": sum(x < 15 for x in faces), "lean": sum(15 <= x <= 40 for x in faces),
-                     "over": sum(x > 40 for x in faces), "median": round(statistics.median(faces)) if faces else None},
-           "plate_dev_mm": [min(devs), round(statistics.median(devs), 1), max(devs)] if devs else None, "screen": None,
-           "backtracks": backs}
-    if isinstance(screen, dict) and "summary" in screen:      # screen_backtrack.json: the sampler on geometry alone
-        out["screen_text"] = screen["summary"]["text"]
-    elif screen:
-        sc, key = {}, ("chain" if "chain" in screen[0] else "first")     # the lean-side order's screen, else the random one
-        for kind in ("plate", "bowl", "cup"):
-            a = [x for r in screen for x in r["alone"].values() if x["kind"] == kind]
-            f = [r[key][i] for r in screen for i, x in r["alone"].items() if x["kind"] == kind]
-            stop = [x["lowest_mm"] for x in a if x["stop"] == "appliance"]
-            sc[kind] = {"n": len(a), "start_blocked": sum(bool(x["blocked"]) for x in a), "stopped": len(stop),
-                        "stop_mm": [min(stop), statistics.median(stop), max(stop)] if stop else None,
-                        "reach": sum(x["stop"] == "target" for x in a),
-                        "first_start": sum(x["blocked"] == "start" for x in f), "first_dish": sum(x["blocked"] == "dish" for x in f)}
-        out["screen"] = {"packings": len(screen), "kinds": sc, "order": key}
-    return out
-
-
-# --------------------------------------------------------------------------- --edges physical (plans/2026-10-16-physical-cause-graph.md)
+# --------------------------------------------------------------------------- the page (plans/2026-10-16-physical-cause-graph.md)
 # Per valid sample exactly three PNG images and one video (coordinator, 2026-10-16): the load still (S and the gate numbers
 # in its caption), the graph along the witness order, the same graph layered as a DAG, and the witness rebuild. One edge
 # style; an arrow X -> Y means Y has to be in place before X (it points at the prerequisite: the record's edge a -> b is
@@ -367,8 +189,8 @@ def rasterize(svg, path):
 
 
 def physical_page(a, records, clip_dirs, state):
-    """--edges physical: the page (module comment above): the claim, the legend, per valid sample its four items behind a
-    selector, every packing of the run and how it ended, how it was measured."""
+    """The page (module comment above): the claim, the legend, per valid sample its four items behind a selector, every
+    packing of the run and how it ended, how it was measured."""
     import html
     esc = html.escape
     out_media = a.out / "media"
@@ -400,14 +222,6 @@ def physical_page(a, records, clip_dirs, state):
         s_text = (f"S (New+J) {sc['built']['NJ']:.4f} for the built poses (New {sc['built']['N']:.4f}, Old "
                   f"{sc['built']['O']:.4f}" + (f"; the packing it came from {sc['packed']['NJ']:.4f}" if sc.get("packed")
                                               else "") + ")" if sc and sc.get("built") else "S not scored")
-        if sc and "rel" in (sc.get("built") or {}):          # the rescaled S, absolute in parentheses (2026-10-16)
-            b, p = sc["built"], sc.get("packed") or {}
-            s_text = (f"S (New+J), rescaled: {b['rel']:.4f} for the built poses (absolute {b['NJ']:.4f}; New "
-                      f"{b['N']:.4f}, Old {b['O']:.4f})" + (f"; the packing it came from {p['rel']:.4f} ({p['NJ']:.4f})"
-                                                           if "rel" in p else "")
-                      + ". Rescaled: each dish's New+J over the most the same dish alone reaches at its spot (its "
-                        "height and distance from its arm, the best of the grid's tilts away from the arm's centre), "
-                        "that reference floored at 0.05, each dish's ratio clipped at 1, then area-weighted like S")
         if sc and "kind" in (sc.get("built") or {}):         # the kind-ceiling score, absolute after it (2026-10-21)
             b, p, c = sc["built"], sc.get("packed") or {}, sc["ceilings"]
             k, kp = b["kind"], p.get("kind")
@@ -498,8 +312,7 @@ def physical_page(a, records, clip_dirs, state):
                                     'packing stopped.</p>',
         rows=trs, disj=esc(disj or "none"), target=esc(str((state or {}).get("target_valid", 5))),
         maxp=esc(str((state or {}).get("max_packings", 20))))
-    style = TEMPLATE.split("<style>", 1)[1].split("</style>", 1)[0]
-    text = PHYSICAL_HEAD.replace("__STYLE__", style + PHYSICAL_STYLE) + body + PHYSICAL_SCRIPT
+    text = PHYSICAL_HEAD.replace("__STYLE__", STYLE + PHYSICAL_STYLE) + body + PHYSICAL_SCRIPT
     (a.out / "index.html").write_text(text)
     files = [a.out / "index.html", *copied]
     big = [p.name for p in files if p.stat().st_size > MAX_FILE]
@@ -677,75 +490,20 @@ else show((location.hash && bar.querySelector('button[data-k="' + location.hash.
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--records", nargs="*", default=[], metavar="KEY=PATH",
-                    help="one valid --edges swaps --release insertion record per sample (page order)")
+                    help="one valid (certified) frigidaire_dependency_kit.py record per sample (page order)")
     ap.add_argument("--clips", nargs="*", default=[], metavar="KEY=DIR",
                     help="frigidaire_dependency_clips.py --out (with clips.json) per key")
     ap.add_argument("--state", type=Path, help="the --sample scheduler's state (scheduler_state.json): the yield")
-    ap.add_argument("--failures", type=Path, metavar="DIR",
-                    help="the --sample records folder: why the packings that did not build stopped")
-    ap.add_argument("--failed-clip", metavar="LOAD=DIR", help="a failed record's clips (its last sampler build)")
-    ap.add_argument("--screen", type=Path, help="the Kit-free screen (screen_reposing.json, screen_chain.json: its counts "
-                    "per kind; screen_backtrack.json: its summary line)")
-    ap.add_argument("--failure-note", help="the round's explanation of why the sampler stopped (default: the 2026-10-15 b one)")
     ap.add_argument("--out", type=Path, required=True)
     a = ap.parse_args()
     records, clip_dirs = keyed(a.records, "--records"), keyed(a.clips, "--clips")
     state = json.loads(a.state.read_text()) if a.state and a.state.is_file() else None
-    if (state or {}).get("procedure") == "physical":         # plans/2026-10-16-physical-cause-graph.md
-        return physical_page(a, records, clip_dirs, state)
-    out_media = a.out / "media"
-    out_media.mkdir(parents=True, exist_ok=True)
-    copied, samples = [], []
-    for key, path in records.items():
-        rec = json.loads(path.read_text())
-        cdir = clip_dirs.get(key)
-        clips = json.loads((cdir / "clips.json").read_text()) if cdir and (cdir / "clips.json").is_file() else None
-        names = []
-        for c in ([clips["witness"]] if clips and clips.get("witness") else []) + list((clips or {}).get("edges", {}).values()) \
-                + list((clips or {}).get("conditional", {}).values()):
-            names += [c["file"], c["poster"]]
-        if clips and clips.get("load"):
-            names.append(clips["load"])
-        for name in names:
-            shutil.copy2(cdir / name, out_media / f"{key}_{name}")
-            copied.append(out_media / f"{key}_{name}")
-        samples.append(page_data(rec, clips, f"{key}_", scores_of(path, rec["load_id"])))
-    screen = json.loads(a.screen.read_text()) if a.screen and a.screen.is_file() else None
-    failure = failure_of(a.failures, screen) if a.failures else None
-    if failure and a.failed_clip:
-        load, _, cdir = a.failed_clip.partition("=")
-        c = json.loads((Path(cdir) / "clips.json").read_text())["witness"]
-        for name in (c["file"], c["poster"]):
-            shutil.copy2(Path(cdir) / name, out_media / f"failed_{load}_{name}")
-            copied.append(out_media / f"failed_{load}_{name}")
-        failure["clip"] = {"load": load, "file": f"media/failed_{load}_{c['file']}",
-                           "poster": f"media/failed_{load}_{c['poster']}", "seconds": c["seconds"]}
-    if failure and a.failure_note:
-        failure["note"] = a.failure_note
-    page = {"samples": samples, "yield": yield_of(state), "failure": failure,
-            "generated": (state or {}).get("updated_utc", "")[:10],
-            "backtrack": (state or {}).get("backtrack", 3), "resumed": (state or {}).get("resumed") or [],
-            "skipped": sum(v.get("stage") == "skipped" for v in ((state or {}).get("packings") or {}).values()),
-            "tolerance": samples[0]["tolerance"] if samples else {"name": (state or {}).get("tolerance") or "bench",
-                                                                   "text": ""}}
-    text = TEMPLATE.replace("__DATA__", json.dumps(page, separators=(",", ":")).replace("</", "<\\/"))
-    (a.out / "index.html").write_text(text)
-    files = [a.out / "index.html", *copied]
-    big = [p.name for p in files if p.stat().st_size > MAX_FILE]
-    total = sum(p.stat().st_size for p in files)
-    print(f"[RESULT] {'FAIL' if big else 'PASS'} page {a.out / 'index.html'}: {len(samples)} samples "
-          f"({', '.join(s['load'] for s in samples)}), {len(page['yield'])} packings in the yield, "
-          f"{(a.out / 'index.html').stat().st_size} B, {len(copied)} media files, {total} B in all"
-          + (f"; over 15 MB: {big}" if big else ""), flush=True)
+    return physical_page(a, records, clip_dirs, state)
 
 
-TEMPLATE = r"""<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Dependency graphs</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap">
-<style>
+# The page's CSS, inherited from the retired swap-test page: the published page carries it byte for byte (its
+# unused rules included), and PHYSICAL_STYLE follows it.
+STYLE = r"""
 /* Layout: one 1120px column: the yield of the run, a sticky sample selector, then per sample the tuple (load still
    and S beside the witness video, the graph full width under them), the edge clips, the checker, the library table. */
 :root {
@@ -853,411 +611,6 @@ ul.rules { margin: 0; padding-left: 1.1rem; display: grid; gap: 6px; max-width: 
 .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink) }
 .variants { display: grid; gap: 8px; justify-items: start }
 .stage-valid { color: var(--ok) } .stage-invalid, .stage-error { color: var(--bad) } .stage-failed, .stage-killed { color: var(--warn) }
-</style>
-
-<div class="wrap">
-<header>
-  <div class="eyebrow">Frigidaire twin · HOTEC set · Isaac Sim 4.5 · re-posing sampler · <span id="gen"></span></div>
-  <h1>Dependency graphs</h1>
-  <p class="lead" id="lead"></p>
-  <div class="stats" id="stats"></div>
-</header>
-
-<section id="yieldsec">
-  <h2>Every packing the sampler tried</h2>
-  <p class="muted" id="yieldnote"></p>
-  <div class="panel scroll"><table id="yieldtable"></table></div>
-</section>
-
-<section id="nosample" hidden>
-  <h2 id="nstitle">Why no sample is valid</h2>
-  <p id="nsnote"></p>
-  <div class="two">
-    <div class="tile">
-      <div id="nsvideo"></div>
-      <p class="muted" id="nscaption"></p>
-    </div>
-    <dl class="facts" id="nsfacts"></dl>
-  </div>
-</section>
-
-<div class="samplebar" id="samplebar">
-  <span class="muted" id="slabel">Sample</span>
-  <div class="seg" id="samples" role="group" aria-labelledby="slabel"></div>
-  <span class="muted" id="snote"></span>
-</div>
-
-<section id="tuple">
-  <h2 id="tupletitle"></h2>
-  <p id="verdictline" hidden></p>
-  <div class="two">
-    <div class="tile">
-      <h3>The load <span class="muted" style="font: 400 .9rem var(--body)">the built goal, both racks</span></h3>
-      <div id="still"></div>
-      <div class="score" id="score"></div>
-      <dl class="facts" id="loadfacts"></dl>
-    </div>
-    <div class="tile">
-      <h3>The witness <span class="muted" style="font: 400 .9rem var(--body)">the order that built it</span></h3>
-      <div id="wvideo"></div>
-      <dl class="facts" id="wfacts"></dl>
-    </div>
-  </div>
-  <div class="tile">
-    <h3>The graph <span class="muted" style="font: 400 .9rem var(--body)">drawn along the witness order</span></h3>
-    <div class="legend">
-      <span class="key need"><span class="swatch"></span>need</span>
-      <span class="key block"><span class="swatch"></span>block</span>
-      <span class="key knock"><span class="swatch"></span>knock</span>
-      <span class="key learned"><span class="swatch dot"></span>learned: an order that broke no edge failed, and its build named this pair</span>
-      <span class="key"><span class="swatch dash"></span>conditional fan: b needs any one of these first</span>
-      <span class="key"><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4" fill="currentColor"></circle></svg>support (b rests on a)</span>
-      <span class="key"><span class="mono">p</span> plate · <span class="mono">b</span> bowl · <span class="mono">c</span> cup</span>
-      <span class="key" style="color:var(--plate)"><span class="swatch dash"></span>plate chain under the line (F front bank, R rear bank, in the order the plates went in: each leans onto the one before)</span>
-    </div>
-    <div class="panel scroll"><svg id="arcs" role="img" aria-label="Dependency arcs along the witness order"></svg></div>
-    <p class="muted" id="graphnote"></p>
-  </div>
-</section>
-
-<section id="clips">
-  <h2>Each edge and the swap that made it</h2>
-  <p class="muted" id="clipsnote"></p>
-  <div class="cards" id="cards"></div>
-</section>
-
-<section id="checker">
-  <h2>Order checker</h2>
-  <p class="muted">Drag a dish to a new place, or click it and then click the dish it should go before. Arrow keys move the focused dish. The checker lists every edge the order breaks and the dish the graph says fails first; a conditional edge holds once any of its dishes is in.</p>
-  <div class="tool">
-    <div class="panel" style="display:grid;gap:12px">
-      <div class="controls">
-        <button class="primary" id="reset" type="button">Witness order</button>
-        <button id="random" type="button">Random obeying order</button>
-        <label class="muted" for="libsel" style="font-size:.9rem">Library</label>
-        <select id="libsel"></select>
-      </div>
-      <div class="strip" id="strip" aria-label="Placement order"></div>
-    </div>
-    <div class="panel result" id="result" aria-live="polite"></div>
-  </div>
-</section>
-
-<section id="library">
-  <h2>What Isaac did with the library</h2>
-  <p class="muted" id="libnote"></p>
-  <div class="panel scroll"><table id="libtable"></table></div>
-</section>
-
-<section id="rules">
-  <h2>How it was measured</h2>
-  <ul class="rules" id="ruleslist"></ul>
-</section>
-</div>
-
-<script id="data" type="application/json">__DATA__</script>
-<script>
-"use strict";
-const ALL = JSON.parse(document.getElementById("data").textContent);
-const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
-const KIND = {plate: "var(--plate)", bowl: "var(--bowl)", cup: "var(--cup)"};
-const RULE = {"lean-side": "lean-side plate chains", random: "uniformly random"};
-const KINDNAME = {witness: "witness", edge_violation: "edge violation", obeying: "random obeying", random_violation: "random single violation", refined_obeying: "fresh obeying (refined graph)", learned_obeying: "fresh obeying (learning round)"};
-const TOLNAME = {library: "doubled", bench: "bench"};
-const tolText = (t) => (t && t.name === "library" ? "the at-goal tolerance doubled for the swaps, the library and learning (" + t.text + "); the sampler keeps its own landing rule (80 mm, contact under 2 mm)" : "the bench's at-goal tolerance" + (t && t.text ? " (" + t.text + ")" : ""));
-const shortId = (id) => { const k = id.slice(0, id.lastIndexOf("_")), n = id.slice(id.lastIndexOf("_") + 1); return k[0] + n; };
-let D = null, dish = {}, witness = [], order = [], picked = null, current = 0;
-const sh = (id) => (dish[id] ? dish[id].short : shortId(id));
-const members = (e) => (e.any_of && e.any_of.length ? e.any_of : [e.a]);
-function reasonText(r) {
-  if (r === "need") return "the later dish does not land without the earlier one";
-  if (r === "block") return "the earlier dish cannot go in once the later one is there (its descent is blocked, or it does not land)";
-  if (r === "learned") return "an order that broke no edge failed here, and the build's own diagnosis named this pair";
-  return "a drop moves a placed dish out of its tolerance";
-}
-
-function check(ord) {
-  const pos = Object.fromEntries(ord.map((id, i) => [id, i]));
-  const violated = D.edges.filter((e) => members(e).every((m) => pos[m] > pos[e.b]));
-  let first = null;
-  for (const e of violated) { const p = pos[e.fails]; if (first === null || p < first.pos) first = {pos: p, dish: e.fails}; }
-  const key = ord.join(" ");
-  const lib = D.library.find((l) => l.order.join(" ") === key) || null;
-  return {violated, first, lib};
-}
-
-function outcomeText(o) {
-  if (!o) return "listed in the library but not built";
-  if (o.status === "ok") return "all " + witness.length + " dishes landed";
-  if (o.status === "stopped") return "no failure up to its stop (" + o.placed + " placed)";
-  const what = o.status === "moved" ? "moved " + (o.moved || []).map(sh).join(", ") : "did not go in";
-  return "failed at " + sh(o.failed_dish) + " (position " + (o.failed_position + 1) + "): " + what;
-}
-
-// ---- yield and header (built once)
-function yieldTable() {
-  const y = ALL.yield;
-  if (!y.length) { $("yieldsec").hidden = true; return; }
-  const n = (st) => y.filter((r) => r.stage === st).length;
-  const bt = ALL.backtrack ? "The sampler backtracks: a dish that cannot go in undoes up to three of its most recently placed blockers, goes in, and they go back. " : "No backtracking: a dish that goes in neither at its own pose nor at a re-pose waits until later in the order, and the load fails when no dish left goes in. ";
-  const rs = ALL.resumed.length ? ALL.resumed.join(" and ") + " were built by the previous run; here their saved swap drops were judged again under the tolerance below and their library and learning were built again in Isaac. New packings of the fresh list start only once " + (ALL.resumed.length === 2 ? "both are" : "all of them are") + " valid" + (ALL.skipped ? "; " + (ALL.resumed.length === 2 ? "neither was" : "not all were") + ", so the other " + ALL.skipped + " packings of this run were never started" : "") + ". " : "";
-  $("yieldnote").textContent = "Packings in the order of the fresh list, run in parallel. " + rs + "Order rule: lean-side plate chains = a random order of all 24 dishes in which each plate bank's plates go in from the slot furthest on its lean side outward, bowls and cups at random among them. " + bt + "Tolerance: " + tolText(ALL.tolerance) + ". Valid: every library order that obeys the graph built all 24 and every order that breaks an edge failed somewhere; an obeying order that failed taught a learned edge, and the last of up to three learning rounds of 10 fresh obeying orders passed. Invalid: it did not. Failed: the sampler could not place all 24 dishes. Killed: still running when the run stopped.";
-  $("yieldtable").innerHTML = "<tr><th>Packing</th><th>Order rule</th><th>Tolerance</th><th>Outcome</th><th>Backtracks</th><th>Library</th><th>Learning rounds</th><th>Why</th></tr>" + y.map((r) => '<tr><td class="mono">' + esc(r.load) + (r.resumed ? ' <span class="muted">rerun</span>' : "") + "</td><td>" + esc(RULE[r.rule] || r.rule || "") + "</td><td>" + esc(TOLNAME[r.tolerance] || r.tolerance || "") + '</td><td class="stage-' + esc(r.stage) + '">' + esc(r.stage) + "</td><td>" + esc(r.backtracks === undefined || r.backtracks === null ? "" : r.backtracks) + "</td><td>" + esc(r.orders || "") + "</td><td>" + esc(r.rounds === undefined || r.rounds === null ? "" : r.rounds) + '</td><td class="wrap">' + esc(r.reason || "") + "</td></tr>").join("");
-  $("stats").innerHTML = [[n("valid") + " / " + y.length, "packings with a valid sample"], [n("invalid"), "built, graph not confirmed by the library"], [n("failed"), "the sampler could not place all 24"], [n("killed") + n("error"), "stopped or errored before a verdict"]].map(([b, s]) => '<div class="stat"><b>' + esc(b) + "</b><span>" + esc(s) + "</span></div>").join("");
-}
-function lead() {
-  $("gen").textContent = ALL.samples.length ? ALL.samples[0].generated : ALL.generated;
-  $("lead").textContent = "Each sample is a load of 24 HOTEC dishes that Isaac built one dish at a time: every dish is lowered from above its rack's rim (plates upright, so they tip into a lean) and let go 20 mm above where the rack stops it. The order is random, except that each plate bank fills from its lean side outward, so every plate leans onto the one before it. A dish that cannot go in is tried at up to five other free poses (a plate only further along its bank's chain); if none goes in, " + (ALL.backtrack ? "up to three of the placed dishes that blocked it are taken out, it goes in, and they go back (or wait until later)" : "it waits until later in the order (this run samples without backtracking" + (ALL.resumed.length ? "; the rerun samples were built with it allowed and used none" : "") + ")") + ". The order that worked is the witness, the poses it reached are the goal, and swapping pairs of that order gives the dependency graph. A sample counts when every order in its library that obeys the graph builds all 24 and every order that breaks an edge fails somewhere; an obeying order that fails teaches the graph a learned edge, and fresh obeying orders check it again, up to three rounds. Tolerance in force: " + tolText(ALL.tolerance) + ".";
-}
-
-// ---- sample selector
-function selector() {
-  $("samples").innerHTML = ALL.samples.map((s, i) => '<button type="button" data-k="' + i + '" aria-pressed="' + (i === current) + '">' + esc(s.load) + (s.valid === true ? "" : " · " + esc((s.verdict && s.verdict.stage) || "pending")) + "</button>").join("");
-  const nv = ALL.samples.filter((s) => s.valid === true).length;
-  $("snote").textContent = nv + " valid of " + ALL.samples.length + " built";
-}
-$("samples").addEventListener("click", (ev) => { const b = ev.target.closest("button[data-k]"); if (b) setSample(+b.dataset.k); });
-
-// ---- the tuple
-function tuple() {
-  $("tupletitle").textContent = "Sample " + D.load + (D.valid === true ? "" : " · " + ((D.verdict && D.verdict.stage) || "pending"));
-  $("verdictline").hidden = D.valid === true;
-  $("verdictline").innerHTML = D.valid === true ? "" : '<span class="pill no">' + esc((D.verdict && D.verdict.stage) || "pending") + "</span> Not a valid sample: " + esc((D.verdict && D.verdict.reason) || "") + ". The run stops building a sample's library once it is invalid, so the orders listed as not built never ran.";
-  $("still").innerHTML = D.still ? '<img class="still" src="' + esc(D.still) + '" alt="' + esc("Both racks of load " + D.load + " as the witness left them") + '">' : '<p class="empty">No still.</p>';
-  const sc = D.score;
-  $("score").innerHTML = sc && sc.built ? '<span class="muted">S (New+J)</span><b>' + sc.built.NJ.toFixed(4) + '</b><span class="muted">built goal' + (sc.packed ? " · packing " + sc.packed.NJ.toFixed(4) : "") + "</span>" : '<span class="empty">S not scored.</span>';
-  const s = D.sampler, g = D.goal_delta;
-  const rows = [
-    ["Re-posed", s.reposed.length ? s.reposed.map((r) => sh(r.id) + ": " + r.from + " → " + r.to).join("; ") : "none: every dish went in at its packed pose"],
-    ["Attempts", s.attempts + " in Isaac (" + s.failed + " failed, " + s.blocked + " of them blocked on the way down)" + (s.deferred.length ? "; " + s.deferred.map(sh).join(", ") + " needed more than one try" : "")],
-    ["Backtracks", s.backtracks.length ? s.backtracks.map((b) => sh(b.dish) + " took out " + b.undone.map(sh).join(", ") + ": " + (b.outcome === "placed" ? "went in" + (b.deferred && b.deferred.length ? ", " + b.deferred.map(sh).join(", ") + " went back later" : ", they went back") : b.outcome === "abandoned" ? "abandoned (" + (b.moved || []).map(sh).join(", ") + " moved)" : "still blocked, all put back")).join("; ") : "none"],
-    ["Goal vs packing", g ? "up to " + g.lateral_mm + " mm lateral, " + g.dz_mm + " mm in height and " + g.tilt_deg + "° from the poses the dishes went in with" : "n/a"],
-  ];
-  if (sc && sc.built) rows.push(["S per rule", "built " + Object.entries(sc.built).map(([k, v]) => k + " " + v.toFixed(4)).join(" · ") + (sc.packed ? "; packing " + Object.entries(sc.packed).map(([k, v]) => k + " " + v.toFixed(4)).join(" · ") : "")]);
-  $("loadfacts").innerHTML = rows.map(([t, d]) => "<div><dt>" + esc(t) + "</dt><dd>" + esc(d) + "</dd></div>").join("");
-  const w = D.witness;
-  $("wvideo").innerHTML = w.clip ? '<video controls preload="metadata" playsinline poster="' + esc(w.poster) + '" src="' + esc(w.clip) + '"></video>' : '<p class="empty">No witness clip.</p>';
-  const lows = w.lowest_mm.filter((x) => x !== null && x !== undefined);
-  $("wfacts").innerHTML = [
-    ["Order", w.order.map(sh).join(" ")],
-    ["Descents", lows.length ? "each dish stopped " + Math.min(...lows) + "–" + Math.max(...lows) + " mm above its move pose (0 = all the way down) and fell 20 mm; the furthest landed " + w.dev_mm + " mm from its pose (80 mm allowed)" : "n/a"],
-    ["Contacts", w.support.length + " support pairs (b rests on a); " + D.edges.filter((e) => e.support).length + " of them are also edges"],
-    ["Plate chains", w.chains ? Object.entries(Object.entries(w.chains).filter(([, c]) => c.placed_index !== undefined && c.placed_index !== null).reduce((m, [id, c]) => ((m[c.bank] = m[c.bank] || []).push([c.placed_index, id, c]), m), {})).map(([b, l]) => b.split(" ")[1] + " bank: " + l.sort((p, q) => p[0] - q[0]).map(([, id, c]) => sh(id) + " " + c.placed_slot.split("_")[2] + (c.placed_slot !== c.slot ? " (planned " + c.slot.split("_")[2] + ")" : "")).join(" → ")).join("; ") + " (plate, slot gap)" : "uniformly random order (no chains)"],
-  ].map(([t, d]) => "<div><dt>" + esc(t) + '</dt><dd class="' + (t === "Order" ? "mono" : "") + '">' + esc(d) + "</dd></div>").join("");
-  const nc = D.edges.filter((e) => e.any_of).length;
-  const nl = D.edges.filter((e) => e.reason === "learned").length, L = D.learning || {rounds: []};
-  $("graphnote").textContent = "Every dish sits on the line in the witness order. An arc goes from the dish that must go first to the one that must wait, one per failed swap." + (nc ? " " + nc + " edge" + (nc === 1 ? " is" : "s are") + " conditional: the library built an order that broke it, and a drop confirmed which other dish lets b go in instead, so b waits for any one dish of its fan." : " No edge needed the refinement.") + (nl ? " " + nl + " dotted edge" + (nl === 1 ? " was" : "s were") + " learned in " + L.rounds.length + " round" + (L.rounds.length === 1 ? "" : "s") + ": an order that obeyed every edge failed, and its build named the pair." : L.rounds.length ? "" : " No obeying order failed, so nothing was learned.");
-}
-
-// ---- arc diagram (a conditional edge: one dashed arc per member of its fan)
-const STEP = 44, X0 = 28, Y0 = 210;
-function arcs(highlight) {
-  const svg = $("arcs");
-  const pos = Object.fromEntries(witness.map((id, i) => [id, i]));
-  const chains = D.witness.chains || {}, banks = {};
-  for (const id of witness) { const c = chains[id]; if (c && c.placed_index !== undefined && c.placed_index !== null) (banks[c.bank] = banks[c.bank] || []).push(id); }
-  const W = X0 * 2 + STEP * (witness.length - 1), Ht = Y0 + (Object.keys(banks).length ? 96 : 40);
-  svg.setAttribute("viewBox", "0 0 " + W + " " + Ht);
-  svg.setAttribute("width", W);
-  svg.setAttribute("height", Ht);
-  const x = (id) => X0 + STEP * pos[id];
-  const hl = new Set((highlight || []).map((e) => e.a + ">" + e.b));
-  let s = "<defs>" + ["need", "block", "knock", "learned"].map((r) => '<marker id="m-' + r + '" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" style="fill:var(--' + r + ')"></path></marker>').join("") + "</defs>";
-  s += '<line x1="' + (X0 - 14) + '" x2="' + (W - X0 + 14) + '" y1="' + Y0 + '" y2="' + Y0 + '" style="stroke:var(--line)" stroke-width="2"></line>';
-  for (const e of D.edges) {
-    const on = hl.has(e.a + ">" + e.b), ms = members(e), fan = ms.length > 1;
-    for (const m of ms) {
-      const xa = x(m), xb = x(e.b), r = Math.abs(xb - xa) / 2, h = Math.min(24 + Math.abs(xb - xa) * 0.42, Y0 - 24);
-      s += '<path d="M' + xa + "," + (Y0 - 10) + " A" + r + "," + h + " 0 0 " + (xa < xb ? 1 : 0) + " " + xb + "," + (Y0 - 10) + '" fill="none" style="stroke:var(--' + e.reason + ')" stroke-width="' + (on ? 4.5 : fan ? 1.9 : 2.4) + '"' + (fan ? ' stroke-dasharray="6 4"' : e.reason === "learned" ? ' stroke-dasharray="1.5 4.5" stroke-linecap="round"' : "") + ' marker-end="url(#m-' + e.reason + ')"><title>' + esc((fan ? sh(e.b) + " needs one of " + ms.map(sh).join(", ") : sh(e.a) + " before " + sh(e.b)) + " · " + e.reason + (e.round ? " (round " + e.round + ")" : "") + ": " + e.detail) + "</title></path>";
-      if (e.support && m === e.a) s += '<circle cx="' + (xa + xb) / 2 + '" cy="' + (Y0 - 10 - h) + '" r="4.5" style="fill:var(--' + e.reason + ')"></circle>';
-    }
-    if (fan) s += '<text x="' + x(e.b) + '" y="' + (Y0 - 16) + '" text-anchor="middle" font-size="10" style="fill:var(--' + e.reason + ')">1 of ' + ms.length + "</text>";
-  }
-  Object.entries(banks).forEach(([b, ids], bi) => {          // each bank's plates in the order they went in
-    const tag = (b.split(" ")[1] || "?")[0].toUpperCase();
-    ids.forEach((id, k) => {
-      s += '<text x="' + x(id) + '" y="' + (Y0 + 38) + '" text-anchor="middle" font-size="10" style="fill:var(--plate)">' + esc(tag + (k + 1)) + "</text>";
-      if (k + 1 < ids.length) {
-        const xa = x(id), xb = x(ids[k + 1]), h = Math.min(12 + Math.abs(xb - xa) * 0.12, 40);
-        s += '<path d="M' + xa + "," + (Y0 + 44) + " Q" + (xa + xb) / 2 + "," + (Y0 + 44 + 2 * h) + " " + xb + "," + (Y0 + 44) + '" fill="none" style="stroke:var(--plate)" stroke-width="1.6" stroke-dasharray="' + (bi ? "1.5 3" : "5 3") + '"><title>' + esc(b + ": " + sh(ids[k + 1]) + " (" + (chains[ids[k + 1]].placed_slot || "") + ") went in after " + sh(id) + " (" + (chains[id].placed_slot || "") + ")") + "</title></path>";
-      }
-    });
-  });
-  for (const id of witness) {
-    const d = dish[id];
-    s += '<circle cx="' + x(id) + '" cy="' + Y0 + '" r="8" style="fill:' + KIND[d.kind] + ';stroke:var(--surface)" stroke-width="2"><title>' + esc(id + " · " + d.rack + (chains[id] ? " · " + chains[id].bank + ", chain " + (chains[id].index + 1) + ", slot " + (chains[id].placed_slot || chains[id].slot) : "")) + "</title></circle>";
-    s += '<text x="' + x(id) + '" y="' + (Y0 + 24) + '" text-anchor="middle" font-size="11">' + esc(d.short) + "</text>";
-  }
-  svg.innerHTML = s;
-}
-
-// ---- checker
-function render() {
-  const res = check(order);
-  const inEdge = new Set(res.violated.flatMap((e) => [...members(e), e.b]));
-  $("strip").innerHTML = order.map((id, i) => '<button type="button" class="chip' + (id === picked ? " picked" : "") + (inEdge.has(id) ? " inedge" : "") + (res.first && res.first.dish === id ? " fails" : "") + '" draggable="true" data-id="' + id + '" style="--k:' + KIND[dish[id].kind] + '" aria-label="' + esc(id + ", position " + (i + 1)) + '"><span class="n">' + (i + 1) + '</span><span class="s">' + esc(dish[id].short) + "</span></button>").join("");
-  let h = "";
-  if (!res.violated.length) {
-    h += '<div class="verdict">Obeys all ' + D.edges.length + " edges.</div><p>The graph predicts that every dish goes in.</p>";
-  } else {
-    h += '<div class="verdict">Breaks ' + res.violated.length + " edge" + (res.violated.length === 1 ? "" : "s") + ". Predicted to fail at " + esc(sh(res.first.dish)) + " (position " + (res.first.pos + 1) + ").</div>";
-    h += '<ul class="vlist">' + res.violated.map((e, i) => '<li><span class="pill ' + e.reason + '">' + e.reason + "</span><span>" + (e.any_of ? "one of <b class=\"mono\">" + esc(members(e).map(sh).join(", ")) + "</b>" : '<b class="mono">' + esc(sh(e.a)) + "</b>") + ' must go before <b class="mono">' + esc(sh(e.b)) + "</b>. " + esc(e.detail) + "</span>" + (e.clip ? '<button type="button" data-clip="' + i + '">Clip</button>' : "<span></span>") + "</li>").join("") + "</ul>";
-  }
-  const l = res.lib;
-  if (l) {
-    const m = l.as_predicted;
-    h += '<div class="isaac"><div><span class="pill ' + (m === null ? "untested" : m ? "yes" : l.taught ? "learned" : "no") + '">' + (m === null ? "not built" : m ? "as the rule asks" : l.taught ? "failed, taught an edge" : "not as the rule asks") + "</span> Library order " + l.index + " (" + esc(KINDNAME[l.kind] || l.kind) + ", round " + l.round + ")</div><div>Isaac: " + esc(outcomeText(l.outcome)) + ".</div></div>";
-  } else {
-    h += '<div class="isaac"><div><span class="pill untested">untested</span></div><div>Isaac did not build this order; only the ' + D.library.length + " library orders were.</div></div>";
-  }
-  h += '<div id="player"></div>';
-  $("result").innerHTML = h;
-  $("result").querySelectorAll("button[data-clip]").forEach((b) => b.addEventListener("click", () => {
-    const e = res.violated[+b.dataset.clip];
-    $("player").innerHTML = '<video controls autoplay muted playsinline poster="' + esc(e.poster) + '" src="' + esc(e.clip) + '"></video>';
-  }));
-  $("libsel").value = l ? String(l.index) : "";
-  document.querySelectorAll("#libtable tr[data-i]").forEach((tr) => tr.classList.toggle("sel", l !== null && +tr.dataset.i === l.index));
-  arcs(res.violated);
-}
-function move(id, before) {
-  order.splice(order.indexOf(id), 1);
-  order.splice(before === null ? order.length : order.indexOf(before), 0, id);
-}
-const strip = $("strip");
-strip.addEventListener("click", (ev) => {
-  const c = ev.target.closest(".chip"); if (!c) return;
-  const id = c.dataset.id;
-  if (picked === null) picked = id; else { if (picked !== id) move(picked, id); picked = null; }
-  render();
-});
-strip.addEventListener("keydown", (ev) => {
-  const c = ev.target.closest(".chip"); if (!c || (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight")) return;
-  ev.preventDefault();
-  const id = c.dataset.id, i = order.indexOf(id), j = ev.key === "ArrowLeft" ? Math.max(0, i - 1) : Math.min(order.length - 1, i + 1);
-  order.splice(i, 1); order.splice(j, 0, id); picked = null; render();
-  strip.querySelector('[data-id="' + id + '"]').focus();
-});
-let dragged = null;
-strip.addEventListener("dragstart", (ev) => { const c = ev.target.closest(".chip"); if (!c) return; dragged = c.dataset.id; ev.dataTransfer.effectAllowed = "move"; ev.dataTransfer.setData("text/plain", dragged); });
-strip.addEventListener("dragover", (ev) => { const c = ev.target.closest(".chip"); if (!c || !dragged) return; ev.preventDefault(); strip.querySelectorAll(".over").forEach((x) => x.classList.remove("over")); c.classList.add("over"); });
-strip.addEventListener("drop", (ev) => { const c = ev.target.closest(".chip"); ev.preventDefault(); if (dragged && c && c.dataset.id !== dragged) move(dragged, c.dataset.id); dragged = null; picked = null; render(); });
-strip.addEventListener("dragend", () => { dragged = null; strip.querySelectorAll(".over").forEach((x) => x.classList.remove("over")); });
-$("reset").addEventListener("click", () => { order = witness.slice(); picked = null; render(); });
-$("random").addEventListener("click", () => {
-  const placed = new Set(), out = [], left = witness.slice();
-  while (left.length) {
-    const ready = left.filter((i) => D.edges.every((e) => e.b !== i || members(e).some((m) => placed.has(m))));
-    const i = ready[Math.floor(Math.random() * ready.length)];
-    left.splice(left.indexOf(i), 1); placed.add(i); out.push(i);
-  }
-  order = out; picked = null; render();
-});
-function libOptions() {
-  $("libsel").innerHTML = '<option value="">choose an order</option>' + D.library.map((l) => '<option value="' + l.index + '">' + l.index + " · " + esc(KINDNAME[l.kind] || l.kind) + (l.edge ? " " + esc(sh(l.edge[0]) + "/" + sh(l.edge[1])) : "") + "</option>").join("");
-}
-$("libsel").addEventListener("change", (ev) => { const l = D.library[+ev.target.value]; if (ev.target.value !== "" && l) { order = l.order.slice(); picked = null; render(); } });
-
-// ---- clip cards
-function cards() {
-  $("clipsnote").textContent = "Each clip replays the failed swap from the poses Isaac recorded: the later dish goes in first, into the partial load the witness had when the earlier dish went in, then the earlier dish follows. Every drop starts with its descent, one frame per 5 mm step; a descent a placed dish blocks stops there, held in red. A conditional edge adds one clip per dish of its fan: b goes in with that dish placed and a absent. Tinted dishes are the pair and anything it moved; grey dishes are the rest of that partial load. A learned edge has no clip: it comes from a library order that failed, and library builds keep no trajectory.";
-  $("cards").innerHTML = D.edges.length ? D.edges.map((e) => '<article class="card"><h3><span class="mono">' + esc(e.any_of ? "{" + members(e).map(sh).join(", ") + "}" : sh(e.a)) + " → " + esc(sh(e.b)) + '</span><span class="pill ' + e.reason + '">' + e.reason + "</span></h3>" + (e.clip ? '<video controls preload="none" playsinline poster="' + esc(e.poster) + '" src="' + esc(e.clip) + '"></video>' : '<p class="empty">' + (e.reason === "learned" ? "No clip: a learned edge comes from a library build, which keeps no trajectory." : "No clip.") + "</p>") + "<p>" + esc(sh(e.a) + " must go in before " + sh(e.b) + ": " + reasonText(e.reason) + ". " + e.detail + ".") + '</p><div class="tags">' + (e.support ? '<span class="pill">support</span>' : "") + (e.learned ? '<span class="pill">seen by the sampler</span>' : "") + (e.reason === "learned" ? '<span class="pill">round ' + e.round + '</span><span class="pill">from order ' + e.from_order + "</span>" : '<span class="pill">step ' + e.step + '</span><span class="pill">after ' + e.placed_before + " placed</span>") + (e.margin !== null && e.margin !== undefined ? '<span class="pill">margin ' + Math.round(e.margin * 100) + "%</span>" : "") + "</div>" + (e.fan.length ? '<div class="fan"><p><b>Conditional.</b> ' + esc(sh(e.b) + " also goes in once " + e.fan.map((f) => sh(f.c)).join(" or ") + " is in, so it needs any one of " + members(e).map(sh).join(", ") + ".") + "</p>" + e.fan.map((f) => f.clip ? '<video controls preload="none" playsinline poster="' + esc(f.poster) + '" src="' + esc(f.clip) + '" aria-label="' + esc(sh(e.b) + " with " + sh(f.c)) + '"></video>' : "").join("") + "</div>" : "") + "</article>").join("") : '<p class="empty">No swap failed: the graph has no edges.</p>';
-}
-
-// ---- library table (judged by the refined graph)
-function libraryTable() {
-  const built = D.library.filter((l) => l.outcome).length, yes = D.library.filter((l) => l.as_predicted).length;
-  const L = D.learning || {rounds: []};
-  $("libnote").textContent = built + " of " + D.library.length + " orders were built in Isaac with the same move and judged against the built goal's at-goal tolerance. The rule: an order that obeys every edge must land all 24; an order that breaks one must fail somewhere, at the predicted dish or not (both columns are shown). " + yes + " of the " + built + " built did" + (D.refinement ? "; the graph as refined: " + D.refinement.edges.map((r) => shortId(r.a) + " → " + shortId(r.b) + " also holds with " + (r.confirmed.map(shortId).join(" or ") || "nothing")).join("; ") + ", then " + D.refinement.fresh.length + " fresh orders obeying the refined graph" : "") + (L.rounds.length ? "; " + L.rounds.map((r) => "learning round " + r.round + " learned " + (r.edges.map((e) => shortId(e[0]) + " → " + shortId(e[1])).join(", ") || "nothing") + " from order " + r.from.join(", ") + (r.orders ? " and built " + r.orders + " fresh obeying orders" : "")).join("; ") : "") + ". Each order is judged by the graph it was drawn from (round 0 = the swap-tested graph); an obeying order that failed and taught an edge is marked. A violation is built until two dishes past its predicted failure. Load any row into the checker.";
-  const head = "<tr><th>#</th><th>Kind</th><th>Round</th><th>Edge reversed</th><th>Predicted at</th><th>Failed at</th><th>Isaac</th><th>As the rule asks</th><th></th></tr>";
-  $("libtable").innerHTML = head + D.library.map((l) => {
-    const m = l.as_predicted, o = l.outcome;
-    const pill = m === null ? '<span class="pill untested">not built</span>' : m ? '<span class="pill yes">yes</span>' : l.taught ? '<span class="pill learned" title="' + esc(l.taught_why || "") + '">no · taught ' + esc(sh(l.taught[0]) + " → " + sh(l.taught[1])) + "</span>" : '<span class="pill no">no</span>';
-    const same = o && o.failed_dish && l.predicted ? (o.failed_dish === l.predicted ? " = predicted" : " ≠ predicted") : "";
-    return '<tr data-i="' + l.index + '"><td>' + l.index + "</td><td>" + esc(KINDNAME[l.kind] || l.kind) + "</td><td>" + l.round + '</td><td class="mono">' + (l.edge ? esc(sh(l.edge[0]) + " → " + sh(l.edge[1])) : "") + "</td><td>" + (l.predicted ? esc(sh(l.predicted)) + " (pos " + (l.predicted_position + 1) + ")" : "all land") + "</td><td>" + (o ? (o.failed_dish ? esc(sh(o.failed_dish)) + " (pos " + (o.failed_position + 1) + ")" + '<span class="muted">' + same + "</span>" : "none") : "") + '</td><td class="wrap">' + esc(outcomeText(o)) + "</td><td>" + pill + '</td><td><button type="button" data-load="' + l.index + '">Load</button></td></tr>';
-  }).join("");
-}
-$("libtable").addEventListener("click", (ev) => { const b = ev.target.closest("button[data-load]"); if (!b) return; order = D.library[+b.dataset.load].order.slice(); picked = null; render(); $("checker").scrollIntoView({behavior: "smooth"}); });
-
-// ---- rules
-function rules() {
-  const t = D.thresholds || {};
-  const tol = Object.entries(t).map(([k, v]) => k + " " + v.lateral_mm + " mm lateral / " + v.dz_mm + " mm height / " + v.tilt_deg + "°").join("; ");
-  $("ruleslist").innerHTML = [
-    "Move (every drop on this page: the sampler, both swap steps, the confirmations, the library): a plate stands upright in its slot, 3 mm toward the side its packed pose leans to; a bowl or cup keeps its packed pose. The dish starts with its lowest point 20 mm above its rack's rim (its top kept under the tub ceiling) and goes down in 5 mm steps, each checked against the placed dishes and the appliance with the 1 mm allowance. A placed dish in the way blocks the move; the rack alone just stops it. It is let go 20 mm above the lowest clear step and settles 150 + 60 ticks at 120 Hz.",
-    D.witness.plate_order === "lean-side" ? "Sampler: a random order of all 24 dishes in which each plate bank's positions are refilled by its plates in chain order: the slot furthest on the bank's lean side first, then outward, so each plate leans onto the one before (a plate leaning about 30° hangs over the next three or four slots on that side). A dish lands when it ends within 80 mm of its pose with contact under 2 mm and moves no placed dish out of its tolerance. A bowl or cup that does not go in is undone and tried at up to five other free poses of its kind whose descent is clear, else it moves to the back of the order; a plate is tried only at its bank's next free slots along the chain, else it moves after the plates still waiting. The load fails only when no dish left can go in." : "Sampler: a random order per packing. A dish lands when it ends within 80 mm of its pose with contact under 2 mm and moves no placed dish out of its tolerance. A dish that does not go in is undone and tried at up to five other free poses of its kind from the packing's candidate list whose descent is clear (one per slot for plates); if none goes in, it moves to the back of the order. The load fails only when no dish left can go in.",
-    "Candidates: every pair whose collision pieces come within 20 mm at the goal (" + D.swaps.near + " pairs), plus pairs the sampler saw block or knock each other (" + D.swaps.learned + ").",
-    "Swap: for a pair placed a then b by the witness, the partial load the witness had when a went in is restored (those dishes at their recorded poses, the rest parked, 150 ticks), b goes in, then a. Need: b does not land without a. Block: b's descent is blocked, or a cannot go in once b is there. Knock: a drop moves a placed dish out of its tolerance (or more than 10 mm / 20° if it was not at its goal).",
-    "Landing in the swaps, confirmations and library (" + (D.tolerance.name === "library" ? "the at-goal tolerance doubled" : "the bench's at-goal tolerance") + "): within " + tol + " of the built pose, contact under " + (D.tolerance.text.split("contact under ")[1] || "2 mm") + "; a placed dish at its goal is disturbed only when it ends outside that tolerance (one not at its goal: moved more than 10 mm / 20°). A drop within 20% of a threshold is rerun under three releases perturbed by 3 mm / 3°, and the majority decides.",
-    D.sampler.backtrack && !D.sampler.backtracks.length ? "Backtracking: allowed when this sample was built (up to " + D.sampler.backtrack + " blockers taken out and put back), but no dish needed it, so the witness order is exactly how the dishes went in." : D.sampler.backtrack ? "Backtracking: a dish that went in nowhere (its own pose and up to five re-poses) names the placed dishes that blocked its descent or that it moved. The three most recently placed of them are taken out (parked, the others put back where they were, 60 ticks), the dish goes in, and they go back in their order at the poses they had; one that no longer fits waits its turn later in the order. If taking them out moves a dish left in, or the dish still does not go in, everything is put back. At most two backtracks per dish; the load fails only when every dish left failed since the last placement." : "No backtracking: a dish that goes in nowhere (its own pose and up to five re-poses) waits until later in the order; the load fails only when every dish left failed since the last placement, so the witness order is exactly how the dishes went in.",
-    "Library: the witness, each edge's violating order (b moved to just before a), 10 random orders that obey every edge and 10 random orders that break one edge. The rule: an obeying order must land all 24; a violating order must fail somewhere. The graph predicts the dish it fails at (b for a step-1 edge, a for a step-2 edge); the dish it really failed at is shown beside it and need not match, since a cascade in a new context is physics, not a wrong edge.",
-    "Learning: an obeying order that fails at a dish X teaches one edge from its build: X before the dish it moved or that blocked it, else a dish the witness placed before X and this order had not goes before it (what X rests on in the witness first, then the nearest), else X before the dish placed just before it in that order. An edge against the witness order would make the order that built the goal a violation, so it is dropped and the next candidate taken. Then 10 fresh orders obeying the graph are built; up to three rounds, and the last one must pass. Earlier orders stay judged by the graph they were drawn from.",
-    ...(D.rejudged ? ["Re-judged: this sample was built and swap-tested by the previous run under the " + D.rejudged.from_tolerance + " tolerance (verdict " + (D.rejudged.verdict_before || "none") + "). Its saved swap drops were judged again under the tolerance above, Kit-free: " + D.rejudged.edges_before + " swap edges became " + D.rejudged.edges_after + (D.rejudged.dropped.length ? " (dropped: " + D.rejudged.dropped.map((e) => shortId(e[0]) + " → " + shortId(e[1]) + " " + e[2]).join(", ") + ")" : "") + (D.rejudged.untested_step2.length ? "; " + D.rejudged.untested_step2.map((p) => shortId(p[0]) + "/" + shortId(p[1])).join(", ") + " passed step 1 now, and its step 2 was never dropped, so the pair has no edge and the library tests it" : "") + (D.rejudged.marginal_unrerun.length ? "; " + D.rejudged.marginal_unrerun.length + " drop(s) lie within 20% of a new threshold with no saved rerun, judged by the single drop" : "") + ". Its " + D.rejudged.learned_dropped + " learned edges and the old library were dropped; the library and the learning loop were built again in Isaac."] : []),
-    "Refinement: when a violating order still builds, its edge becomes conditional. Every dish placed before b in that order but missing from the swap is tried once: b dropped into the swap's partial load with that dish added and a removed (a block edge then drops a as well). The dishes that pass join the edge's fan, and 10 fresh orders obeying the refined graph are built once more.",
-    D.swaps.invalid_context ? D.swaps.invalid_context + " swap(s) ran in a partial load where a restored dish fell during the re-settle; their verdicts are kept." : "Every swap's partial load re-settled without a dish falling.",
-  ].map((s) => "<li>" + esc(s) + "</li>").join("");
-}
-
-function setSample(k) {
-  current = k;
-  D = ALL.samples[k];
-  dish = Object.fromEntries(D.dishes.map((d) => [d.id, d]));
-  witness = D.witness.order;
-  order = witness.slice();
-  picked = null;
-  document.querySelectorAll("video").forEach((v) => v.pause());
-  selector();
-  tuple();
-  libOptions();
-  cards();
-  libraryTable();
-  rules();
-  render();
-  try { history.replaceState(null, "", "#" + D.key); } catch (e) { /* sandboxed */ }
-}
-// ---- no valid sample: why the sampler stopped
-function failureView() {
-  const F = ALL.failure;
-  if (!F) return;
-  $("nosample").hidden = false;
-  const n = F.packings, lo = F.placed[0], hi = F.placed[F.placed.length - 1], med = F.placed[Math.floor(F.placed.length / 2)];
-  if (ALL.samples.length) {
-    $("nstitle").textContent = "Why the sampler stopped";
-    const nv = ALL.samples.filter((s) => s.valid === true).length;
-    if (!nv) $("lead").textContent += " No sample is valid: " + n + " packings stopped in the sampler at " + lo + "–" + hi + " of 24 dishes (median " + med + "), and the " + ALL.samples.length + " that built all 24 have graphs their library did not confirm; " + (ALL.samples.length === 2 ? "both are" : "they are") + " shown below, labelled invalid.";
-  } else $("lead").textContent = "No sample is valid. In all " + n + " packings the re-posing sampler placed " + lo + "–" + hi + " of the 24 dishes (median " + med + ") and then had a dish it could not put in at its own pose, at any of up to five other free poses, or later in the order. No load was built, so no packing reached the swap tests or the library.";
-  $("nsnote").textContent = F.note || "A plate lowered upright stops on the tine tips and, let go 20 mm higher, drops into its slot and leans about 30° toward its lean side. Leaning that far, its upper half hangs over the next three or four slots, so a plate whose slot is on that side can no longer be lowered from above once the leaning plate is in. A random order puts some plate in before its lean-side neighbours in almost every packing; waiting does not help, because a placed dish never moves away, and re-posing finds no free slot whose descent is clear once a few plates lean across the bank.";
-  if (F.clip) {
-    $("nsvideo").innerHTML = '<video controls preload="metadata" playsinline poster="' + esc(F.clip.poster) + '" src="' + esc(F.clip.file) + '"></video>';
-    $("nscaption").textContent = "The last sampler build of " + F.clip.load + " (" + F.clip.seconds + " s): every dish that went in, in the order it went in; each drop starts with its descent, one frame per 5 mm step. The counter's total counts the dishes that went in plus the one that stopped the build; the other dishes left out are not counted.";
-  }
-  const S = F.screen, fc = F.faces, C = F.calls;
-  const rows = [
-    ["Placed per packing", F.placed.join(", ") + " of 24"],
-    ["Left out", Object.entries(F.left).map(([k, v]) => v + " " + k + "s").join(", ") + (F.left.cup ? "" : " (no cup)")],
-    ["Their last try", F.why.map(([k, v]) => v + " × " + k).join("; ")],
-    ["Re-posing", Object.entries(C).map(([k, v]) => k + "s " + v.calls + " calls, " + v.none + " with no free pose whose descent is clear").join("; ")],
-    ["Placed plates", fc.n + " plates: " + fc.lean + " leaned 15–40° from vertical, " + fc.upright + " stayed within 15° of upright, " + fc.over + " tipped further; they came to rest " + F.plate_dev_mm[0] + "–" + F.plate_dev_mm[2] + " mm from their packed poses (median " + F.plate_dev_mm[1] + ")"],
-  ];
-  const bk = F.backtracks || {};
-  if (Object.keys(bk).length) rows.push(["Backtracks", Object.values(bk).reduce((a, b) => a + b, 0) + " in these packings: " + (bk.placed || 0) + " put their dish in, " + (bk.failed || 0) + " found it still blocked, " + (bk.abandoned || 0) + " abandoned because taking the blockers out moved another dish"]);
-  if (F.screen_text) rows.push(["Screen, before Isaac", F.screen_text + "."]);
-  if (S) rows.push(["Screen, before Isaac", S.packings + " packings, appliance only: no dish blocked at its start; every plate stops " + S.kinds.plate.stop_mm[0] + "–" + S.kinds.plate.stop_mm[2] + " mm above its upright pose; " + S.kinds.bowl.reach + " of " + S.kinds.bowl.n + " bowls and all " + S.kinds.cup.n + " cups reach their packed pose. In the " + (S.order === "chain" ? "lean-side order" : "first random order") + " with earlier dishes at their packed poses, " + S.kinds.plate.first_start + " plates and " + S.kinds.bowl.first_start + " bowls are blocked at their start by a placed dish, " + S.kinds.plate.first_dish + " and " + S.kinds.bowl.first_dish + " lower down."]);
-  $("nsfacts").innerHTML = rows.map(([t, d]) => "<div><dt>" + esc(t) + "</dt><dd>" + esc(d) + "</dd></div>").join("");
-}
-
-lead();
-yieldTable();
-if (ALL.samples.length) {
-  const start = ALL.samples.findIndex((s) => "#" + s.key === location.hash);
-  setSample(start >= 0 ? start : 0);
-  window.addEventListener("hashchange", () => { const k = ALL.samples.findIndex((s) => "#" + s.key === location.hash); if (k >= 0 && k !== current) setSample(k); });
-} else {
-  ["tuple", "clips", "checker", "library", "rules", "samplebar"].forEach((id) => { $(id).hidden = true; });
-}
-failureView();
-</script>
 """
 
 if __name__ == "__main__":

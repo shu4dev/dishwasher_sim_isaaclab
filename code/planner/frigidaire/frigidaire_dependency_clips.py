@@ -1,24 +1,21 @@
 #!/usr/bin/env python3
-"""Clips of an --edges swaps dependency record: the witness build and one clip per edge (Kit-free, Warp on the GPU).
+"""Clips of a physical-cause dependency record: the witness rebuild, the load and the confirmation drops (Kit-free, Warp).
 
-Input: the record (frigidaire_dependency_kit.py --edges swaps) and the tick poses its Kit run kept, one frame per 4 ticks
-at 120 Hz, in <record dir>/_kit/<load_id>/traj/. Each frame is ray-traced with Warp like the Dot Score Rules stills
+Input: the record (frigidaire_dependency_kit.py, after --certify) and the tick poses its Kit runs kept, one frame per 4
+ticks at 120 Hz, in <record dir>/_kit/<load_id>/traj/. Each frame is ray-traced with Warp like the Dot Score Rules stills
 (frigidaire_dot_rules_render.render: the same HOTEC and rack meshes, racks in, appliance shell hidden, the both-racks
 view): the world poses (racks extended) go rack-local in the record's rack frames, then into the racks-in model. The
 dropped dish and the dishes it affects are tinted, every other dish grey, a parked dish is hidden. 640 x 480 (a 48 px
-caption bar), played at 13 fps: a 210-tick drop lasts about 4 s. An edge's clip is the swap that failed: step 1 (b goes
-in before a) and, for a step-2 edge, step 2 (a after b); a drop with no clear release is a held still with the dish
-shown at its goal pose in red. --release insertion records (2026-10-15): each trajectory starts with the descent (one
-frame per 5 mm step from the start pose, recorded by the Kit run), then the fall; a blocked descent plays until the
-blocked step with the dish in red, held. The re-posing sampler's records (2026-10-15 b) add load.jpg (the built goal,
-every dish tinted) and, per conditional edge, the confirmation drops of each confirmed alternative (cond_<a>__<b>__<c>):
-b goes in with c present and a absent. mp4 (H.264 through imageio, as dishsim.media.VideoWriter), else GIF.
+caption bar), played at 13 fps: a 210-tick drop lasts about 4 s. Each trajectory starts with the insertion move's
+descent (one frame per 5 mm step from the start pose, recorded by the Kit run), then the fall; a blocked descent plays
+until the blocked step. mp4 (H.264 through imageio, as dishsim.media.VideoWriter), else GIF.
 
-    code/util/run_py.sh code/planner/frigidaire/frigidaire_dependency_clips.py --record data/results/dot_rules/dependency/sequential/r02_00048.json --out data/media/dot_rules/dependency_sequential/r02_00048
+    code/util/run_py.sh code/planner/frigidaire/frigidaire_dependency_clips.py --record data/results/dot_rules/dependency/samples_v5/r05_00027.json --out data/media/dot_rules/dependency_samples_v5/r05_00027
 
-Writes <out>/witness.mp4, <out>/edge_<a>__<b>.mp4, <out>/cond_<a>__<b>__<c>.mp4, <out>/load.jpg, a poster JPEG per
-clip and <out>/clips.json. On an --edges physical record, --views front,side renders only the access stills, level
-from the door side and from +x along the plate row (access_<a>__<b>_front.png, _side.png; Stage.axis_view):
+Writes <out>/witness.mp4 (the fresh-process rebuild that certified the witness, poster witness.png), <out>/load.png (four
+labelled views), on disk only <out>/conf_<b>.mp4 per supported dish and <out>/access_<a>__<b>.png per access hit, and
+<out>/clips.json. --views front,side renders only the access stills, level from the door side and from +x along the
+plate row (access_<a>__<b>_front.png, _side.png; Stage.axis_view):
 
     code/util/run_py.sh code/planner/frigidaire/frigidaire_dependency_clips.py --record data/results/dot_rules/dependency/samples_v5/r05_00027.json --out data/media/dot_rules/dependency_samples_v5/r05_00027 --views front,side
 """
@@ -257,15 +254,10 @@ class Clip:
                 "seconds": round(self.count / FPS, 1), "bytes": self.path.stat().st_size}
 
 
-def segment(stage, clip, traj, colors, title, detail, ghost=None):
-    """Play one trajectory (every frame) into ``clip``, holding its last frame; ``ghost`` = (id, goal pose) drawn in red
-    on a still (no clear release)."""
+def segment(stage, clip, traj, colors, title, detail):
+    """Play one trajectory (every frame) into ``clip``, holding its last frame (a one-frame trajectory longer)."""
     for poses in traj:
-        if ghost is not None:
-            gid, g = ghost
-            poses = {**poses, gid: (np.asarray(g["position_m"], float), np.asarray(g["quaternion_xyzw"], float))}
-        clip.add(captioned(stage.frame(poses, colors), title, detail),
-                 repeat=4 * HOLD if ghost is not None or len(traj) == 1 else 1)
+        clip.add(captioned(stage.frame(poses, colors), title, detail), repeat=4 * HOLD if len(traj) == 1 else 1)
     clip.add(clip.last, repeat=HOLD)
 
 
@@ -316,7 +308,7 @@ def access_stills(record, stage, out, views=("oblique",)):
 
 
 def physical(record, stage, folder, out):
-    """--edges physical records (plans/2026-10-16-physical-cause-graph.md): witness.mp4 (the fresh-process rebuild that
+    """The record's clips (plans/2026-10-16-physical-cause-graph.md): witness.mp4 (the fresh-process rebuild that
     certified the witness, poster witness.png), load.png (the rebuild's final poses, or the built goal when it did not
     certify, every dish tinted) for the page; on disk only (coordinator, 2026-10-16): conf_<b>.mp4 (every confirmation drop
     of b, one segment each) and access_<a>__<b>.png (the finished load, b tinted, a in red at the first step of its
@@ -368,112 +360,22 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--record", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--only", default=None, help="comma list: witness and/or edge keys a>b (default: all)")
-    ap.add_argument("--views", default=None, help="--edges physical records: render only the access stills, in these "
-                    "views (comma list of oblique, front, side); front and side go to access_<a>__<b>_<view>.png")
+    ap.add_argument("--views", default=None, help="render only the access stills, in these views (comma list of "
+                    "oblique, front, side); front and side go to access_<a>__<b>_<view>.png")
     a = ap.parse_args()
     record = json.loads(a.record.read_text())
+    if record.get("procedure") != "physical":
+        raise SystemExit(f"{a.record}: not a frigidaire_dependency_kit.py sampler record")
     folder = a.record.parent / "_kit" / record["load_id"] / "traj"
     a.out.mkdir(parents=True, exist_ok=True)
-    only = set(a.only.split(",")) if a.only else None
     stage = Stage(record)
-    if record.get("procedure") == "physical" and a.views:      # the access stills alone; clips.json untouched
+    if a.views:                                                # the access stills alone; clips.json untouched
         t0, views = time.monotonic(), a.views.split(",")
         done = access_stills(record, stage, a.out, views)
         print(f"[RESULT] PASS {record['load_id']} access stills: {len(done)} ({'+'.join(views)}, "
               f"{len((record.get('access') or {}).get('hits') or [])} hits) ({time.monotonic() - t0:.0f} s)", flush=True)
         return
-    if record.get("procedure") == "physical":
-        return physical(record, stage, folder, a.out)
-    manifest, t0 = {"load_id": record["load_id"], "fps": FPS, "size": [W, H + HEAD], "edges": {}}, time.monotonic()
-    tinted = {i: stage.tint(i) for i in stage.kind}
-    wit = record["witness"]
-    rinfo = record.get("release") or {"mode": "clear"}
-    failed = record.get("status") != "ok"           # a resettle_failed record: its witness is the sampler's last build
-    move = ("empty racks; dishes go in one at a time, each released at its lowest clear hover" if rinfo["mode"] != "insertion"
-            else "empty racks; each dish is lowered from above the rim (plates upright) and released 20 mm above where "
-                 "the rack stops it")
-    if only is None or "witness" in only:
-        data, traj = load_traj(folder, wit["traj"])
-        clip, n_placed = Clip(a.out / "witness.mp4"), 0
-        for poses in traj:                                      # the newest dish in the racks is the one dropping
-            placed = [i for i in wit["order"] if poses[i][0][0] <= PARK_X]
-            n_placed = len(placed)
-            now = placed[-1] if placed else None
-            colors = {now: RED if failed and now == record.get("failed_dish") else tinted[now]} if now else {}
-            title = (f"{'Last sampler build' if failed else 'Witness build'} of {record['load_id']}: {n_placed} of "
-                     f"{len(record['entries'])} placed"
-                     + ("  ·  insertion move" if rinfo["mode"] == "insertion" else ""))
-            detail = (f"now {short(now)} (the sampler's order)" if now else move)
-            if failed and now == record.get("failed_dish"):
-                s = wit["steps"][-1]
-                detail = (f"{short(now)}: did not go in ({s.get('blocked') or 'no landing'}"
-                          f"{', ' + ', '.join(s.get('blockers') or []) if s.get('blockers') else ''}); the sampler stopped")
-            clip.add(captioned(stage.frame(poses, colors), title, detail))
-        clip.add(clip.last, repeat=3 * HOLD)
-        manifest["witness"] = clip.close(a.out / "witness.jpg")
-        print(f"[clips] witness: {manifest['witness']} ({time.monotonic() - t0:.0f} s)", flush=True)
-    if (only is None or "load" in only) and record.get("status") == "ok":     # the built goal, every dish tinted
-        goal = {i: (np.asarray(p["position_m"], float), np.asarray(p["quaternion_xyzw"], float))
-                for i, p in record["targets_world"].items()}
-        n_re = len((record.get("reposing") or {}).get("reposed") or {})
-        img = captioned(stage.frame(goal, tinted), f"Load {record['load_id']}: the built goal",
-                        f"{len(goal)} dishes, both racks, as the witness left them ({n_re} re-posed by the sampler)")
-        Image.fromarray(img).save(a.out / "load.jpg", quality=90)
-        manifest["load"] = "load.jpg"
-    swaps = {s["swap"]: s for s in record.get("swaps") or []}
-    for e in record.get("edges") or []:
-        key = f"{e['a']}>{e['b']}"
-        if (only is not None and key not in only) or e.get("swap") is None:   # a learned edge has no swap to replay
-            continue
-        s = swaps[e["swap"]]
-        name = f"edge_{e['a']}__{e['b']}"
-        clip = Clip(a.out / f"{name}.mp4")
-        head = f"{short(e['a'])} before {short(e['b'])}  ·  {e['reason']}" + ("  ·  support" if e["support"] else "")
-        for n, tname in enumerate(e["traj"], 1):
-            data, traj = load_traj(folder, tname)
-            dish, last = data["dish"], n == len(e["traj"])
-            colors = {dish: tinted[dish]}
-            if last:                                            # the failing drop: the pair and what it moved
-                colors.update({i: tinted[i] for i in [e["a"], e["b"], *e["affected"]]})
-            if dish == e["b"] and not last:
-                detail = f"step 1: {short(e['b'])} goes in first, into the {s['placed_before']} dishes before {short(e['a'])}"
-            elif last:
-                detail = f"step {e['step']}: {e['detail']}"
-            else:
-                detail = f"step {n}"
-            blocked = bool(data.get("no_clear_release"))
-            ghost = (dish, record["targets_world"][dish]) if blocked and not data.get("path_blocked") else None
-            if blocked:
-                colors[dish] = RED
-            segment(stage, clip, traj, colors, head, detail, ghost)
-            if data.get("path_blocked"):                            # the blocked step, held
-                clip.add(clip.last, repeat=3 * HOLD)
-        manifest["edges"][key] = clip.close(a.out / f"{name}.jpg")
-        print(f"[clips] {key}: {manifest['edges'][key]} ({time.monotonic() - t0:.0f} s)", flush=True)
-    manifest["conditional"] = {}
-    for c in ((record.get("refinement") or {}).get("confirmations") or []):    # the conditional-edge clip set
-        ea, eb = c["edge"]
-        key = f"{ea}>{eb}|{c['c']}"
-        if not c["confirmed"] or (only is not None and key not in only):
-            continue
-        name = f"cond_{ea}__{eb}__{c['c']}"
-        clip = Clip(a.out / f"{name}.mp4")
-        head = f"{short(eb)} needs one of {short(ea)} or {short(c['c'])}  ·  {short(c['c'])} in, {short(ea)} out"
-        for n, tname in enumerate(c["traj"], 1):
-            data, traj = load_traj(folder, tname)
-            dish = data["dish"]
-            colors = {i: tinted[i] for i in (ea, eb, c["c"])}
-            detail = (f"{short(eb)} goes in with {short(c['c'])} placed and {short(ea)} absent" if n == 1 else
-                      f"then {short(ea)} goes in after {short(eb)}")
-            segment(stage, clip, traj, colors, head, detail)
-        manifest["conditional"][key] = clip.close(a.out / f"{name}.jpg")
-        print(f"[clips] {key}: {manifest['conditional'][key]} ({time.monotonic() - t0:.0f} s)", flush=True)
-    (a.out / "clips.json").write_text(json.dumps(manifest, indent=1) + "\n")
-    print(f"[RESULT] PASS {record['load_id']} clips: witness {'witness' in manifest}, load {'load' in manifest}, edges "
-          f"{len(manifest['edges'])} of {sum(e.get('swap') is not None for e in record.get('edges') or [])} swap-tested, "
-          f"conditional {len(manifest['conditional'])} "
-          f"({time.monotonic() - t0:.0f} s)", flush=True)
+    physical(record, stage, folder, a.out)
 
 
 if __name__ == "__main__":

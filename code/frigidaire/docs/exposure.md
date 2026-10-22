@@ -77,6 +77,27 @@ feasible iff no vessel or plate pools: min z(interior vertices) >= min z(rim rin
 summary script and is not regenerated; it still shows the pre-2026-09-22 arm radii 0.245 /
 0.205, so this section and `exposure.py` (0.233 / 0.191) are the reference.
 
+## The fair score across kinds (2026-10-21)
+
+Revision 5 stays the score of the HOTEC search, top-5 and benchmark code. The Dot Score Rules page and the dependency
+samples ([dependency.md](dependency.md)) score a load with the dot-rule engine (`dishsim_frigidaire/dot_rules.py`,
+New+J) over each kind's ceiling (`plans/2026-10-21-kind-ceiling-score.md`), so plates, bowls and cups count alike:
+
+```
+NJ_o        object-level New+J of dish o: the sum of its 500 dot numerators over the sum of its 500 denominators,
+            over each dot's J lines (its own N points inside its theta-circle that land on the disc); theta 30 deg
+C_k         the ceiling of kind k: the largest NJ of that dish alone over every tilt, height and distance of the
+            object-level grid under the lower arm (grid_obj/N0262144): plate 0.8718, bowl 0.5481, cup 0.2134;
+            the middle arm uses the same constants
+S_kind_o    = min(1, NJ_o / C_k(o)); 0 when o pools (interior more than 2 mm below its rim)
+S           = mean_o S_kind_o                     the load score: every dish weighs the same
+S_area      = sum_o A_o S_kind_o / sum_o A_o      "surface reached"
+```
+
+1 means a dish as exposed as its kind can be anywhere under the arm; distance from the arm stays a penalty. Kit-free:
+`code/planner/frigidaire/frigidaire_dot_rules_relative.py` writes it into a load's saved `.relative.json`, the ceilings
+read from the grid (`--grid-obj-dir`) or from the Dot Score Rules page's payload (`--grid-payload`).
+
 ## Files
 
 | File | Role |
