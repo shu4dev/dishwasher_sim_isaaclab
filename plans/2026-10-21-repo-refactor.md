@@ -34,6 +34,7 @@ assets/
 - The dataset's licence card per folder (ArtVIP is Apache-2.0; the rest are self-authored).
 
 ## Section 2: the sampler as one input-output pipeline, with a general loader (grilled 2026-10-22)
+Status 2026-10-22: first run done and merged (27d4f52; `results/2026-10-22-repo-refactor-sampler.md`, `results/2026-10-22-window-sampling-v7-and-section2.md`): CLI, ledger, schemas, writers, slot finder, `difficulty` and `graph` moved. Left for the next run: the moves into loader/initial/gate/build/score, the kind-ceiling score, `gate_initial`, the 23-vs-24 roster mismatch between the bench's hard tier and the restricted packer, the writers into `data/assets/<asset>/source/` and the manifests onto the hub.
 ### What the repo is for
 `sample(dishwasher, dish set, seed) -> a pair`: an INITIAL configuration (some dishes in messy counter stacks, the rest in the racks; physics-settled, racks gated) and a GOAL configuration (every dish in the racks, organized; settled and gated, with its score, one certified order and the dependency graph). Pairs are the input of the next stage (planning, robot). No pages, images or video are outputs of the sampler.
 ### Decisions
