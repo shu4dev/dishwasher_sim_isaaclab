@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "sample pair",
+  "description": "<out>/<machine>__<dishes>__<seed>.json, rewritten after every stage of sample.py. Poses are stored, never re-derived from the seed (PhysX is not reproducible across sessions). Each configuration and the goal's score/order/graph are null until their stage ran.",
+  "type": "object",
+  "required": ["schema_version", "machine", "dishes", "seed", "params", "stages", "initial", "goal"],
+  "properties": {
+    "schema_version": {"type": "integer", "enum": [1]},
+    "machine": {"type": "string"},
+    "dishes": {"type": "string"},
+    "seed": {"type": "integer"},
+    "variant": {"type": ["string", "null"]},
+    "params": {
+      "type": "object",
+      "required": ["kinds", "count", "on_counter", "counter_allowance"],
+      "properties": {
+        "difficulty": {"type": ["string", "null"], "enum": ["easy", "medium", "hard", null]},
+        "kinds": {"type": "array", "items": {"type": "string"}},
+        "count": {"type": "object"},
+        "on_counter": {"type": ["integer", "null"]},
+        "counter_allowance": {"type": "integer"}
+      }
+    },
+    "load": {"type": ["object", "null"]},
+    "initial": {
+      "type": ["object", "null"],
+      "properties": {
+        "poses": {"type": "object"},
+        "rack_joints": {"type": "object"},
+        "counter": {"type": ["object", "null"]},
+        "settle": {"type": ["object", "null"]},
+        "gate": {"type": ["object", "null"]}
+      }
+    },
+    "goal": {
+      "type": ["object", "null"],
+      "properties": {
+        "entries": {"type": "array"},
+        "gate": {"type": ["object", "null"]},
+        "certify": {"type": ["object", "null"]},
+        "score": {"type": ["object", "null"]},
+        "order": {"type": ["array", "null"]},
+        "graph": {"type": ["object", "null"]}
+      }
+    },
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["stage", "params", "code_sha", "utc", "result"],
+        "properties": {
+          "stage": {"type": "string", "enum": ["load", "initial", "gate_initial", "build", "gate_goal", "certify", "score", "graph"]},
+          "params": {"type": "object"},
+          "code_sha": {"type": ["string", "null"]},
+          "utc": {"type": "string"},
+          "result": {"type": "string", "enum": ["PASS", "FAIL", "SKIP"]},
+          "note": {"type": ["string", "null"]}
+        }
+      }
+    }
+  }
+}

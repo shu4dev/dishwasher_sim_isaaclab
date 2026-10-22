@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "dish manifest",
+  "description": "One dish kind of a dish set (<asset>/<kind>.json), written by data/assets/<dishes>/source/write_manifest.py at build time. Metres, Z up, XYZW. Kind 'cutlery' is admitted but unimplemented this round (the HOTEC set has none).",
+  "type": "object",
+  "required": ["schema_version", "kind", "dish_set", "usd", "default_prim", "mass_kg", "origin", "footprint_m", "count", "allowed_orientations"],
+  "properties": {
+    "schema_version": {"type": "integer", "enum": [1]},
+    "kind": {"type": "string", "enum": ["plate", "bowl", "cup", "cutlery"]},
+    "dish_set": {"type": "string"},
+    "usd": {"type": "string", "description": "path relative to the asset folder"},
+    "default_prim": {"type": "string"},
+    "visual_mesh": {"type": ["string", "null"]},
+    "collision_pieces": {"type": "integer"},
+    "mass_kg": {"type": "number"},
+    "origin": {"type": "string", "enum": ["base_centre", "body_centre"]},
+    "footprint_m": {
+      "type": "object",
+      "required": ["diameter", "height"],
+      "properties": {"diameter": {"type": "number"}, "height": {"type": "number"}}
+    },
+    "count": {"type": "integer"},
+    "colours": {"type": "array", "items": {"type": "string"}},
+    "food_contact": {"type": ["object", "null"], "description": "samples and normals as a file; null until the writer emits it"},
+    "pooling_ring": {"type": ["object", "null"]},
+    "allowed_orientations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["container_kind", "rack", "mode"],
+        "properties": {
+          "container_kind": {"type": "string", "enum": ["rack", "basket"]},
+          "rack": {"type": "string"},
+          "mode": {"type": "string", "enum": ["between_tines", "over_tines", "centre_gaps", "glass_channel"]},
+          "params": {"type": "object"},
+          "source": {"type": "string"}
+        }
+      }
+    },
+    "provenance": {"type": "object"}
+  }
+}

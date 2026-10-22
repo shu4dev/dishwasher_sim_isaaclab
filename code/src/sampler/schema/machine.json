@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "machine manifest",
+  "description": "One dishwasher, written by data/assets/<machine>/source/write_manifest.py at build time (never by hand). Metres, Z up, XYZW. Containers of kind 'basket' are admitted but unimplemented this round: the slot finder skips them. 'frame' is the per-machine frame flag: 'machine' (Frigidaire) or 'robot_mount' (Bosch/ArtVIP, deferred).",
+  "type": "object",
+  "required": ["schema_version", "name", "usd", "root_prim", "units", "up_axis", "front", "frame", "joints", "containers"],
+  "properties": {
+    "schema_version": {"type": "integer", "enum": [1]},
+    "name": {"type": "string"},
+    "usd": {"type": "string", "description": "path relative to the asset folder"},
+    "root_prim": {"type": "string"},
+    "units": {"type": "string", "enum": ["metres"]},
+    "up_axis": {"type": "string", "enum": ["Z"]},
+    "front": {"type": "string", "enum": ["-Y", "+Y", "-X", "+X"]},
+    "frame": {"type": "string", "enum": ["machine", "robot_mount"]},
+    "body_positions_m": {"type": "object"},
+    "joints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "kind", "in", "out", "units"],
+        "properties": {
+          "name": {"type": "string"},
+          "kind": {"type": "string", "enum": ["prismatic", "revolute"]},
+          "in": {"type": "number"},
+          "out": {"type": "number"},
+          "units": {"type": "string", "enum": ["m", "deg"]}
+        }
+      }
+    },
+    "containers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "kind", "link", "box_m", "rim_height_m"],
+        "properties": {
+          "name": {"type": "string"},
+          "kind": {"type": "string", "enum": ["rack", "basket"]},
+          "link": {"type": "string"},
+          "joint": {"type": ["string", "null"]},
+          "extended_frame": {"type": "string", "description": "poses of this container's dishes are rack-local in the link frame with the joint at 'out'"},
+          "box_m": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}},
+          "rim_height_m": {"type": "number"},
+          "tine_grid": {
+            "type": "object",
+            "required": ["axis", "columns_x_m", "rows_y_m", "present"],
+            "properties": {
+              "axis": {"type": "string", "enum": ["X", "Y"]},
+              "columns_x_m": {"type": "array", "items": {"type": "number"}},
+              "rows_y_m": {"type": "array", "items": {"type": "number"}},
+              "present": {"type": "array", "items": {"type": "array", "items": {"type": "boolean"}}},
+              "keep_out": {"type": "array", "items": {"type": "object"}}
+            }
+          },
+          "glass_channels": {"type": "object"},
+          "spray_arm": {
+            "type": "object",
+            "required": ["name", "center_m", "radius_m"],
+            "properties": {
+              "name": {"type": "string"},
+              "center_m": {"type": "array", "items": {"type": "number"}},
+              "radius_m": {"type": "number"},
+              "jet_angle_deg": {"type": ["number", "null"]}
+            }
+          },
+          "collision_cache": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "counter": {"type": "object"},
+    "provenance": {"type": "object"}
+  }
+}

@@ -34,13 +34,7 @@ sys.path[:0] = [str(ROOT / "code/src"), str(ROOT / "code/frigidaire/src")]
 
 ASSETS = ROOT / "data/assets/hotec_wheatstraw/usd"          # the three USDs; catalog.json and parameters.json one level up
 KINDS = ("plate", "bowl", "cup")
-# 7 bowls in every tier: the 8th-bowl poses settle past the tub wall (outer front-right) or wedge (third rear pair)
-# in Isaac goal gates (2026-09-23); without plates an 8-bowl packing exists but first-fit found it once in 300
-# shuffles, so open-track planners could not rack easy at all within 60 s
-TIERS = {"easy": {"inventory": {"bowl": 7}, "slack": 3},
-         "medium": {"inventory": {"plate": 8, "bowl": 7}, "slack": 2},     # was 1: one parking slot could not unwind the
-         "hard": {"inventory": {"plate": 8, "bowl": 7, "cup": 8}, "slack": 1}}   # plate-bank chains on the 2026-09-28 racks (was 0)
-TIER_INDEX = {name: i for i, name in enumerate(TIERS)}
+from sampler.difficulty import TIERS, TIER_INDEX, roster, draw_n, cap_of  # noqa: E402,F401  moved: code/src/sampler/difficulty.py
 COUNTER = {"size_m": (1.8, .6, .04), "center_m": (0., 0., .894), "top_z_m": .914}
 CELL_PITCH_M = .25                  # parking cells: a 229 mm plate fits one cell
 CELL_HOVER_M = .002
@@ -65,22 +59,6 @@ def digest(path):
 
 def tableware():
     return {kind: str(ASSETS / f"{kind}.usda") for kind in KINDS}
-
-
-def roster(tier):
-    """Canonical object ids of a tier, e.g. plate_01..08, bowl_01..08."""
-    return [(f"{kind}_{k:02d}", kind) for kind, n in TIERS[tier]["inventory"].items() for k in range(1, n + 1)]
-
-
-def draw_n(tier, seed):
-    """Dishes on the counter at the start: uniform in [N/4, 3N/4], drawn from (tier, seed) only."""
-    total = sum(TIERS[tier]["inventory"].values())
-    rng = np.random.default_rng([int(seed), TIER_INDEX[tier], 7])
-    return int(rng.integers(math.ceil(total / 4), math.floor(3 * total / 4) + 1))
-
-
-def cap_of(tier, n):
-    return int(n) + TIERS[tier]["slack"]
 
 
 # --------------------------------------------------------------------------- lazy modules
