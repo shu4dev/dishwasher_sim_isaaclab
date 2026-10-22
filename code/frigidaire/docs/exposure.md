@@ -138,7 +138,7 @@ a 2026-09-11 state differ from today's collection (checked 2026-09-29).
 ## Results on record (2026-09-20, revision 5, ceiling weight 0)
 
 History (2026-09-29): every score in this table was computed on the v3 racks and basket
-(archived as `data/build/frigidaire_collection/history/v3`) with arm radii 0.245 / 0.205. The racks and
+(archived as build `history/v3` on corallab; not in the asset dataset) with arm radii 0.245 / 0.205. The racks and
 basket were rebuilt to tape measurements on 2026-09-22 and again on 2026-09-28
 ([geometry.md](geometry.md)); re-score at the current parameters before comparing with any later
 result. The scripts and result folders behind this table were retired on 2026-09-29 (status note

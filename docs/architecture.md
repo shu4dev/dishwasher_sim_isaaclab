@@ -6,17 +6,14 @@ dishwasher_sim_isaaclab/
 ├── code/README.md                    [the stages in order and what each hands to the next;
 │                                      every stage and machine folder has its own README]
 │
-├── code/initialization/              [STAGE 1 — twins, assets, collision caches, evidence,
-│   │                                  problem instances]
+├── code/initialization/              [STAGE 1 — problem instances and start states; the twins,
+│   │                                  assets, caches and their generators ship in data/assets
+│   │                                  (each folder's source/) since 2026-10-21]
 │   ├── bosch/
-│   │   ├── extract_geometry.py       [dump the settled statics + object mesh into the cache]
-│   │   ├── decompose_meshes.py       [convex FCL pieces (CoACD / analytic parts)]
 │   │   ├── gen_instances.py          [settled rearrangement instances (perturbed / random)]
-│   │   ├── instance_views.py         [one instance's initial-vs-goal stills, one Kit boot]
-│   │   └── bosch800_asset_evidence.py [Kit: the standalone Bosch 800 asset's open/extend/load/
-│   │                                   retract/close cycle, data/media/bosch800_asset/]
-│   └── frigidaire/                   [build, stage, package and certify the Frigidaire twin;
-│                                      claims, demo, the Isaac start-state gate]
+│   │   └── instance_views.py         [one instance's initial-vs-goal stills, one Kit boot]
+│   └── frigidaire/                   [the demo, the Isaac start-state gate, the random-load
+│                                      Kit worker and its host farm]
 │
 ├── code/planner/                     [STAGE 2 — where each dish goes and in what order]
 │   ├── bosch/
@@ -39,12 +36,9 @@ dishwasher_sim_isaaclab/
 │   ├── tools/
 │   │   ├── kit_smoke.py              [install gate: planning stack imports inside Kit +
 │   │   │                              headless capture is non-black; wired into bootstrap.sh]
-│   │   ├── restore_assets.py         [download, safe-extract, validate cache hashes, run tests]
-│   │   ├── archive_assets.py         [producer side of restore_assets: kind-aware tarballs
-│   │   │                              (assets/media/models/evidence) with sha256 manifests,
-│   │   │                              optional HF upload; --status diffs against the remote]
 │   │   └── bootstrap.sh              [fresh-box bring-up: image build if absent + compose up +
-│   │                                  restore + the kit_smoke gate]
+│   │                                  the kit_smoke gate; data/assets is downloaded separately
+│   │                                  with hf download]
 │   ├── frigidaire/                   [the two render helpers planner and execution scripts import]
 │   └── docker/                       [Dockerfile (build record) + compose.yaml (the runtime)]
 │
@@ -59,27 +53,27 @@ dishwasher_sim_isaaclab/
 │   │                                  item_color/display_color + ITEM_COLOR_PALETTE tint
 │   │                                  renders per item (media only, never physics).
 │   │                                  Numbers: docs/bosch800_source_data.md]
-│   ├── machine.py                    [dishwasher ArticulationCfg; machine-aware USD derivation
-│   │                                  incl. the Bosch third rack]
+│   ├── machine.py                    [dishwasher ArticulationCfg; loads the per-state machine
+│   │                                  USD from data/assets/<machine>/usd/ (racks built in, incl.
+│   │                                  the Bosch third rack; config.machine_asset_dir)]
 │   ├── scene.py                      [Kit scene construction: statics + objects, rack drives.
 │   │                                  Object spec dict: name, usd_path, pos, quat, and optional
 │   │                                  contact_filters / color (per-item render tint)]
 │   ├── quats.py                      [XYZW <-> WXYZ conversion at the isaaclab boundary — the
 │   │                                  ONLY place quaternion order converts]
-│   ├── usd_prep.py                   [derived dishwasher USDs; authors the procedural racks;
-│   │                                  make_bosch800_usd authors the Bosch machine from scratch]
-│   ├── rack_gen.py                   [procedural wire racks + cutlery basket + the Bosch
-│   │                                  third-rack tray (Kit-free)]
-│   ├── prop_gen.py                   [procedural props: tumbler, wine glass, container, lid]
-│   ├── hotec_gen.py                  [HOTEC wheat-straw plate/bowl/cup: parametric lathe,
-│   │                                  brimful capacity, .usda writer, no mass (Kit-free)]
+│   ├── rack_layout.py                [the rack layout arithmetic that slot derivation and
+│   │                                  capacity read (z levels, plate-tine grid, basket bays,
+│   │                                  tray zones), verbatim from the rack generator; the
+│   │                                  generators (racks, machine USDs, props, HOTEC dishes)
+│   │                                  moved to their asset folders' source/ on 2026-10-21]
 │   ├── compat.py                     [Kit-free ground truth: pairwise compatibility table +
 │   │                                  A* optimal solver (optimal_moves) for the benchmark's
 │   │                                  optimality-gap metric. static_ok (legal destination) and
 │   │                                  compatible (pair overlap) are deliberately separate]
 │   ├── instance_gen.py               [sample_initials — Kit-free, shared by the Kit generator
 │   │                                  and any offline instance builder]
-│   ├── geometry.py                   [USD -> mesh extraction + the collision-cache format +
+│   ├── geometry.py                   [the collision-cache format (the extraction half went to
+│   │                                  data/assets/bosch800/source/cache_dump.py) +
 │   │                                  TWO independent cache keys: config_hash keys the
 │   │                                  manifests, coacd_dir_for digests mesh bytes + the body's
 │   │                                  COACD params. config.COACD is NOT in config_hash, so a
@@ -106,21 +100,25 @@ dishwasher_sim_isaaclab/
 │   ├── transforms.py                 [pose helpers (XYZW throughout)]
 │   └── checks.py                     [pass/fail gate helpers for scripts]
 │
-├── code/tests/                       [8 files / 65 tests: the frozen-invariant pins, the
-│                                      compat ground truth, the harness's and the RRT
+├── code/tests/                       [5 files / 37 tests (2026-10-21): the frozen config-hash
+│                                      pin, the compat ground truth, the harness's and the RRT
 │                                      planners' toy-oracle checks, the instance sampler's
-│                                      tier knobs, the archive tool's tarball selection, the
-│                                      HOTEC generator properties; run via
+│                                      tier knobs; run via
 │                                      code/util/run_py.sh -m pytest code/tests/]
 ├── code/frigidaire/                  [the Frigidaire FDPC4221AS twin, a separate package
 │                                      (dishsim_frigidaire) with its own src/ tests/ docs/,
-│                                      tracked in git: generator, loaders, HOTEC benchmark
-│                                      helpers, exposure scorer; the arm bring-up in
+│                                      tracked in git: loaders (the generator moved to
+│                                      data/assets/frigidaire_fdpc4221as/source/), HOTEC
+│                                      benchmark helpers, exposure scorer; the arm bring-up in
 │                                      src/dishsim_frigidaire/robot/ is in progress; its
 │                                      scripts sit in the stage folders' frigidaire/.
 │                                      See code/frigidaire/README.md]
 ├── docs/                             [environment, success criteria, measured reports]
-├── data/assets/ data/build/ data/media/ data/results/ data/logs/ data/outputs/
+├── data/assets/                      [gitignored; a copy of the HF dataset
+│                                      shu4dev/dishsim-assets (hf download to restore, hf upload
+│                                      to publish): six asset folders, each with its generator
+│                                      in source/]
+├── data/build/ data/media/ data/results/ data/logs/ data/outputs/
 │                                     [generated, gitignored — symlinks onto the 2 TB drive]
 ├── requirements-planning.txt         [pinned planning deps, baked into the image]
 └── pyproject.toml
@@ -139,12 +137,12 @@ collision_world ── placement ── capacity / rearrange ── slotting
         │
         ▼  artifacts (capacity plans, data/results/instances/*.json, episode records)
         │
-scene / machine / usd_prep / media   (Kit-side: teleport, settle, judge stability, render)
+scene / machine / media   (Kit-side: teleport, settle, judge stability, render)
 ```
 
 Boundary convention: only `scene.py` and `machine.py` import `isaaclab`/`pxr`/`omni` at
 module scope; everything else must import in a plain Python process (function-local Kit
-imports in `geometry.py`'s extraction half and `media.py` stay legal). A violation fails
+imports in `media.py` stay legal). A violation fails
 loudly — Kit-free scripts crash at import.
 
 ## Completed one-off studies
@@ -161,5 +159,6 @@ retired to git history when the study froze, and the measured outcomes live in t
 - **Capacity certification + reveal renders** (`capacity_fill.py`, `reveal_render.py`,
   `plan_full_load.py` CLI, `build_state.py`, `derive_slots.py`, `preview_rack.py`,
   `inspect_scene.py`) — retired in the minimal-version cut (git history); the capacity
-  PLANNER itself lives on in `capacity.py`. `archive_assets.py` came back in 2026-09 as the
-  kind-aware producer for the HF archive (`--kinds models evidence`; sha256 manifests).
+  PLANNER itself lives on in `capacity.py`. The HF archive tooling (`archive_assets.py`,
+  2026-09, and `restore_assets.py`) was removed on 2026-10-21 when `data/assets` became a plain
+  copy of the dataset (`hf download` / `hf upload`).

@@ -19,7 +19,7 @@ import traceback
 
 ROOT = Path(__file__).resolve().parents[3]
 OUT = ROOT / "data/results/robot/grasp_test"
-BOWL_USD = ROOT / "data/assets/models/hotec_wheatstraw/v2/bowl.usda"
+BOWL_USD = ROOT / "data/assets/hotec_wheatstraw/usd/bowl.usda"
 TABLE_TOP = .40
 
 

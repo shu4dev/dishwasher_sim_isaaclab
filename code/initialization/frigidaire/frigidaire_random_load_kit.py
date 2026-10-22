@@ -133,7 +133,7 @@ def build_parser():
     p.add_argument("--eval-every", type=int, default=6)
     p.add_argument("--peak-penetration-m", type=float, default=.005)
     p.add_argument("--baseline", type=Path, default=ROOT / "data/results/benchmark/frigidaire_hotec/baseline/result.json")
-    p.add_argument("--usd", type=Path, default=ROOT / "data/build/frigidaire_collection/usd/fdpc4221as.usdc")
+    p.add_argument("--usd", type=Path, default=ROOT / "data/assets/frigidaire_fdpc4221as/usd/fdpc4221as.usdc")
     p.add_argument("--no-hull-motion-points", action="store_true")
     p.add_argument("--trace-final", action="store_true")
     p.add_argument("--n-per-kind", type=int, default=8, help="smoke runs only")

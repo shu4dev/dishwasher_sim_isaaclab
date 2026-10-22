@@ -1,12 +1,14 @@
 # Bosch 800 standalone dishwasher asset — SHP78CM5N reference
 
-`data/assets/models/bosch800/bosch800.usdc` is a standalone, independently authored
+`data/assets/bosch800/usd/standalone/bosch800.usdc` is a standalone, independently authored
 approximation of the Bosch 800 Series pocket-handle dishwasher. It includes mesh geometry,
 PBR materials, relative texture paths, rigid bodies, collision shapes and driven joints. No
-online asset server, ArtVIP assets, robot models, or planning archive is needed to use it.
-The binaries (`bosch800.usdc`, the rack USDs, `textures/`) and the asset's evidence under
-`data/assets/evidence/bosch800/` are not in git; only this document is tracked. They come from
-the public HF archive as two opt-in tarball kinds — see "Fetch the prebuilt asset" below.
+online asset server, ArtVIP assets, robot models, or planning caches are needed to use it.
+The binaries (`bosch800.usdc`, `lower_rack.usdc`, `middle_rack.usdc`, `textures/`) are not in this
+repo's git; only this document is tracked. They ship in the public HF dataset
+`shu4dev/dishsim-assets`, of which `data/assets` is a copy — see "Fetch the prebuilt asset" below. The
+asset's evidence stays out of the dataset, under `data/media/bosch800_asset/evidence_20260910/`
+(moved from `data/assets/evidence/bosch800/` on 2026-10-21).
 
 Open the USD directly in Isaac Sim, or reference its default prim `/Bosch800` into another
 USD stage. Keep the `textures/` directory beside the asset. Units are metres and kilograms;
@@ -14,8 +16,9 @@ Z is up, X is width, and the front faces negative Y. The origin is at the centre
 appliance's floor footprint. The asset starts closed.
 
 **Scope on this branch.** The asset is separate from the benchmark's own Bosch 800 machine
-(`usd_prep.make_bosch800_usd`, re-authored on import into `data/assets/machines/bosch800/`) and
-its cached collision worlds. `--machine bosch800` still selects that procedural machine; the
+(`data/assets/bosch800/usd/model_bosch800_v0_<state>.usda`, one per rack state with the racks
+built in, authored by `usd_prep.make_bosch800_usd` in `data/assets/bosch800/source/`) and its
+cached collision worlds (`data/assets/bosch800/cache/`). `--machine bosch800` still selects that procedural machine; the
 new geometry needs fresh planning caches and slot calibration before it can back the
 benchmark. Until then it ships as a redistributable asset only.
 
@@ -67,9 +70,10 @@ textures. Their link origin is the rack wire-plane reference; spawn a loose lowe
 least 30 mm above a floor so its wheels do not initially penetrate it.
 
 A revision of the lower rack based on the four local `bottom_rack` photographs is
-staged separately. See [lower rack polish](../code/frigidaire/docs/lower_rack_polish.md) for its geometry,
-installation and Isaac Sim capture scripts, and current validation status. It has
-not yet replaced the prebuilt binaries described here.
+staged separately. See `data/assets/bosch800/source/lower_rack_polish.md` (in the asset
+dataset since 2026-10-21, beside its scripts) for its geometry, installation and Isaac Sim
+capture scripts, and current validation status. It has not yet replaced the prebuilt
+binaries described here.
 
 `LowerRack/Manipulation` and `MiddleRack/Manipulation` provide named local handle and
 candidate dish sites. These are starting hints, not a complete slot library or a
@@ -89,60 +93,42 @@ a robot should physically pull a passive rack.
 
 ## Fetch the prebuilt asset
 
-From the repository root, inside the runtime container
-([overview §2.2](overview.md#22-runtime-container)); the dataset is public and needs no
-token. Each tarball carries a `MANIFEST.json` with a sha256 per file, and
-`restore_assets.py` verifies every extracted file against it:
+`data/assets` is a copy of the public HF dataset `shu4dev/dishsim-assets`: `hf download` to restore,
+`hf upload` to publish (reading needs no token); this asset is its `bosch800/usd/standalone/`
+folder. From the repository root:
 
 ```bash
-# standalone machine assets (~3.5 MB, seconds): this Bosch 800 asset plus the preliminary
-# Frigidaire FDPC4221AS revisions under data/assets/models/frigidaire_fdpc4221as{,_v2}/
-code/util/run_py.sh code/util/tools/restore_assets.py --kinds models
-# add its validation evidence (~74 MB: stills, video, validation.json, previous-asset zip)
-code/util/run_py.sh code/util/tools/restore_assets.py --kinds models evidence
+hf download shu4dev/dishsim-assets --repo-type dataset --local-dir data/assets   # every asset folder
 ```
 
-Sizes of the local tarballs of tag `20260910_b3584ae` (`ls -l data/outputs/archive/`): `models`
-3,477,304 bytes, `evidence` 74,317,755 bytes and, for the default cache restore, `assets`
-137,085,513 bytes.
-
-Without the repo (any machine with `curl` + `python3`); the archive extracts to
-`data/assets/models/bosch800/` relative to the current directory:
+Only this asset (the same command works outside the repo; the files land under
+`data/assets/bosch800/usd/standalone/`):
 
 ```bash
-B=https://huggingface.co/datasets/shu4dev/dishsim-assets/resolve/main
-N=$(curl -sL $B/latest.json | python3 -c 'import json,sys;print(json.load(sys.stdin)["files"]["models"])')
-curl -L -o $N $B/$N && tar xzf $N
+hf download shu4dev/dishsim-assets --repo-type dataset --include "bosch800/usd/standalone/*" --local-dir data/assets
 ```
 
-Re-cutting the tarballs after an asset revision (producer side, Kit-free). Build first, inspect
-the tarballs (`tar -tzf`; `*.zip` duplicates under `data/assets/models/` are excluded by design), then
-upload exactly those files with `--no-build --tag`:
+Publishing a revision of the asset (needs `hf auth login` with write access):
 
 ```bash
-code/util/run_py.sh code/util/tools/archive_assets.py --status                          # what differs?
-code/util/run_py.sh code/util/tools/archive_assets.py --kinds models evidence            # build only
-HF_TOKEN=<write token> code/util/run_py.sh code/util/tools/archive_assets.py \
-    --kinds models evidence --upload --no-build --tag <date>_<gitsha> \
-    --card data/outputs/archive/hf_README.md                                             # + publish
-code/util/run_py.sh code/util/tools/archive_assets.py --status                          # -> SYNCED
+hf upload shu4dev/dishsim-assets data/assets . --repo-type dataset --commit-message "<what changed>"
 ```
 
-`run_py.sh` forwards `HF_TOKEN` into the container only when it is set in that shell; the token
-is never written anywhere. The upload merges into the remote `latest.json`, so kinds not in
-`--kinds` keep resolving unchanged — and it aborts rather than blanking the pointer map when
-the remote file cannot be read (`--fresh` is the opt-in for an empty repo).
+The tarballs this section restored from until 2026-10-21 (tag `20260910_b3584ae`, kinds `models`
+and `evidence`) remain in the dataset's history on the hub.
 
 ## Runs under this repo's stack (corallab, Isaac Sim 4.5.0 / Isaac Lab 2.1.1)
 
-`code/initialization/bosch/bosch800_asset_evidence.py` loads the USD as an Isaac Lab 2.1
+`bosch800_asset_evidence.py` (in `data/assets/bosch800/source/` since 2026-10-21, before that
+`code/initialization/bosch/`) loads the USD as an Isaac Lab 2.1
 `Articulation` with the asset's own drives and base joint (nothing overridden), reads the
 dish sites the asset names under `<Rack>/Manipulation/`, and records a full
-open -> extend -> load -> retract -> close cycle with this repo's plate and cup props:
+open -> extend -> load -> retract -> close cycle with this repo's plate and cup props
+(exact command and last-run SHA: `data/assets/bosch800/source/README.md`):
 
 ```bash
-code/util/run_kit.sh code/initialization/bosch/bosch800_asset_evidence.py --headless --enable_cameras
-code/util/run_kit.sh code/initialization/bosch/bosch800_asset_evidence.py --headless --probe   # stage dump only
+code/util/run_kit.sh data/assets/bosch800/source/bosch800_asset_evidence.py --headless --enable_cameras
+code/util/run_kit.sh data/assets/bosch800/source/bosch800_asset_evidence.py --headless --probe   # stage dump only
 ```
 
 Output: `data/media/bosch800_asset/{closed,racks_extended,loaded_extended}_{iso,front}.png`,
@@ -164,7 +150,8 @@ grasp fixture. This verifies asset support/access, not a robot arm, finger grasp
 pick-and-place policy. Images and video come from Isaac Sim's RTX camera while PhysX drives
 the articulation. Its `[RESULT] PASS` report ships as `validation.json`.
 
-`data/assets/evidence/bosch800/`:
+`data/media/bosch800_asset/evidence_20260910/` (outside the asset dataset; `data/assets/evidence/bosch800/`
+until 2026-10-21):
 
 - `validation.json`: measured settling, loaded travel and retrieval (result `PASS`).
 - `run.log`: the validation run's console log.
@@ -198,5 +185,5 @@ artwork and concealed mechanical parts remain estimates; no physical appliance w
 
 The geometry and generated label/roughness textures are authored for this project under
 BSD-3-Clause. Bosch names identify the reference product; this asset is not made or endorsed
-by Bosch. No downloaded product photographs are included in the asset or its tarballs; the
+by Bosch. No downloaded product photographs are included in the asset or the dataset; the
 two rack reference photos the geometry was traced from are not redistributed.

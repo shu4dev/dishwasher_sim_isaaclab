@@ -72,7 +72,7 @@ OUT = ROOT / "data/results/hotec/frigidaire" / f"top5_{DATE}_{VARIANT}"
 MEDIA = ROOT / "data/media/hotec_wheatstraw" / f"top5_{DATE}_{VARIANT}"
 LOGS = ROOT / "data/logs/hotec_top5" / VARIANT
 SCRIPT = "code/planner/frigidaire/frigidaire_hotec_top5.py"
-ASSETS_REL = "data/assets/models/hotec_wheatstraw/v2"
+ASSETS_REL = "data/assets/hotec_wheatstraw/usd"
 COLOURS = ("blue_grey", "teal", "coral", "mustard")          # frigidaire_hotec_load.py: the assets' colour variants
 KIND_ORDER = ("plate", "bowl", "cup")
 ROSTER = [(f"{kind}_{k:02d}", kind) for kind in KIND_ORDER for k in range(1, 9)]
@@ -426,7 +426,7 @@ def layout_of(entries):
     from dishsim_frigidaire.asset import BODY_POSITIONS
     from dishsim_frigidaire.loading import geometry_hashes
     from dishsim_frigidaire.paths import ASSET_DIR
-    catalog = read(B.ASSETS / "catalog.json")
+    catalog = read(B.ASSETS.parent / "catalog.json")
     objects = []
     for e in sorted(entries, key=lambda e: e["id"]):
         n = int(e["id"].rsplit("_", 1)[1])

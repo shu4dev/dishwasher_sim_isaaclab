@@ -12,12 +12,13 @@
 Run this first, about 5 minutes from a fresh clone:
 
 ```bash
+hf download shu4dev/dishsim-assets --repo-type dataset --local-dir data/assets
 code/util/tools/bootstrap.sh
 ```
 
-It builds the `dishsim-isaac` image if absent, starts the container, restores the public
-asset archive and runs the Kit smoke test. Pass = `[OK] ... @ side_winner` per cache and
-`[RESULT] PASS` at the end. Long-form write-up of everything below:
+The first line downloads the public asset dataset into `data/assets`; `bootstrap.sh`
+builds the `dishsim-isaac` image if absent, starts the container and runs the Kit smoke test.
+Pass = `[RESULT] PASS` at the end. Long-form write-up of everything below:
 [docs/overview.md](docs/overview.md).
 
 ## What this is
@@ -42,14 +43,9 @@ Every Kit command goes through `code/util/run_kit.sh`, every Kit-free one throug
 `[RESULT] PASS` and the absence of tracebacks. Exit codes lie.
 
 1. Pick a GPU (shared machine): `nvidia-smi`, then `DISHSIM_GPU=<n> docker compose -f code/util/docker/compose.yaml up -d`.
-2. Bring-up: `code/util/tools/bootstrap.sh` (5 min).
-3. Only after restoring an archive tag dated before 2026-09-10 (later tags already carry the exact `E_door_4` pieces, see [docs/known_limitations.md](docs/known_limitations.md)): re-decompose the two shipped pieces that predate a parameter change (seconds each):
-   ```bash
-   code/util/run_py.sh code/initialization/bosch/decompose_meshes.py --machine bosch800 --placement side_winner --scenario placement --object plate
-   code/util/run_py.sh code/initialization/bosch/decompose_meshes.py --machine bosch800 --placement side_winner --scenario placement --object bowl
-   ```
-4. Gates: `code/util/run_py.sh -m pytest code/tests/` (65 pass, about 70 s) and the capacity check in [docs/overview.md](docs/overview.md#3-quickstart--reproduce-the-results) (prints `total 39`).
-5. Generate, picture, solve (Kit, a few minutes each):
+2. Assets and bring-up: the dataset download and `code/util/tools/bootstrap.sh` above (5 min).
+3. Gates: `code/util/run_py.sh -m pytest code/tests/` (37 tests; the shipped-instance optima check skips until `data/results/instances/bosch800/placement/` exists) and the capacity check in [docs/overview.md](docs/overview.md#3-quickstart--reproduce-the-results) (prints `total 39`).
+4. Generate, picture, solve (Kit, a few minutes each):
    ```bash
    code/util/run_kit.sh code/initialization/bosch/gen_instances.py --headless --mode perturbed --state placement --n 3 --seed 0
    code/util/run_kit.sh code/initialization/bosch/instance_views.py --headless --enable_cameras --instance data/results/instances/bosch800/placement/perturbed_s0.json
@@ -64,7 +60,7 @@ then `code/util/run_py.sh code/planner/bosch/compare_algorithms.py` → `data/re
 
 1. Implement `reset(instance, world)` and `next_move(obs)` in one class (`code/src/dishsim/rearrange.py` shows the greedy baseline).
 2. Register it in `ALGORITHMS` in `code/planner/bosch/run_rearrange.py`. Accept `seed=` if stochastic.
-3. Run step 5 above with `--algorithms <name>`.
+3. Run step 4 above with `--algorithms <name>`.
 
 The greedy baseline is one-blocker lookahead; swap cycles defeat it.
 
@@ -84,8 +80,9 @@ The Frigidaire FDPC4221AS, an independently authored twin under `code/frigidaire
 |---|---|
 | `code/src/dishsim/` | benchmark package (`rearrange.py` core, `compat.py` optima, `collision_world.py` FCL, `config.py`) |
 | `code/{initialization,planner,execution,util}/` | the stages, in order, with the scripts per machine in `bosch/` and `frigidaire/` ([code/README.md](code/README.md)) |
-| `code/frigidaire/` | the Frigidaire twin: generator, loaders, `docs/`, tests (tracked in git); its scripts sit in the stage folders |
-| `data/assets/ data/build/ data/media/ data/results/ data/logs/ data/outputs/` | gitignored symlinks to the 2 TB drive; root disk gains nothing (`data/build/` holds the only copy of the current Frigidaire twin build) |
+| `code/frigidaire/` | the Frigidaire twin: loaders, `docs/`, tests (tracked in git; the generator ships in `data/assets/frigidaire_fdpc4221as/source/` since 2026-10-21); its scripts sit in the stage folders |
+| `data/assets/` | gitignored; a copy of the HF dataset `shu4dev/dishsim-assets`: `hf download` to restore, `hf upload` to publish. Six asset folders (machines, dish sets, props), each with its generator in `source/` |
+| `data/build/ data/media/ data/results/ data/logs/ data/outputs/` | gitignored symlinks to the 2 TB drive; root disk gains nothing |
 | `docs/figures/` | the only tracked media, with provenance in its README |
 | `data/experiments/` | symlink index of every experiment: machine → experiment → trial, one README per entry; nothing lives there |
 
@@ -93,7 +90,7 @@ The Frigidaire FDPC4221AS, an independently authored twin under `code/frigidaire
 
 1. Never change the Isaac Sim 4.5.0 / Isaac Lab 2.1.1 pins; the host driver caps Isaac at 4.5.0.
 2. Never edit the frozen cache anchors in `config.py`; they key every shipped cache. Hashed knobs mean a Kit rebake ([docs/overview.md §4](docs/overview.md#4-notes-for-running-and-extending)).
-3. `config_hash` is not the only cache key: a static-CoACD edit is invisible to the staleness check, and a box restored from an archive tag older than 2026-09-10 needs step 3 above once.
+3. `config_hash` is not the only cache key: a static-CoACD edit is invisible to the staleness check until a load fails with `missing CoACD pieces`; re-run `data/assets/bosch800/source/decompose_meshes.py` (Kit-free, seconds) and upload the pieces with `hf upload` ([docs/known_limitations.md](docs/known_limitations.md)).
 4. Every Kit script calls `dishsim.media.release_sim_for_close()` before closing, or shutdown spins forever and the `[RESULT]` line is lost.
 5. Files the container writes are root-owned: delete with `docker exec dishsim-isaac rm`, never host sudo.
 
@@ -101,7 +98,7 @@ The Frigidaire FDPC4221AS, an independently authored twin under `code/frigidaire
 
 | Doc | Contents |
 |---|---|
-| [docs/overview.md](docs/overview.md) | The long-form README: benchmark definition, environment, archive, quickstart gates, results, limitations, licenses |
+| [docs/overview.md](docs/overview.md) | The long-form README: benchmark definition, environment, assets, quickstart gates, results, limitations, licenses |
 | [docs/environment.md](docs/environment.md) | Stack, container recipe, Isaac Lab 2.1 API notes, launcher landmines (canonical) |
 | [docs/architecture.md](docs/architecture.md) | Code structure, Kit-free vs Kit-side layering |
 | [docs/success_criteria.md](docs/success_criteria.md) | Slot model per placement mode, settle tolerances, capacity |
@@ -130,5 +127,5 @@ This project builds on the following open-source projects and datasets; visit ea
 
 Rack geometry is procedurally generated, styled after publicly documented Whirlpool, Bosch and
 Frigidaire rack designs; no third-party geometry is redistributed. Downloaded and derived
-assets are never committed; the public archive `shu4dev/dishsim-assets` redistributes only
-what its sources' licenses allow, with attribution.
+assets are never committed to this repo; the public asset dataset `shu4dev/dishsim-assets`
+redistributes only what its sources' licenses allow, with attribution.

@@ -5,8 +5,9 @@
 """Machine articulation configs: the static dishwasher twins.
 
 ``DISHWASHER_V0_CFG`` is the static machine (door locked open at 90 deg, racks at the
-scenario extensions); the derived USD is authored on demand at import (see
-:mod:`dishsim.usd_prep`).
+scenario extensions), loaded from the per-state machine USD the asset dataset ships
+(``data/assets/<machine>/usd/``, racks built in; authored by ``usd_prep`` in
+``data/assets/bosch800/source/``, never at import since 2026-10-21).
 
 Joint names (verified against the composed stage, see ``docs/joint_report.md``): door
 ``RevoluteJoint_dishwasher_2_middle`` (axis X, limits 0–90 deg, body ``E_door_4``), racks
@@ -20,23 +21,8 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 
-from . import ASSETS_DIR, config
+from . import config
 from .quats import xyzw_to_wxyz
-from .usd_prep import make_dishwasher_v0_usd
-
-# ---------------------------------------------------------------------------------------------
-# ArtVIP dishwasher (variant dishwasher_2)
-# ---------------------------------------------------------------------------------------------
-
-_DISHWASHER_SRC_USD = os.path.join(
-    ASSETS_DIR,
-    "artvip",
-    "Articulated_objects",
-    "major_appliances",
-    "dishwasher",
-    "dishwasher_2",
-    "model_dishwasher_2.usda",
-)
 
 DISHWASHER_DOOR_JOINT = "RevoluteJoint_dishwasher_2_middle"
 DISHWASHER_RACK_JOINTS = ["PrismaticJoint_dishwasher_2_up", "PrismaticJoint_dishwasher_2_down"]
@@ -44,32 +30,18 @@ if config.HAS_THIRD_RACK:
     DISHWASHER_RACK_JOINTS = DISHWASHER_RACK_JOINTS + [config.RACK_THIRD_JOINT]
 
 # v0 derived copy: static machine — door limits clamped open, rack drive targets at the
-# configured extensions. The baseline machine derives from the ArtVIP source
-# (usd_prep.make_dishwasher_v0_usd); the Bosch 800 is fully self-authored
-# (usd_prep.make_bosch800_usd). Both require config.apply_machine()/apply_scenario()
-# BEFORE this import (per-scenario derived copies).
+# configured extensions, the procedural racks built in. The baseline machine derives from the
+# ArtVIP source (usd_prep.make_dishwasher_v0_usd, written next to the ArtVIP layers it references);
+# the Bosch 800 is fully self-authored (usd_prep.make_bosch800_usd). One file per rack state, so
+# config.apply_machine()/apply_scenario() must run BEFORE this import.
 _V0_SUFFIX = "" if config.SCENARIO_NAME == "both_out" else f"_{config.SCENARIO_NAME}"
-if config.MACHINE == "bosch800":
-    from .usd_prep import make_bosch800_usd
-
-    DISHWASHER_V0_USD_PATH = make_bosch800_usd(
-        door_open_deg=config.DOOR_OPEN_DEG,
-        door_band_deg=config.DOOR_BAND_DEG,
-        rack_targets=config.RACK_JOINT_TARGETS,
-        suffix=_V0_SUFFIX,
-    )
-else:
-    DISHWASHER_V0_USD_PATH = (
-        make_dishwasher_v0_usd(
-            _DISHWASHER_SRC_USD,
-            door_open_deg=config.DOOR_OPEN_DEG,
-            door_band_deg=config.DOOR_BAND_DEG,
-            rack_targets=config.RACK_JOINT_TARGETS,
-            suffix=_V0_SUFFIX,
-        )
-        if os.path.isfile(_DISHWASHER_SRC_USD)
-        else _DISHWASHER_SRC_USD
-    )
+_V0_NAME = "model_bosch800_v0" if config.MACHINE == "bosch800" else "model_dishwasher_2_v0"
+DISHWASHER_V0_USD_PATH = os.path.join(config.machine_asset_dir(), "usd", f"{_V0_NAME}{_V0_SUFFIX}.usda")
+if not os.path.isfile(DISHWASHER_V0_USD_PATH):
+    raise FileNotFoundError(
+        f"{DISHWASHER_V0_USD_PATH}: no machine USD for {config.MACHINE} / {config.SCENARIO_NAME} in the asset "
+        "dataset (restore: hf download shu4dev/dishsim-assets --repo-type dataset --local-dir data/assets; "
+        "new states: data/assets/bosch800/source/export_usd.py)")
 
 DISHWASHER_V0_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(

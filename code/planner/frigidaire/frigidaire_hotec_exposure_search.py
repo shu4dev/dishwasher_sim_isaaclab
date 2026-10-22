@@ -20,7 +20,7 @@ as occluders); a move is kept when S rises. Sweeps repeat until no piece improve
 sampled maximum, not a proof.
 
     code/util/run_py.sh code/planner/frigidaire/frigidaire_hotec_exposure_search.py \\
-        --assets data/assets/models/hotec_wheatstraw/v2 --sweeps 3 --seed 0
+        --assets data/assets/hotec_wheatstraw/usd --sweeps 3 --seed 0
 """
 import argparse
 import hashlib
@@ -35,13 +35,11 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT / "code/src"), str(ROOT / "code/frigidaire/src")]
-from dishsim_frigidaire.usd_bootstrap import ensure_usd            # noqa: E402
-ensure_usd()
 from dishsim_frigidaire import exposure as E                         # noqa: E402
 from dishsim_frigidaire import geometry                              # noqa: E402
 from dishsim_frigidaire.asset import BODY_POSITIONS, COMPONENT_FILES  # noqa: E402
-from dishsim_frigidaire.claims import (LOWER_BOWL_FLOOR, LOWER_BOWL_LIFTS, LOWER_PLATE_FLOOR, UPPER_GLASS_FLOOR,  # noqa: E402
-                                       _tilted, lower_bowl_variants, slabs_disjoint, upper_bowl_variants)
+from dishsim_frigidaire.loading import (LOWER_BOWL_FLOOR, LOWER_BOWL_LIFTS, LOWER_PLATE_FLOOR, UPPER_GLASS_FLOOR,  # noqa: E402
+                                        _tilted, lower_bowl_variants, slabs_disjoint, upper_bowl_variants)
 from dishsim_frigidaire.geometry import lower_tine_positions, upper_tine_positions   # noqa: E402
 from dishsim_frigidaire.loading import CollisionWorld, _candidate, collision_parts, rotation, visual_points  # noqa: E402
 from dishsim_frigidaire.paths import ASSET_DIR, REPO_ROOT            # noqa: E402
@@ -88,7 +86,7 @@ def visual_triangles(filename):
 def register_hotec(assets_dir):
     """Register the three HOTEC kinds in the scorer (visual occluders + food-contact surfaces)."""
     assets_dir = Path(assets_dir)
-    catalog = json.loads((assets_dir / "catalog.json").read_text())
+    catalog = json.loads((assets_dir.parent / "catalog.json").read_text())
     info = {}
     for kind in KINDS:
         name = SCORER_KIND[kind]
@@ -460,7 +458,7 @@ def layout_from(entries, template, name, score):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--assets", type=Path, default=ROOT / "data/assets/models/hotec_wheatstraw/v2")
+    parser.add_argument("--assets", type=Path, default=ROOT / "data/assets/hotec_wheatstraw/usd")
     parser.add_argument("--start-layout", type=Path, default=REPO_ROOT / "data/results/hotec/frigidaire/v8/layout.json")
     parser.add_argument("--sweeps", type=int, default=3)
     parser.add_argument("--top", type=int, default=6, help="alternatives per move scored in full, by isolated exposure")

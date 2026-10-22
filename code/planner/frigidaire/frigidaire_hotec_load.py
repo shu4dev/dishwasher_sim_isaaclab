@@ -5,11 +5,11 @@ Two stages, one file:
 
     # 1. Kit-free FCL layout (seconds): rack slots in priority plates > bowls > cups, overflow to the counter slab
     code/util/run_py.sh code/planner/frigidaire/frigidaire_hotec_load.py --layout-only \\
-        --assets data/assets/models/hotec_wheatstraw/v1 --out-dir data/results/hotec/frigidaire/v1
+        --assets data/assets/hotec_wheatstraw/usd --out-dir data/results/hotec/frigidaire/v1
 
     # 2. One Isaac session: spawn, open door, extend racks, teleport, settle, stills, orbit video
     code/util/run_kit.sh code/planner/frigidaire/frigidaire_hotec_load.py \\
-        --layout data/results/hotec/frigidaire/v1/layout.json --assets data/assets/models/hotec_wheatstraw/v1 \\
+        --layout data/results/hotec/frigidaire/v1/layout.json --assets data/assets/hotec_wheatstraw/usd \\
         --out-dir data/results/hotec/frigidaire/v1 --tag hotec_v1 --headless --enable_cameras --device cpu
 
 Rack poses are rack-local metres with XYZW quaternions (the claims/loading convention) and are
@@ -54,7 +54,7 @@ _FRONT_USABLE = [g for g in geometry.lower_plate_gaps("front")        # gaps who
 FRONT_GAPS = tuple(_FRONT_USABLE[::2][:4])                             # every 2nd usable front gap: no shingling
 REAR_GAPS = tuple(geometry.lower_plate_gaps("rear")[::2][:4])          # every 2nd of the 9 gaps the basket bay leaves
 UPPER_BOWL_GAPS = tuple(geometry.upper_tine_gaps(1, regular_only=False))   # (a, b) tine pairs of a centre column, front to rear, incl. the wide (4, 7)
-_GLASS = abs(geometry._upper_rack()["sites"]["right_glass_channel"][0])    # upper-rack sloped glass channel |x| (site, .18775)
+_GLASS = abs(geometry.components()["UpperRack"]["sites"]["right_glass_channel"][0])    # upper-rack sloped glass channel |x| (site, .18775)
 CUP_VARIANTS = tuple((round(_GLASS + dx, 5), lean, lift) for dx, lean, lift in
                      ((0., 0, .010), (.005, 4, .010), (-.005, 8, .012), (-.010, 0, .014)))   # near-upright like claims.TUMBLER_VARIANTS; the 125 mm wall caps the outward lean
 CUP_SLOTS = tuple((side, index) for index in (1, 2, 3, 4) for side in (-1, 1))
@@ -106,14 +106,14 @@ def plan_layout(assets_dir, bowls_upper=4, search=False, plates="split", chooser
     ``chooser(item, options) -> options``: reorders a slot's candidate poses before the first FCL-free one is
     taken (None = the authored order, i.e. the deterministic v1 to v8 behaviour); the exposure search uses it."""
     from dishsim_frigidaire.asset import BODY_POSITIONS
-    from dishsim_frigidaire.claims import (LOWER_BOWL_FLOOR, LOWER_BOWL_LIFTS, LOWER_PLATE_FLOOR, UPPER_GLASS_FLOOR,
-                                           _tilted, lower_bowl_variants, slabs_disjoint, upper_bowl_variants)
+    from dishsim_frigidaire.loading import (LOWER_BOWL_FLOOR, LOWER_BOWL_LIFTS, LOWER_PLATE_FLOOR, UPPER_GLASS_FLOOR,
+                                            _tilted, lower_bowl_variants, slabs_disjoint, upper_bowl_variants)
     from dishsim_frigidaire.geometry import lower_tine_positions, upper_tine_positions
     from dishsim_frigidaire.loading import CollisionWorld, _candidate, collision_parts, geometry_hashes, rotation, visual_points
     from dishsim_frigidaire.paths import ASSET_DIR
 
     assets_dir = Path(assets_dir)
-    catalog = json.loads((assets_dir / "catalog.json").read_text())
+    catalog = json.loads((assets_dir.parent / "catalog.json").read_text())
     world = CollisionWorld(ASSET_DIR)
     parts, points = {}, {}
     for kind in KINDS:                       # "bowl" deliberately replaces the stock bowl: claims' builders use that literal
@@ -280,7 +280,7 @@ def plan_layout(assets_dir, bowls_upper=4, search=False, plates="split", chooser
 def layout_main(argv):
     parser = argparse.ArgumentParser(description="Kit-free HOTEC layout")
     parser.add_argument("--layout-only", action="store_true")
-    parser.add_argument("--assets", type=Path, default=ROOT / "data/assets/models/hotec_wheatstraw/v1")
+    parser.add_argument("--assets", type=Path, default=ROOT / "data/assets/hotec_wheatstraw/usd")
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--bowls-upper", type=int, default=4)
     parser.add_argument("--search", action="store_true", help="capacity mode: middle-row lower bowls, every upper gap, two extra cup slots")
@@ -335,7 +335,7 @@ def run(args, report):
             raise FileExistsError(f"Refusing to overwrite: {path}")
     entries = layout["objects"]
     dt = LIMITS["physics_dt_s"]
-    catalog = json.loads((assets / "catalog.json").read_text())
+    catalog = json.loads((assets.parent / "catalog.json").read_text())
     report.update(layout_path=str(args.layout), layout_sha256=digest(args.layout), parameters_sha256=layout["parameters_sha256"],
                   asset_sha256_before=dict(layout["asset_sha256"]), counts=layout["counts"], camera=CAMERA,
                   runtime={"isaac_sim": Path("/isaac-sim/VERSION").read_text().strip(), "physics_hz": round(1 / dt),
@@ -690,8 +690,8 @@ def main():
         return layout_main(sys.argv[1:])
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--layout", type=Path, required=True)
-    parser.add_argument("--assets", type=Path, default=ROOT / "data/assets/models/hotec_wheatstraw/v1")
-    parser.add_argument("--usd", type=Path, default=ROOT / "data/build/frigidaire_collection/usd/fdpc4221as.usdc")
+    parser.add_argument("--assets", type=Path, default=ROOT / "data/assets/hotec_wheatstraw/usd")
+    parser.add_argument("--usd", type=Path, default=ROOT / "data/assets/frigidaire_fdpc4221as/usd/fdpc4221as.usdc")
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--tag", default="hotec_v1")
     parser.add_argument("--sequential", action="store_true", help="insert the pieces one by one in the layout's insertion_order (stash on the counter first)")

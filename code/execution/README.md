@@ -5,7 +5,7 @@ the arm bring-up probes, the trial logs and the robot report. Work in progress; 
 `code/frigidaire/docs/robot.md`.
 
 - Input: a HOTEC instance (`data/results/benchmark/frigidaire_hotec/instances/<tier>/<id>.json`), the robot asset
-  mirror under `data/assets/robots/`, the Frigidaire build `data/build/frigidaire_collection/usd/fdpc4221as.usdc`.
+  mirror under `data/assets/robots/`, the Frigidaire twin `data/assets/frigidaire_fdpc4221as/usd/fdpc4221as.usdc`.
 - Output: run records `data/results/robot/runs/<run-id>/<instance>.json`, trial logs and media
   `data/artifacts/<run-id>/<trial-id>/`, probe results under `data/results/robot/`, the report.
 

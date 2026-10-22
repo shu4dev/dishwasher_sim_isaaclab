@@ -16,8 +16,8 @@ provably minimum move count per instance, so results are quoted as an optimality
 
 The minimal pipeline, in order (this is the whole Bosch benchmark):
 
-1. **Bring-up** — `code/util/tools/bootstrap.sh`: image build if absent, `compose up`, archive
-   restore (validates every cache's `config_hash`), kit_smoke install gate.
+1. **Bring-up** — clone the assets into `data/assets` (Commands below), then
+   `code/util/tools/bootstrap.sh`: image build if absent, `compose up`, kit_smoke install gate.
 2. **Generate** — `gen_instances.py`: seeded, physically settled problem instances (JSON).
 3. **Problem images** — `instance_views.py`: initial-vs-goal stills per instance.
 4. **Benchmark** — `run_rearrange.py [--video]`: closed-loop episodes; every move teleports +
@@ -48,7 +48,8 @@ cores 14 and 15 for GPU or scoring jobs. The RTX renderer segfaults there when K
 (driver 595.71 is newer than Isaac Sim 4.5 supports; found 2026-10-09), so every
 `--enable_cameras` run, `kit_smoke.py` included, crashes; physics-only Kit runs work, and stills
 come from `code/planner/frigidaire/frigidaire_dot_rules_render.py` (Warp ray tracing of the same
-meshes).
+meshes). Its `data/assets` is a copy of the HF asset dataset (`hf download`), restructured on
+2026-10-21 (hold folder: see "Cleanup state").
 
 **Git is handled by the user, not by Claude** — no branches, commits, or pushes from
 sessions; end each work phase with a summary and a suggested commit message (imperative
@@ -62,8 +63,11 @@ Kit-free python (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` baked in). There is NO venv.
 the project root:
 
 ```bash
-# tests (Kit-free). test_rack_gen_frozen.py digests are pinned PER numeric environment
-# (this box: numpy 1.26 / Kit py3.10); it MUST pass in this container — failing HERE is drift.
+# assets: data/assets is a copy of the HF dataset; hf download restores and updates it
+hf download shu4dev/dishsim-assets --repo-type dataset --local-dir data/assets
+
+# tests (Kit-free). The rack_gen digest pin (test_rack_gen_frozen.py, pinned PER numeric
+# environment) moved with rack_gen to data/assets/bosch800/source/ on 2026-10-21.
 code/util/run_py.sh -m pytest code/tests/
 
 # Kit-free capacity sanity (seconds; the plan is recomputed in-process by gen_instances)
@@ -95,19 +99,22 @@ code/util/run_kit.sh code/planner/bosch/run_rearrange.py --headless \
     --cells easy,medium,hard --algorithms greedy          # 60 s planning budget default
 code/util/run_py.sh code/planner/bosch/compare_algorithms.py  # -> data/results/compare/summary.{csv,md}
 
-# rebake ONE (object, state) cache after a hashed-config change (extract -> decompose):
-code/util/run_kit.sh code/initialization/bosch/extract_geometry.py --headless \
+# rebake ONE (object, state) cache after a hashed-config change (extract -> decompose),
+# then publish: hf upload shu4dev/dishsim-assets data/assets . --repo-type dataset --commit-message "<what changed>"
+code/util/run_kit.sh data/assets/bosch800/source/extract_geometry.py --headless \
     --machine bosch800 --placement side_winner --scenario placement --object cup
-code/util/run_py.sh code/initialization/bosch/decompose_meshes.py \
+code/util/run_py.sh data/assets/bosch800/source/decompose_meshes.py \
     --machine bosch800 --placement side_winner --scenario placement --object cup
 ```
 
-Caches ship in the public archive — restore first (`bootstrap.sh` / `restore_assets.py`),
-never rebake what the archive carries. Archive tags dated 2026-09-10 or later are cut from THIS
-box and already carry the exact E_door_4 pieces (`COACD["E_door_4"]["preprocess_mode"] = "off"`);
-only a restore of an older tag needs the one-off `decompose_meshes.py` pass described in
-docs/known_limitations.md. Check archive state with
-`code/util/run_py.sh code/util/tools/archive_assets.py --status` (read-only, no token).
+`data/assets` is a plain copy of the HF dataset `shu4dev/dishsim-assets` (since 2026-10-21): `hf download`
+to restore, `hf upload` to publish (`hf auth login` with write access; `hf repo-files delete` removes hub files);
+never rebake what it carries. Six flat folders (`bosch800`,
+`frigidaire_fdpc4221as`, `artvip_dishwasher_2`, `hotec_wheatstraw`, `bosch_props`,
+`frigidaire_prototypes`), each with `source/` (the generator or fetch code moved out of the repo;
+its README gives the exact command and the git SHA of its last run) beside what experiments load.
+The repo no longer generates assets; evidence and results stay out of the dataset. Index:
+`data/assets/README.md`.
 
 **`./isaaclab.sh -p` exits 0 even when the wrapped script crashes.** Judge every Kit run from
 log content (`[RESULT] PASS`, absence of tracebacks / `free(): invalid pointer`), never the
@@ -125,7 +132,8 @@ side_winner): pytest → restore PASS → kit_smoke → capacity 39/15 → gen_i
 instance_views → run_rearrange all `[RESULT] PASS`; greedy solved 3/3 perturbed 15-item
 instances in 9 moves of 45 (provable optima 9/9/9 — `compat.optimal_moves`; the first pins of
 9/8/8 were a table-reuse bug, re-pinned 2026-08-31, and that run left no records). `pytest
-code/tests/` is 65 tests, about 70 s (2026-09-29). Instances are
+code/tests/` was 65 tests, about 70 s (2026-09-29); 37 since the 2026-10-21 asset move (the
+archive, rack_gen-digest and HOTEC-generator tests left with their code). Instances are
 PER-MACHINE artifacts (PhysX 4.5 settle fixed points differ from the retired 6.0.1 cloud
 box), so the at-goal/optima pins in `code/tests/test_compat.py` belong to this box's instances.
 Other rack states (`third_out`, `middle_out`) have never run under Kit here; the fault knobs
@@ -162,7 +170,9 @@ or silent import shadowing, not clean errors:
   at load ("missing CoACD pieces") but invisible to the staleness check; re-decomposing is
   Kit-free and invalidates nothing. Hash-SAFE knobs: `COLLISION_MARGIN_M`, `RELEASE_HOVER_M`,
   `TASK[...]`, cameras, everything in `rearrange.py`. Hashed (full Kit rebake): `RACK_GEN`,
-  `MACHINE_GEN`, object `spec.coacd`, the frozen anchors.
+  `MACHINE_GEN`, object `spec.coacd`, the frozen anchors. Since 2026-10-21 `machine.py` loads the
+  shipped per-state USD instead of authoring it, so a `RACK_GEN`/`MACHINE_GEN` change also needs
+  a re-export (`data/assets/bosch800/source/export_usd.py`).
 - `gen_instances.py` records a **reproduction gate**, not merely a settled pose: it rehearses
   the runner's episode reset (teleport → re-settle → compare) and stores the re-settled fixed
   point, re-rolling failures. Do not "simplify" this to a single settle.
@@ -208,18 +218,21 @@ graph and the greedy sequencer with the counter cap, on the Bosch driver `rearra
 reference `code/frigidaire/docs/planner.md`; `frigidaire_planner_video.py` renders episodes. Two traps:
 the backend's rack-speed gate flakes (retry the other rack order), and `code/util/run_py.sh` exports
 Kit's USD extension so `pxr` imports Kit-free (the FCL checker needs it).
-Geometry (2026-09-28): the twin's racks and basket are tape-measured (48/64 tines, 1x4 basket 320 x 95 x 130 with a 220 mm handle; revisions `upper_tines_4x13_v5` / `lower_tines_6x12_v4` / `basket_1x4_320x95_v4` since the 2026-09-28 re-measurement: non-uniform column/row gaps, front/left margins from the tape, rear/right margins the rim's leftover, lower rack 561 deep and 108 tall), claims variant B retired, the v3, v4 and v5 builds archived under `data/build/frigidaire_collection/history/`; reference `code/frigidaire/docs/geometry.md`. Every Isaac result before 2026-09-28 (HOTEC v11-v13, exposure, the whole HOTEC benchmark) is stale on the new racks.
+Geometry (2026-09-28): the twin's racks and basket are tape-measured (48/64 tines, 1x4 basket 320 x 95 x 130 with a 220 mm handle; revisions `upper_tines_4x13_v5` / `lower_tines_6x12_v4` / `basket_1x4_320x95_v4` since the 2026-09-28 re-measurement: non-uniform column/row gaps, front/left margins from the tape, rear/right margins the rim's leftover, lower rack 561 deep and 108 tall), claims variant B retired; since 2026-10-21 the twin ships in `data/assets/frigidaire_fdpc4221as/` (`usd/`, `parameters.json`, `components.json`, which the runtime `geometry.py`/`asset.py` read) with the generator, staging, packaging, preview and evidence scripts in its `source/`, and the v3, v4 and v5 builds are not kept (they were only ever in corallab's `data/build/frigidaire_collection/history/`, never in the HF archive; the code that built each is in this repo's git history); reference `code/frigidaire/docs/geometry.md`. Every Isaac result before 2026-09-28 (HOTEC v11-v13, exposure, the whole HOTEC benchmark) is stale on the new racks.
 
 ## HOTEC wheat-straw dinnerware assets (2026-09-21)
 
-Parametric plate/bowl/cup USDs of the user's real set, built Kit-free by `code/src/dishsim/hotec_gen.py`
-into `data/assets/models/hotec_wheatstraw/v1/` (metres, Z-up, base-centred origin, 192/192/168 convex
-pieces, four colour variants; v1 has no MassAPI, `v2/` adds the user's measured masses as `physics:mass` on the
-default prim only: plate 0.094625 / bowl 0.067375 / cup 0.0595 kg, 8-piece averages). Every non-listing
-value is an `estimated` parameter in the module table; further measurements go into the next folder
-(`v3/`) with `--set kind.name=value`, never overwriting an earlier one. Brimful capacities are computed to the lowest rim
+Parametric plate/bowl/cup USDs of the user's real set, built Kit-free by `hotec_gen.py` (in
+`data/assets/hotec_wheatstraw/source/` with its test since 2026-10-21). The dataset ships v2 only:
+`data/assets/hotec_wheatstraw/usd/{plate,bowl,cup}.usda`, `parameters.json` and `catalog.json` one level up
+(metres, Z-up, base-centred origin, 192/192/168 convex pieces, four colour variants; the user's measured masses
+as `physics:mass` on the default prim only: plate 0.094625 / bowl 0.067375 / cup 0.0595 kg, 8-piece averages;
+the massless v1 was only ever on corallab's `data/assets/models/hotec_wheatstraw/v1/` and is not in the dataset). Every non-listing value is an
+`estimated` parameter in the module table; further measurements rebuild with `--set kind.name=value` (the
+generator never overwrites a folder), the dataset keeping the latest version and its git history the earlier
+ones. Brimful capacities are computed to the lowest rim
 point (bowl 764 vs 769 mL advertised; cup 283 vs 355 mL — the envelope cannot hold 12 oz, documented,
-not tuned). Report: `docs/hotec_wheatstraw_asset.md`; tests: `code/tests/test_hotec_gen.py`; the Frigidaire
+not tuned). Report: `docs/hotec_wheatstraw_asset.md`; the Frigidaire
 load/settle/orbit script is `code/planner/frigidaire/frigidaire_hotec_load.py` (`--layout-only`
 first, then Kit). Landmine: the loading helpers assume centre-origin pieces — place by centroid.
 Top-5 exposure loads of all 24 pieces (2026-09-29): `code/planner/frigidaire/frigidaire_hotec_top5.py --all`
@@ -248,19 +261,21 @@ and stop jobs by PID, never broad `pkill -f` in the shared container.
   back to the same relative path under `repo_data/`; delete after 2026-10-29). The 98 byte-identical media
   copies deleted the same day are listed with sha256 and surviving copy in its
   `MANIFEST_4a_media_duplicates.txt` (undo = `cp -p` the survivor back; the v2-v5 survivors live in this hold folder).
-- `data/outputs/archive/` holds the local 20260910 tarballs: the only local backup of the pinned Bosch instances.
-  Never run `archive_assets.py --upload` with the documented kinds: `assets` walks all of `data/results/` (private
-  outputs) and `models` includes HOTEC. Never hard-link or symlink two files that both sit inside `data/assets/ data/media/
-  data/results/`: the archive tooling stores such a pair as a link member that `restore_assets.py` refuses. The only
-  links are history v4/v5 claims sharing inodes with v3 (all under `data/build/.../history`) and the two media gallery
-  zips sharing inodes with `history/{v1,v2}/archives` (the partner is outside every archive kind, so it packs as
-  a plain file).
-- `package_frigidaire.py --check` is red (4 assembly gates) until the two-job Kit evidence refresh
-  (`frigidaire_asset_evidence.py`, physics-only then render-only): untracked `mcts.py` (and `robot/` on refresh)
-  are not in the 2026-09-28 evidence hashes, and any edit to a top-level `code/frigidaire/src/dishsim_frigidaire`
-  file stales it. Batch package edits before refreshing.
+  On the Brev box `data/_trash_20261021/` holds what the 2026-10-21 asset restructure dropped (the old
+  `models/frigidaire_fdpc4221as{,_v2}` twins and their delivery JSON, the four stale bosch800 `mug` caches,
+  16 unreferenced CoACD dirs, the ArtVIP variants other than dishwasher_2 and the retired `_rl` copy;
+  `MANIFEST.txt`, undo = `mv` back); delete after 2026-11-21. The Mac's pre-refactor fragments sit in its own
+  `data/_trash_20261021/`.
+- The archive tooling (`archive_assets.py`, `restore_assets.py`, `latest.json`, the tarballs) is gone since
+  2026-10-21; the dataset's history on the hub keeps the 20260910 tarballs, whose `assets` kind also packs the pinned
+  Bosch instances. `hf upload` publishes everything in `data/assets`: keep `data/results/` and evidence out of it.
+- `package_frigidaire.py --check` and `frigidaire_asset_evidence.py` moved to
+  `data/assets/frigidaire_fdpc4221as/source/` (2026-10-21). The check was red on 2026-09-29 (4 assembly gates)
+  pending the two-job Kit evidence refresh (physics-only then render-only): `mcts.py` and `robot/` postdate the
+  2026-09-28 evidence hashes, and any edit to a top-level `code/frigidaire/src/dishsim_frigidaire` file stales it.
+  Batch package edits before refreshing.
 - Benchmark history traces (`stopped_20260928`, `pre_rebuild_20260928`, `history_planner_20260929`,
-  `smoke_20260923`) are `*trace.jsonl.xz`; robot-era arm meshes were removed from `data/assets/cache`.
+  `smoke_20260923`) are `*trace.jsonl.xz`; robot-era arm meshes were removed from the caches (2026-09-29).
 - In progress and untracked (commit before any cleanup; `git clean` would destroy it): `mcts.py`,
   `robot/` + `frigidaire_robot_*`/`frigidaire_grasp_test.py` (`code/frigidaire/docs/robot.md`), the top-5 load,
   `docs/scoring_note/`.
@@ -280,7 +295,8 @@ open questions are in plans/, results/ and research/.
 
 ## Ground rules
 
-- `data/assets/`, `data/media/`, `data/results/`, `data/logs/`, `data/outputs/` are gitignored; never commit them.
+- `data/assets/`, `data/media/`, `data/results/`, `data/logs/`, `data/outputs/` are gitignored; never commit them
+  to this repo (`data/assets` is a copy of the HF dataset, published with `hf upload`).
   `data/experiments/` is a symlink index over them (machine → experiment → trial); edit the real
   folders, and add new runs there as one entry with a short README.
   Curated figures go to `docs/figures/` (tracked, provenance in its README).
@@ -303,5 +319,5 @@ open questions are in plans/, results/ and research/.
     3. From the repo root: `code/util/run_kit.sh <script> --headless` (Kit) or `code/util/run_py.sh <script>` (Kit-free); both docker exec into the container. Long or parallel jobs: `setsid nohup docker exec -w /workspace/dishsim -e OMP_NUM_THREADS=2 dishsim-isaac taskset -c <j>,<j+16> nice -n 10 code/util/run_kit.sh ... > data/logs/<area>/<log>.log 2>&1 &`.
     4. Write results/<slug>.md and end with a suggested commit message. The box has no GitHub credentials, so commits made there leave through the Mac: `git pull --ff-only brev plan && git push` (remote `brev` = `isaac-launchable-2dd875:isaac-launchable/dishwasher_sim_isaaclab`).
     5. Mac: `brev stop isaac-launchable-2dd875`.
-  - Smoke run, under 2 min: `code/util/run_py.sh -m pytest code/tests/ -q` (Kit-free, about 70 s on corallab, not yet timed on the box; `kit_smoke.py` needs cameras and crashes there).
+  - Smoke run, under 2 min: `code/util/run_py.sh -m pytest code/tests/ -q` (Kit-free, about 70 s on corallab for the 65-test suite of 2026-09-29, not yet timed on the box; `kit_smoke.py` needs cameras and crashes there).
   - Data / checkpoints / logs: on the box only, gitignored under data/: outputs `data/results/<area>/`, media and pages `data/media/<area>/`, logs `data/logs/<area>/`.

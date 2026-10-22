@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import numpy as np
 
-RIM_R, WALL, HEIGHT = .074, .0035, .075          # HOTEC bowl (data/assets/models/hotec_wheatstraw/v2/parameters.json)
+RIM_R, WALL, HEIGHT = .074, .0035, .075          # HOTEC bowl (data/assets/hotec_wheatstraw/parameters.json)
 FOOT_R, FOOT_W = .035, .005
 RIM_INSERT_M = .025                              # rim top above the TCP
 FOOT_INSERT_M = .006                             # ring top above the TCP

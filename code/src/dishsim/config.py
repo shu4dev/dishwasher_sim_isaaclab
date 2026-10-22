@@ -63,7 +63,7 @@ RACK_TRAVEL_LIMITS_M = (-0.20, 0.0)
 # Rack-state scenarios — the two real INITIAL states of a stowed/open machine. Each carries a
 # rack_action (a drive-target ramp on the named prismatic joint) that brings BOTH scenarios to
 # the same placement state (lower rack out, upper rack in — the geometry the placement
-# pipeline is validated on). "both_out" is the baseline (legacy data/assets/cache/, data/media/<phase>).
+# pipeline is validated on). "both_out" is the baseline (data/media/<phase>).
 SCENARIOS = {
     "both_out": {  # both racks fully extended -> push the UPPER rack in, place into the lower
         "rack_lower_m": -0.20,
@@ -145,10 +145,10 @@ def apply_scenario(name: str) -> None:
 def scenario_cache_dir(name: str | None = None, object_name: str | None = None) -> str:
     """Collision-cache root for a scenario + a carried object.
 
-    The mug keeps the legacy layout (baseline ``data/assets/cache/``, other states under
-    ``data/assets/cache/scenarios/<state>``) so the validated v0 caches stay byte-stable; every
-    other object gets ``data/assets/cache/objects/<object>/<state>``. CoACD piece dirs are
-    content-addressed under the baseline root, so rack/shell decompositions are shared.
+    ``data/assets/<machine>/cache/<state>/<object>/`` (``machine_asset_dir``); since 2026-10-21 one regular layout
+    for every machine and object (the baseline mug's legacy ``data/assets/cache/`` and ``scenarios/`` carve-outs
+    were folded in by moving the files, so their bytes and hashes are unchanged). CoACD piece dirs are
+    content-addressed under ``<machine>/cache/coacd``, so rack/shell decompositions are shared across states.
 
     Args:
         name: Scenario/state name; defaults to the active scenario.
@@ -157,17 +157,12 @@ def scenario_cache_dir(name: str | None = None, object_name: str | None = None) 
             :func:`set_active_object` — which rewrites module globals and would make the
             grasp/geometry view depend on call order.
     """
-    name = name or SCENARIO_NAME
-    obj = object_name or ACTIVE_OBJECT
-    if MACHINE != MACHINE_BASELINE_NAME:
-        # non-default machines get a fully regular layout under their own root — no legacy
-        # carve-outs (those exist only to keep the validated v1 caches byte-stable)
-        return os.path.join(ASSETS_DIR, "cache", "machines", MACHINE, "objects", obj, name)
-    if obj != "mug":
-        return os.path.join(ASSETS_DIR, "cache", "objects", obj, name)
-    if name == "both_out":
-        return CACHE_DIR
-    return os.path.join(ASSETS_DIR, "cache", "scenarios", name)
+    return os.path.join(machine_asset_dir(), "cache", name or SCENARIO_NAME, object_name or ACTIVE_OBJECT)
+
+
+def machine_asset_dir(machine: str | None = None) -> str:
+    """The machine's folder in the asset dataset: ``data/assets/bosch800`` or ``data/assets/artvip_dishwasher_2``."""
+    return os.path.join(ASSETS_DIR, MACHINE_ASSET_DIRS[machine or MACHINE])
 
 
 def scenario_media_dir(phase: str, name: str | None = None) -> str:
@@ -274,7 +269,8 @@ EPISODE_CAMERA = {
 # ---------------------------------------------------------------------------------------------
 # collision world
 # ---------------------------------------------------------------------------------------------
-CACHE_DIR = os.path.join(ASSETS_DIR, "cache")
+# the baseline machine's default cache (artvip_compact, both_out, mug); every cache: scenario_cache_dir()
+CACHE_DIR = os.path.join(ASSETS_DIR, "artvip_dishwasher_2", "cache", "both_out", "mug")
 # Hull inflation for candidate objects in FCL queries. Demoted from safety-certificate to
 # pre-filter (2026-08-28): the Isaac settle gates are the certificate for placements, so this
 # only needs to keep obviously-touching poses out of the settle budget. At 5 mm it vetoed
@@ -283,7 +279,7 @@ CACHE_DIR = os.path.join(ASSETS_DIR, "cache")
 COLLISION_MARGIN_M = 0.002
 # CoACD parameters per body (fallback key "default"); threshold is the concavity tolerance —
 # lower = finer decomposition. The RACKS no longer go through CoACD: their meshes are generated
-# by rack_gen from RACK_GEN below, and code/initialization/bosch/decompose_meshes.py writes the generator's exact convex parts as
+# by rack_gen from RACK_GEN below, and data/assets/bosch800/source/decompose_meshes.py writes the generator's exact convex parts as
 # the FCL pieces (zero decomposition slop on 3 mm wires). CoACD remains for the concave bodies
 # whose geometry we don't control.
 COACD = {
@@ -319,7 +315,7 @@ COACD = {
 # Design space = world-metric rack body frame: x = width, y = depth (y=0 the front edge, the
 # end that extends toward the robot), z up from 0 at the lowest wire surface; meters.
 # usd_prep authors these meshes into the derived v0 USD (replacing the ArtVIP flat baskets);
-# code/initialization/bosch/decompose_meshes.py writes the generator's convex parts as the FCL pieces. Vertical layout is derived:
+# data/assets/bosch800/source/decompose_meshes.py writes the generator's convex parts as the FCL pieces. Vertical layout is derived:
 # channel runners bottom at z=0, main runners raised by channel.drop, crossbars tangent on top
 # (floor_top = crossbar top = the slot datum the Phase-E percentile must land on — everything
 # floor-level therefore stays inside placement.py's 15 mm bottom-slab band).
@@ -700,7 +696,7 @@ class ObjectSpec:
     height_m: float  # extent along axis_obj [m]
     grasp: GraspSpec
     placement: PlacementSpec
-    coacd: dict  # code/initialization/bosch/decompose_meshes.py params, or {"analytic": True} for prop_gen part lists
+    coacd: dict  # data/assets/bosch800/source/decompose_meshes.py params, or {"analytic": True} for prop_gen part lists
     countertop_poses_w: tuple = ()  # ((x, y, z), yaw_deg) staging poses
     cache_name: str | None = None  # manifest/hash name; defaults to `name`
     usd_basename: str | None = None  # defaults to f"{name}_physics.usd"
@@ -711,7 +707,7 @@ class ObjectSpec:
 
     @property
     def usd_path(self) -> str:
-        return os.path.join(ASSETS_DIR, "props", self.usd_basename or f"{self.name}_physics.usd")
+        return os.path.join(ASSETS_DIR, "bosch_props", "usd", self.usd_basename or f"{self.name}_physics.usd")
 
 
 #: Per-class render tint [linear RGB 0-1] for media only — never physics, never geometry.
@@ -1179,8 +1175,8 @@ RACK_TRAVEL_LIMITS_BY_JOINT_M: dict[str, tuple[float, float]] = {
     "PrismaticJoint_dishwasher_2_up": RACK_TRAVEL_LIMITS_M,
 }
 
-#: directory for self-authored (non-ArtVIP) machine USDs: data/assets/machines/<name>/
-MACHINE_USD_DIR = os.path.join(ASSETS_DIR, "machines")
+#: each machine's folder in the asset dataset (its per-state machine USDs under usd/, its caches under cache/)
+MACHINE_ASSET_DIRS = {MACHINE_BASELINE_NAME: "artvip_dishwasher_2", "bosch800": "bosch800"}
 
 # Parametric machine geometry, machine frame: X width (centered), Y depth (front face at
 # y = -d/2, rear at +d/2, door opens toward -y), Z up from the floor, meters. Only

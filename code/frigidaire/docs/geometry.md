@@ -8,8 +8,11 @@ the rim footprint.
 The user tape-measured the real racks and basket on 2026-09-21 and re-measured the
 racks on 2026-09-28 (the first tape's uniform pitches and margins over-determined both
 racks by 3 to 6 cm; the re-measurement found the real column and row spacings are not
-uniform). The source (`code/frigidaire/src/dishsim_frigidaire/geometry.py`, `PARAMETERS`)
-holds those numbers and the USD collection was rebuilt on 2026-09-28. The basket is the
+uniform). The generator (`PARAMETERS` in `geometry.py`, since 2026-10-21 in
+`data/assets/frigidaire_fdpc4221as/source/`, before that `code/frigidaire/src/dishsim_frigidaire/`)
+holds those numbers and the USD collection was rebuilt on 2026-09-28; the runtime
+`dishsim_frigidaire/geometry.py` reads the derived table back from the asset folder's
+`parameters.json` (`PARAMETERS` = its `geometry` entry) and `components.json`. The basket is the
 part that matters; the rest of the appliance may relax in realism. Trusted inputs are the
 outer rim size, the tine counts, the pitches (per gap) and the FRONT and LEFT margins,
 which are the user's counting datums ("tape" rule, chosen 2026-09-28). The rear and right
@@ -25,7 +28,8 @@ Wire diameters, tine leans, floor depths and every basket lattice count remain e
 | SilverwareBasket | `basket_1x4_320x95_v4` | unchanged: 320 long x 95 wide top rim, 130 body and 220 mm handle top measured from the lowest wire, four compartments in a row; seat `[184, 96, 9]` |
 | Cabinet, Door | `fdpc4221as_photo_v1` | unchanged photo fit |
 
-Archived builds under `data/build/frigidaire_collection/history/`: `v3` (photo-fitted racks and
+Archived builds, kept under the staging folder's `history/` on corallab (never in the HF archive;
+not in the asset dataset since 2026-10-21, their code is in this repo's git history): `v3` (photo-fitted racks and
 basket), `v4` (first tape build, centreline rim heights, 2026-09-23), `v5` (the
 2026-09-23 build with the outside heights fixed: `upper_tines_4x13_v4`, `lower_tines_6x12_v3`,
 204 files, 344.5 MB, archived 2026-09-28). Each holds an `archive_manifest.json` with the
@@ -42,15 +46,16 @@ the generated wires reach the tape height:
 | Lower rack | rim wire centre 103.6 mm above the floor-wire centre (was 110.6 for the 115 mm of 2026-09-21) | 108.0 (floor wire underside to rim top) |
 | Basket | lowest wire z = 0 | 130 / 220 (top rim, handle top) |
 
-`test_outer_heights_match_the_tape` pins all three (`usd/parameters.json` holds `rim_height`
+`test_outer_heights_match_the_tape` (among the generator's tests in the asset folder's `source/`
+since 2026-10-21) pins all three (the asset folder's `parameters.json` holds `rim_height`
 and `outer_height_tape`). The lower rack's under-floor rails and wheel axles hang below the
 floor wires and are not part of the measured height. The 95 mm tines of the lower rack
 now reach z 101, 2.6 mm under the rim wire centre.
 
 ## Upper rack
 
-Values verified against `data/build/frigidaire_collection/images/upper_rack/measurements.json`
-(regenerated 2026-09-28 for `upper_tines_4x13_v5`).
+Values verified against `data/media/frigidaire_fdpc4221as/images/upper_rack/measurements.json`
+(regenerated 2026-09-28 for `upper_tines_4x13_v5`; in the staging folder's `images/` until 2026-10-21).
 
 | Quantity | Tape (cm) | Model (mm) | Status |
 |---|---:|---:|---|
@@ -114,7 +119,7 @@ hover, mouth centre x 182.75).
 
 ## Lower rack
 
-Values verified against `data/build/frigidaire_collection/images/lower_rack/measurements.json`
+Values verified against `data/media/frigidaire_fdpc4221as/images/lower_rack/measurements.json`
 (regenerated 2026-09-28 for `lower_tines_6x12_v4`).
 
 | Quantity | Tape (cm) | Model (mm) | Status |
@@ -160,7 +165,7 @@ centreline:
 
 | Consumer | Inset |
 |---|---|
-| claims, front bank (`claims.PLATE_INSET_Y`) | 25 mm rearward |
+| claims, front bank (`claims.PLATE_INSET_Y`; `claims.py` is in the asset folder's `source/` since 2026-10-21) | 25 mm rearward |
 | claims, rear bank | 15 mm forward |
 | HOTEC plates, front bank (`frigidaire_hotec_load.py`) | 10 mm rearward |
 | plate fixture site | bank centre + 15 mm (y = -124) |
@@ -174,8 +179,8 @@ Z up; the lowest wire surface (the corner-post feet) is z = 0. Revision `basket_
 the handle top at 22 cm. The v3 photo-fitted DESIGN is unchanged: tapered lattice body, double
 bottom edge and top lip, corner posts, three tapered cross partitions with a top edge, elongated
 loop handle with an open aperture over the +X long wall on two straps. Values verified against
-the lower-rack `measurements.json` (basket block), `data/build/frigidaire_collection/usd/parameters.json`
-and `data/build/frigidaire_collection/validation/lower_rack_clearance.json`.
+the lower-rack `measurements.json` (basket block), `data/assets/frigidaire_fdpc4221as/parameters.json`
+and `data/media/frigidaire_fdpc4221as/validation/lower_rack_clearance.json`.
 
 | Quantity | Tape (cm) | Model (mm) | Status |
 |---|---:|---:|---|
@@ -213,7 +218,7 @@ geometry only, 2026-09-28):
 | tine x-envelope gap | 29.85 |
 
 A positive initial floor gap does not demonstrate settled support; that is the assembly
-evidence run's job (`data/build/frigidaire_collection/images/assembly`, physics and render PASS on
+evidence run's job (`data/media/frigidaire_fdpc4221as/images/assembly`, physics and render PASS on
 2026-09-28). The loop's +Y end sits about 20 mm in front of the retracted upper rack when
 the lower rack is extended, as before (the seat and the loop are unchanged).
 
@@ -226,35 +231,44 @@ the lower rack is extended, as before (the seat and the loop are unchanged).
 | benchmark capacity gate (`frigidaire_bench.py --capacity`) | PASS | PASS (7/7, 15/15, 23/23; family caches regenerated by digest) |
 
 Every Isaac result recorded on the previous racks is stale (listed in
-`history/v5/archive_manifest.json`): HOTEC runs v11 to v13, the exposure search results,
+`history/v5/archive_manifest.json`, on corallab): HOTEC runs v11 to v13, the exposure search results,
 and the whole HOTEC benchmark (`data/results/benchmark/frigidaire_hotec/`: baseline snapshot,
 instances, goals, plans, episodes). Regenerate them before quoting numbers.
 
 ## Regenerate
 
-Host-side previews (NumPy and Matplotlib only; they write `measurements.json` beside
-the images):
+The generator scripts live in `data/assets/frigidaire_fdpc4221as/source/` since 2026-10-21
+(its README gives the exact commands and the git SHA of the last run). Host-side previews
+(NumPy and Matplotlib only; they write `measurements.json` beside the images):
 
 ```bash
-python3 code/initialization/frigidaire/frigidaire_upper_rack_preview.py \
-    --out-dir data/build/frigidaire_collection/images/upper_rack      # 48 tines
-python3 code/initialization/frigidaire/frigidaire_lower_rack_preview.py \
-    --out-dir data/build/frigidaire_collection/images/lower_rack      # 64 tines + basket_front/top/oblique.png
-python3 code/initialization/frigidaire/frigidaire_lower_rack_clearance.py   # -> validation/lower_rack_clearance.json
-python3 code/initialization/frigidaire/frigidaire_rack_dimensions_cm.py     # -> data/media/frigidaire_rack_dimensions/*.png (curated copies in docs/figures)
-python3 code/initialization/frigidaire/stage_frigidaire_collection.py --archive-current v6   # BEFORE a rebuild; never reuse a version
-code/util/run_py.sh code/initialization/frigidaire/build_frigidaire.py             # USD rebuild, [RESULT] PASS
+python3 data/assets/frigidaire_fdpc4221as/source/frigidaire_upper_rack_preview.py \
+    --out-dir data/media/frigidaire_fdpc4221as/images/upper_rack      # 48 tines
+python3 data/assets/frigidaire_fdpc4221as/source/frigidaire_lower_rack_preview.py \
+    --out-dir data/media/frigidaire_fdpc4221as/images/lower_rack      # 64 tines + basket_front/top/oblique.png
+python3 data/assets/frigidaire_fdpc4221as/source/frigidaire_lower_rack_clearance.py \
+    --out data/media/frigidaire_fdpc4221as/validation/lower_rack_clearance.json
+python3 data/assets/frigidaire_fdpc4221as/source/frigidaire_rack_dimensions_cm.py     # -> data/media/frigidaire_rack_dimensions/*.png (curated copies in docs/figures)
+code/util/run_py.sh data/assets/frigidaire_fdpc4221as/source/build_frigidaire.py      # USD rebuild, [RESULT] PASS
+code/util/run_py.sh data/assets/frigidaire_fdpc4221as/source/export_components.py     # -> components.json
 ```
 
-`data/build/frigidaire_collection/usd/parameters.json` and `usd/geometry_validation.json`
+A rebuild is published with
+`hf upload shu4dev/dishsim-assets data/assets . --repo-type dataset --commit-message "<what changed>"`
+(needs `hf auth login` with write access); the dataset's history on the hub keeps the previous
+build, as the staging folder's `history/` copies (`stage_frigidaire_collection.py --archive-current`,
+run before a rebuild) did until 2026-10-21.
+`data/assets/frigidaire_fdpc4221as/parameters.json` and `usd/geometry_validation.json`
 record the generated dimensions and the revision ids.
 
 ## Previous revisions
 
-The v3 build is archived under `data/build/frigidaire_collection/history/v3`, the first tape
-build under `history/v4` and the 2026-09-23 outside-height build under `history/v5` (see
-each `archive_manifest.json` for the stale-results list). The v3 geometry and its
+The v3 build, the first tape build (`history/v4`) and the 2026-09-23 outside-height build
+(`history/v5`) were archived under `data/build/frigidaire_collection/history/` on corallab (each with
+its `archive_manifest.json` and stale-results list); the asset dataset keeps none of them since
+2026-10-21, and their code is in this repo's git history. The v3 geometry and its
 photo-fitted derivations are described in
 [docs/history/development_notes.md](history/development_notes.md); the 2026-09-21 tape
 numbers (36 x 80 and 37 / 90 mm uniform pitches, 563 mm depth, 115 mm lower height) are
-kept as the superseded `source` entries in `geometry.py`.
+kept as the superseded `source` entries in the generator's `geometry.py`
+(`data/assets/frigidaire_fdpc4221as/source/`).

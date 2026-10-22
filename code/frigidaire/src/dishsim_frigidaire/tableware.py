@@ -4,8 +4,9 @@
 
 The catalog is independent of benchmark props and imports neither USD nor Kit at
 module import. All dimensions are explicit modeling defaults in metres, not
-dimensions inferred from the reference photographs. ``write_tableware(directory)``
-writes portable rigid-body USDs under ``directory/tableware`` and a catalog JSON.
+dimensions inferred from the reference photographs. The USD writer moved to the asset
+folder (``data/assets/frigidaire_prototypes/source/write_tableware.py``); the prototypes
+it wrote live in ``data/assets/frigidaire_prototypes/usd`` (``paths.PROTOTYPES_DIR``).
 Plate normals are local +Z; hollow vessels open toward +Z; mug handles face +X.
 Cutlery is longitudinal in Z, with fork tines and spoon bowls at the +Z end.
 """
@@ -235,110 +236,3 @@ def tableware_geometry(kind):
     else:
         raise KeyError(kind)
     return result
-
-
-def _material(stage, root, kind):
-    from pxr import Gf, Sdf, UsdPhysics, UsdShade
-    metallic = kind in ("fork", "knife", "tablespoon", "teaspoon")
-    material = UsdShade.Material.Define(stage, root+"/Looks/Surface")
-    shader = UsdShade.Shader.Define(stage, material.GetPath().AppendChild("Shader"))
-    shader.CreateIdAttr("UsdPreviewSurface")
-    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
-        Gf.Vec3f(*_COLORS.get(kind, (.64, .67, .68))))
-    shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(.92 if metallic else 0.)
-    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(.22 if metallic else .20)
-    if kind == "tumbler":
-        shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(.28)
-        shader.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(1.5)
-        shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(.10)
-    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
-    contact = UsdShade.Material.Define(stage, root+"/Looks/Contact")
-    physics = UsdPhysics.MaterialAPI.Apply(contact.GetPrim())
-    physics.CreateStaticFrictionAttr(.42 if metallic else .48)
-    physics.CreateDynamicFrictionAttr(.28 if metallic else .34)
-    physics.CreateRestitutionAttr(0.)
-
-
-def write_tableware(output_dir):
-    """Write ten immutable-size USD prototypes and return the catalog report.
-
-    USD must be available (inside Kit or via ``dishsim_frigidaire.usd_bootstrap``). Each
-    prototype is a free rigid body with default prim ``/Tableware``. All paths are
-    relative; this function neither starts Kit nor changes the appliance asset.
-    """
-    from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics
-    from .asset import _attr, _bind, _collision, _mesh, _pose
-    directory = Path(output_dir)/"tableware"
-    directory.mkdir(parents=True, exist_ok=True)
-    report = {"units": "metres, kilograms", "up_axis": "Z",
-              "quaternion_order": "WXYZ at the USD/Isaac boundary",
-              "dimension_status": "fixed modeling defaults; not photo measurements",
-              "source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-              "collision_method": "convex sectors of finite-thickness curved shells; open handles and cavities",
-              "inertia_method": "solid bounds approximation; positive authored inertia, masses estimated",
-              "items": {}}
-    for kind, spec in CATALOG.items():
-        geometry = tableware_geometry(kind)
-        path = directory/f"{kind}.usdc"
-        if path.exists():
-            path.unlink()
-        stage = Usd.Stage.CreateNew(str(path))
-        root = "/Tableware"
-        body = UsdGeom.Xform.Define(stage, root).GetPrim()
-        stage.SetDefaultPrim(body)
-        UsdGeom.SetStageMetersPerUnit(stage, 1.)
-        UsdGeom.SetStageUpAxis(stage, "Z")
-        stage.GetRootLayer().customLayerData = {"kilogramsPerUnit": 1., "generator": __name__}
-        UsdPhysics.RigidBodyAPI.Apply(body)
-        body.AddAppliedSchema("PhysxRigidBodyAPI")
-        _attr(body, "physxRigidBody:solverPositionIterationCount", Sdf.ValueTypeNames.Int, 16)
-        _attr(body, "physxRigidBody:solverVelocityIterationCount", Sdf.ValueTypeNames.Int, 4)
-        _attr(body, "physxRigidBody:enableCCD", Sdf.ValueTypeNames.Bool, True)
-        _attr(body, "physxRigidBody:maxDepenetrationVelocity", Sdf.ValueTypeNames.Float, .5)
-        body.CreateAttribute("tablewareKind", Sdf.ValueTypeNames.String).Set(kind)
-        body.CreateAttribute("dimensionStatus", Sdf.ValueTypeNames.String).Set(report["dimension_status"])
-        points = np.concatenate([visual[0] for visual in geometry["visuals"]])
-        bounds = np.array([points.min(0), points.max(0)])
-        size = bounds[1]-bounds[0]
-        mass = UsdPhysics.MassAPI.Apply(body)
-        mass.CreateMassAttr(spec["mass_kg"])
-        # The asymmetric mug handle has a small COM shift; all other prototypes
-        # retain the documented coordinate convention without xform scaling.
-        center = bounds.mean(0)
-        if kind == "mug":
-            center = np.array([.005, 0, 0])
-        mass.CreateCenterOfMassAttr(Gf.Vec3f(*map(float, center)))
-        inertia = spec["mass_kg"]/12 * np.array([size[1]**2+size[2]**2,
-                                                size[0]**2+size[2]**2,
-                                                size[0]**2+size[1]**2])
-        mass.CreateDiagonalInertiaAttr(Gf.Vec3f(*map(float, inertia)))
-        _material(stage, root, kind)
-        scope = UsdGeom.Scope.Define(stage, root+"/Collisions").GetPrim()
-        UsdGeom.Imageable(scope).CreateVisibilityAttr("invisible")
-        for i, (p, n, f) in enumerate(geometry["visuals"]):
-            prim = _mesh(stage, root+f"/Visuals/Surface_{i:03d}", p, n, f)
-            _bind(stage, prim, root, "Surface")
-        for i, (p, f) in enumerate(geometry["convexes"]):
-            prim = _mesh(stage, root+f"/Collisions/Shell_{i:03d}", p, None, f)
-            UsdPhysics.MeshCollisionAPI.Apply(prim).CreateApproximationAttr("convexHull")
-            _collision(stage, prim, root)
-        for i, (a, b, radius) in enumerate(geometry["capsules"]):
-            direction = b-a
-            length = float(np.linalg.norm(direction))
-            rotation = Gf.Rotation(Gf.Vec3d(0, 0, 1), Gf.Vec3d(*map(float, direction/length))).GetQuat()
-            shape = UsdGeom.Capsule.Define(stage, root+f"/Collisions/Handle_{i:03d}")
-            shape.CreateAxisAttr("Z")
-            shape.CreateRadiusAttr(radius)
-            shape.CreateHeightAttr(length)
-            _pose(shape.GetPrim(), (a+b)/2, [rotation.GetReal(), *rotation.GetImaginary()])
-            _collision(stage, shape.GetPrim(), root)
-        stage.GetRootLayer().Save()
-        report["items"][kind] = {**spec, "usd": f"tableware/{kind}.usdc",
-                                 "default_prim": root, "bounds_m": bounds.tolist(),
-                                 "actual_size_m": size.tolist(),
-                                 "convex_colliders": len(geometry["convexes"]),
-                                 "capsule_colliders": len(geometry["capsules"]),
-                                 "visual_triangles": sum(len(v[2]) for v in geometry["visuals"]),
-                                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
-    (directory/"catalog.json").write_text(json.dumps(report, indent=2)+"\n")
-    return report

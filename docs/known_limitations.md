@@ -10,18 +10,20 @@ Numbers below trace to recorded runs (see the Results section in the README) or 
 mesh bytes **plus the body's `config.COACD` params**, and `COACD` is absent from the
 `config_hash` payload. Changing a static's decomposition therefore leaves every manifest
 validating green while pointing at a piece directory that does not exist yet. The failure is
-loud at load (`missing CoACD pieces for '<body>' — run code/initialization/bosch/decompose_meshes.py
-first`) but the staleness check cannot see it coming, and a restore-only box hits it because
-the shipped archive predates the change.
+loud at load (`missing CoACD pieces for '<body>' — run data/assets/bosch800/source/decompose_meshes.py
+first`) but the staleness check cannot see it coming, and a restore-only box hit it while
+the shipped archive predated the change.
 
-Practical consequences: the archive was re-cut from this box on 2026-09-10
-(`code/util/tools/archive_assets.py`), so `assets` tags dated 2026-09-10 or later ship the exact
-E_door_4 pieces and need no post-restore step. Restoring an OLDER tag still requires
-`code/util/run_py.sh code/initialization/bosch/decompose_meshes.py` once per context (Kit-free, seconds),
-with `--machine/--placement/--scenario/--object` matching the restore log's `[OK] ... @
-<placement>` line. The upside of the same asymmetry is that re-decomposing a static invalidates
-**nothing** — it is the cheapest honest fix available in this codebase. Any future static-CoACD
-edit reopens this item until the next re-cut; `archive_assets.py --status` flags the stale build.
+Practical consequences: the archive was re-cut from this box on 2026-09-10 with the exact
+E_door_4 pieces, and since 2026-10-21 the caches ship in the HF asset dataset
+`shu4dev/dishsim-assets`, of which `data/assets` is a copy (`hf download`; the archive tooling is
+gone). A missing piece directory is fixed by
+`code/util/run_py.sh data/assets/bosch800/source/decompose_meshes.py` once per context (Kit-free,
+seconds), with `--machine/--placement/--scenario/--object` naming that cache, then
+`hf upload shu4dev/dishsim-assets data/assets . --repo-type dataset --commit-message "<what changed>"`.
+The upside of the same asymmetry is that re-decomposing a static invalidates **nothing** — it is
+the cheapest honest fix available in this codebase. Any future static-CoACD edit reopens this item
+until the new pieces are uploaded to the dataset.
 
 ## CoACD's manifold preprocess inflates authored bodies (2026-08-28, measured)
 

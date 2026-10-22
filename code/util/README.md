@@ -1,7 +1,8 @@
 # util
 
-What every stage uses: the two launchers, the container files, bring-up, archive and restore, the install gate,
-and the two render helpers that planner and execution scripts import.
+What every stage uses: the two launchers, the container files, bring-up, the install gate, and the two render
+helpers that planner and execution scripts import. The assets are not restored here: `data/assets` is a copy of
+the HF dataset `shu4dev/dishsim-assets` (since 2026-10-21): `hf download` to restore, `hf upload` to publish.
 
 - `run_kit.sh`: boots Kit. On the host it forwards itself into the container `${DISHSIM_NAME:-dishsim-isaac}` at
   the cwd mapped under `/workspace/dishsim`; inside it hands off to `/workspace/isaaclab/isaaclab.sh -p`.
@@ -15,11 +16,11 @@ Folders: [tools/](tools/README.md), [frigidaire/](frigidaire/README.md), [docker
 ## Commands, in order
 
 ```bash
+hf download shu4dev/dishsim-assets --repo-type dataset --local-dir data/assets
 DISHSIM_GPU=<n> docker compose -f code/util/docker/compose.yaml up -d
 code/util/tools/bootstrap.sh
 code/util/run_py.sh -m pytest code/tests code/frigidaire/tests
 code/util/run_kit.sh code/util/tools/kit_smoke.py --headless --enable_cameras
-code/util/run_py.sh code/util/tools/archive_assets.py --status
 ```
 
 ## Package modules
@@ -28,4 +29,4 @@ Shared helpers, with the stages that import them:
 
 - `dishsim`: `config`, `quats`, `transforms` (initialization, planner), `checks` (initialization), `media`
   (initialization, planner, execution).
-- `dishsim_frigidaire`: `paths`, `usd_bootstrap` (initialization, planner).
+- `dishsim_frigidaire`: `paths` (initialization, planner).

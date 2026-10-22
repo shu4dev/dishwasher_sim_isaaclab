@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import config, placement, rack_gen
+from . import config, placement, rack_layout
 from .collision_world import CollisionWorld, load_object_pieces
 from .geometry import config_hash
 from . import slotting
@@ -74,7 +74,7 @@ POLICIES: dict[str, dict[str, tuple]] = {
 Z_BUDGET_MARGIN_M = 0.015
 
 #: The mid spray arm hangs this far under the middle rack's body frame [m] — mirrors the
-#: authored geometry in ``usd_prep.make_bosch800_usd`` (MidSprayArm disc at z -0.045).
+#: authored geometry in ``usd_prep.make_bosch800_usd`` (data/assets/bosch800/source/; MidSprayArm disc at z -0.045).
 _MID_SPRAY_DROP_M = 0.045
 
 #: Measured upright-settle reliability per (state, class) — release-at-goal probes,
@@ -168,13 +168,13 @@ def _rider_floor_z_w(state: str) -> float | None:
     if not racks:
         return None
     if state == "placement":
-        zl = rack_gen._z_levels(config.RACK_GEN["E_shelf_1_04"])
+        zl = rack_layout._z_levels(config.RACK_GEN["E_shelf_1_04"])
         return racks["lower"]["rail_z"] + zl["floor_top"]
     if state == "middle_out":
-        zl = rack_gen._z_levels(config.RACK_GEN["E_shelf_03"])
+        zl = rack_layout._z_levels(config.RACK_GEN["E_shelf_03"])
         return racks["middle"]["rail_z"] + zl["floor_top"]
     if state == "third_out":
-        zl = rack_gen._tray_z_levels(config.RACK_GEN["E_shelf_third"])
+        zl = rack_layout._tray_z_levels(config.RACK_GEN["E_shelf_third"])
         return racks["third"]["rail_z"] + zl["floor_top"]
     return None
 
@@ -257,10 +257,10 @@ def load_state_tables(state: str, classes: list[str]) -> _StateTables:
         if not os.path.exists(os.path.join(cdir, "scene_state.json")):
             raise FileNotFoundError(
                 f"missing cache {cdir} — bake it with:\n"
-                f"  code/util/run_kit.sh code/initialization/bosch/extract_geometry.py --headless "
+                f"  code/util/run_kit.sh data/assets/bosch800/source/extract_geometry.py --headless "
                 f"--machine {config.MACHINE} --placement {config.BASE_PLACEMENT} "
                 f"--scenario {state} --object {cls}\n"
-                f"  code/util/run_py.sh code/initialization/bosch/decompose_meshes.py "
+                f"  code/util/run_py.sh data/assets/bosch800/source/decompose_meshes.py "
                 f"--machine {config.MACHINE} --placement {config.BASE_PLACEMENT} "
                 f"--scenario {state} --object {cls}")
         with config.active_object(cls):

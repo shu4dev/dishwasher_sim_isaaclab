@@ -39,6 +39,7 @@ def render(args, report):
     from dishsim.media import CameraRig, VideoWriter
     from dishsim.quats import xyzw_to_wxyz
     from dishsim import legacy_data_path
+    from dishsim_frigidaire.paths import PROTOTYPES_DIR
     from dishsim.transforms import T_to_pos_quat
     from dishsim_frigidaire.asset import COMPONENT_FILES
     from dishsim_frigidaire.planner import COUNTER, in_counter_band
@@ -52,7 +53,7 @@ def render(args, report):
     stem = f"{inst['instance_id']}__{episode['track']}__{episode['algorithm']}" if bench else f"{inst['instance_id']}_{episode['algorithm']}"
     counter = inst["counter"] if "size_m" in inst.get("counter", {}) else COUNTER      # the bench's 1.8 m slab
     usd_of = ({kind: Path(legacy_data_path(path)) for kind, path in inst["tableware"].items()} if inst.get("tableware") else
-              {o["kind"]: args.usd.parent / "tableware" / f"{o['kind']}.usdc" for o in inst["objects"]})
+              {o["kind"]: PROTOTYPES_DIR / f"{o['kind']}.usdc" for o in inst["objects"]})
     analysis_path = args.episode.with_suffix(".analysis.json")
     trace = {t["move"]: t for t in json.loads(analysis_path.read_text())["trace"]} if analysis_path.is_file() else {}
     s_final = json.loads(analysis_path.read_text())["S_final"] if analysis_path.is_file() else None
@@ -222,7 +223,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--instance", type=Path, required=True)
     parser.add_argument("--episode", type=Path, required=True)
-    parser.add_argument("--usd", type=Path, default=ROOT / "data/build/frigidaire_collection/usd/fdpc4221as.usdc")
+    parser.add_argument("--usd", type=Path, default=ROOT / "data/assets/frigidaire_fdpc4221as/usd/fdpc4221as.usdc")
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--fps", type=int, default=24)
     parser.add_argument("--hold-frames", type=int, default=18)

@@ -193,13 +193,13 @@ def derive_plate_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
     ``plate_tine_pitch`` (Bosch: 9 tines, 8 gaps; the v1 ArtVIP rear bank had 11 gaps).
     Slot origin = the disc's bottom-edge target on the bank floor; slot z up, slot x along
     the rack pitch direction."""
-    from . import rack_gen  # noqa: PLC0415
+    from . import rack_layout  # noqa: PLC0415
 
     p = config.RACK_GEN["E_shelf_1_04"]
     T_base_rack = _rack_T(cache_dir)
-    xs = np.asarray(rack_gen._plate_tine_xs(p))
+    xs = np.asarray(rack_layout._plate_tine_xs(p))
     gaps = (xs[:-1] + xs[1:]) / 2.0
-    z_floor = rack_gen.floor_top_z(p)
+    z_floor = rack_layout.floor_top_z(p)
     lean = float(p["plate_tine_lean_deg"])
     mp = config.placement_mode_params("plate_slot")
     y_bottom = float(config.active_object_spec().placement.params.get("seat_y_m", mp["seat_y_m"]))
@@ -223,16 +223,16 @@ def derive_plate_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
 
 def derive_basket_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
     """One slot per cutlery-basket bay (origin at the bay floor center)."""
-    from . import rack_gen  # noqa: PLC0415
+    from . import rack_layout  # noqa: PLC0415
 
     p = config.RACK_GEN["E_shelf_1_04"]
     T_base_rack = _rack_T(cache_dir)
     b = p["basket"]
-    z_bfloor = rack_gen.floor_top_z(p) + b["floor_t"]
+    z_bfloor = rack_layout.floor_top_z(p) + b["floor_t"]
     mp = config.placement_mode_params("basket_drop")
     dx = float(mp["drop_x_offset_m"])
     slots = []
-    for bi, (x0, x1, y0, y1) in enumerate(rack_gen.basket_bays(p)):
+    for bi, (x0, x1, y0, y1) in enumerate(rack_layout.basket_bays(p)):
         T_rack_slot = np.eye(4)
         T_rack_slot[:3, 3] = ((x0 + x1) / 2.0 + dx, (y0 + y1) / 2.0, z_bfloor)
         slots.append(
@@ -271,7 +271,7 @@ def derive_flat_lay_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
     channel x-span) at the zone's x-center; slot x = rack x = the placed object's long-axis
     direction, z up. ``width_m`` is the zone's usable long-axis extent.
     """
-    from . import rack_gen  # noqa: PLC0415
+    from . import rack_layout  # noqa: PLC0415
 
     p = config.RACK_GEN.get("E_shelf_third")
     if p is None:
@@ -279,7 +279,7 @@ def derive_flat_lay_slots(cache_dir: str = config.CACHE_DIR) -> list[SlotFrame]:
     T_base_rack = _third_rack_T(cache_dir)
     pitch = config.SLOT_GRID_PITCH_M
     slots: list[SlotFrame] = []
-    for zone, (x0, x1, y0, y1), z_floor in rack_gen.tray_zones(p):
+    for zone, (x0, x1, y0, y1), z_floor in rack_layout.tray_zones(p):
         lo, hi = y0 + _FLAT_LAY_RIM_INSET_M, y1 - _FLAT_LAY_RIM_INSET_M
         k = max(1, int((hi - lo) // pitch) + 1)
         ys = lo + (hi - lo - (k - 1) * pitch) / 2.0 + np.arange(k) * pitch

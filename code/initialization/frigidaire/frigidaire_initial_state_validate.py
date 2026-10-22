@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[3]
 def main():
     started = time.monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--usd', type=Path, default=ROOT/'data/build/frigidaire_collection/usd/fdpc4221as.usdc')
+    parser.add_argument('--usd', type=Path, default=ROOT/'data/assets/frigidaire_fdpc4221as/usd/fdpc4221as.usdc')
     parser.add_argument('--manifest', type=Path)
     parser.add_argument('--out-dir', type=Path, required=True)
     parser.add_argument('--max-wall-seconds', type=float, default=240)

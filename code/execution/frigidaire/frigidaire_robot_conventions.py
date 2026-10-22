@@ -33,7 +33,7 @@ import sys
 import traceback
 
 ROOT = Path(__file__).resolve().parents[3]
-BOWL_USD = ROOT / "data/assets/models/hotec_wheatstraw/v2/bowl.usda"
+BOWL_USD = ROOT / "data/assets/hotec_wheatstraw/usd/bowl.usda"
 TCP_TARGET = (.45, 0., .30)          # base frame, TCP straight down (the grip probe's pose)
 B_OFFSET = (3., 0., 0.)              # robot B stands 3 m away from robot A
 PLATE = {"size_m": (.30, .30, .01), "mass_kg": .5, "drop_z_m": 1., "fall_s": 1.5, "caught_above_m": .30}

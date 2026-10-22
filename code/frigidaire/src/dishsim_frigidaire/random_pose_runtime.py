@@ -107,7 +107,7 @@ class IsaacPoseBackend:
         from isaacsim.core.api.sensors import RigidContactView
         from .asset import spawn, apply_mode
         from .loading import visual_points
-        from .random_pose_assets import LiveCollisionWorld
+        from .paths import PROTOTYPES_DIR
 
         self.torch, self.deadline, self.app = torch, deadline, app
         self.directory = Path(output_dir)
@@ -135,7 +135,7 @@ class IsaacPoseBackend:
         for index, kind in enumerate(KINDS):
             self.objects[kind] = RigidObject(RigidObjectCfg(
                 prim_path="/World/RandomPoseDishes/"+kind,
-                spawn=sim_utils.UsdFileCfg(usd_path=str(Path(usd_path).parent/"tableware"/(kind+".usdc"))),
+                spawn=sim_utils.UsdFileCfg(usd_path=str(PROTOTYPES_DIR/(kind+".usdc"))),
                 init_state=RigidObjectCfg.InitialStateCfg(pos=(3.+index, 0., .3))))
         stage = omni.usd.get_context().get_stage()
         for kind, obj in self.objects.items():
@@ -413,3 +413,87 @@ class IsaacPoseBackend:
         if trial["maximum_cycle_penetration_m"] >= LIMITS["peak_penetration_m"]:
             return {"outcome": "simulation_error", "reason": "Excessive penetration during rack cycle"}
         return {"outcome": "accepted"}
+
+
+# ----------------------------------------------------------------------------- measured-pose collision world
+# Verbatim from random_pose_assets.py (its input validation moved to data/assets/frigidaire_fdpc4221as/source/ on
+# 2026-10-21).
+def _pose(pose):
+    """Read a world pose without assuming a quaternion convention at the boundary."""
+    if isinstance(pose, dict):
+        position = np.asarray(pose["position_m"], dtype=float)
+        quaternion = np.asarray(pose["quaternion_xyzw"], dtype=float)
+        if (position.shape != (3,) or quaternion.shape != (4,)
+                or not np.isfinite(position).all() or not np.isfinite(quaternion).all()
+                or abs(np.linalg.norm(quaternion) - 1.) > 1e-5):
+            raise ValueError("World poses require finite positions and normalized XYZW quaternions")
+        x, y, z, w = quaternion / np.linalg.norm(quaternion)
+        rotation = np.array([[1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w)],
+                             [2*(x*y+z*w), 1-2*(x*x+z*z), 2*(y*z-x*w)],
+                             [2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)]])
+        return rotation, position
+    matrix = np.asarray(pose, dtype=float)
+    if (matrix.shape != (4, 4) or not np.isfinite(matrix).all()
+            or not np.allclose(matrix[3], (0, 0, 0, 1), atol=1e-8)
+            or not np.allclose(matrix[:3, :3].T @ matrix[:3, :3], np.eye(3), atol=1e-6)
+            or not np.isclose(np.linalg.det(matrix[:3, :3]), 1., atol=1e-6)):
+        raise ValueError("World pose must be a finite rigid 4x4 transform")
+    return matrix[:3, :3], matrix[:3, 3]
+
+
+class LiveCollisionWorld:
+    """Actual authored colliders placed at measured component world transforms.
+
+    All five appliance poses must be supplied before querying. The independent
+    basket and rotating door are updated just like the articulated rack bodies.
+    Candidate proxies are reused; no inflation or slot restrictions are added.
+    """
+    def __init__(self, asset_dir):
+        import fcl
+        from .asset import COMPONENT_FILES
+        from .loading import CollisionWorld, collision_parts, visual_points
+        from .paths import PROTOTYPES_DIR
+
+        self.fcl = fcl
+        self._ready = False
+        directory = Path(asset_dir)
+        self.component_parts = {name: collision_parts(directory / filename)
+                                for name, filename in COMPONENT_FILES.items()}
+        self.component_objects = {name: CollisionWorld.transform(self, parts, np.eye(3), np.zeros(3))
+                                  for name, parts in self.component_parts.items()}
+        self.manager = fcl.DynamicAABBTreeCollisionManager()
+        self.manager.registerObjects([obj for objects in self.component_objects.values() for obj in objects])
+        self.manager.setup()
+        self.parts = {kind: collision_parts(PROTOTYPES_DIR / f"{kind}.usdc") for kind in KINDS}
+        self.points = {kind: visual_points(PROTOTYPES_DIR / f"{kind}.usdc") for kind in KINDS}
+        self._candidates = {kind: CollisionWorld.transform(self, parts, np.eye(3), np.zeros(3))
+                            for kind, parts in self.parts.items()}
+
+    def _set(self, objects, parts, rotation, position):
+        for obj, part in zip(objects, parts):
+            obj.setTransform(self.fcl.Transform(rotation @ part.rotation, rotation @ part.translation + position))
+
+    def update_components(self, poses):
+        """Replace every static transform with the current measured body pose."""
+        if set(poses) != set(self.component_parts):
+            raise ValueError("Measured poses must contain exactly all five appliance components")
+        parsed = {name: _pose(pose) for name, pose in poses.items()}
+        for name, (rotation, position) in parsed.items():
+            self._set(self.component_objects[name], self.component_parts[name], rotation, position)
+        self.manager.update()
+        self._ready = True
+
+    def collides(self, kind, pose_world):
+        """Whether the dish at a world pose intersects any measured component."""
+        if not self._ready:
+            raise RuntimeError("Update measured appliance component poses before querying collisions")
+        if kind not in self.parts:
+            raise ValueError(f"Unsupported experiment dish: {kind}")
+        rotation, position = _pose(pose_world)
+        self._set(self._candidates[kind], self.parts[kind], rotation, position)
+        for obj in self._candidates[kind]:
+            data = self.fcl.CollisionData(request=self.fcl.CollisionRequest(num_max_contacts=1))
+            self.manager.collide(obj, data, self.fcl.defaultCollisionCallback)
+            if data.result.is_collision:
+                return True
+        return False

@@ -21,7 +21,7 @@ from .random_poses import OBJECT_KINDS
 COMPONENT_NAMES = ("Cabinet", "Door", "LowerRack", "UpperRack", "SilverwareBasket")
 
 def _read_pose(pose):
-    from .random_pose_assets import _pose as validate_pose
+    from .random_pose_runtime import _pose as validate_pose
     rotation, position = validate_pose(pose)
     return position, np.asarray(pose["quaternion_xyzw"], dtype=float), rotation
 
@@ -84,6 +84,7 @@ class InitialCollisionChecker:
         import fcl
         from .asset import COMPONENT_FILES
         from .loading import collision_parts
+        from .paths import PROTOTYPES_DIR
         if not np.isfinite(penetration_limit_m) or not 0 <= penetration_limit_m <= .001:
             raise ValueError("initial penetration limit must be in [0, 0.001] metres")
         self.fcl = fcl
@@ -92,7 +93,7 @@ class InitialCollisionChecker:
         self.request = fcl.CollisionRequest(enable_contact=True, num_max_contacts=self.max_contacts_per_pair)
         directory = Path(asset_dir)
         filenames = {**{name: directory / filename for name, filename in COMPONENT_FILES.items()},
-                     **{kind: directory / "tableware" / f"{kind}.usdc" for kind in OBJECT_KINDS}}
+                     **{kind: PROTOTYPES_DIR / f"{kind}.usdc" for kind in OBJECT_KINDS}}
         filenames.update({kind: Path(path) for kind, path in (tableware or {}).items()})   # e.g. the HOTEC set
         self.parts = {name: collision_parts(path) for name, path in filenames.items()}
         self.bounds = {name: authored_collision_bounds(path) for name, path in filenames.items()}

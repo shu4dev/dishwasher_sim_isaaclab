@@ -58,7 +58,7 @@ def test_multi_object_collision_and_component_frame_updates(checker):
 def test_tableware_map_replaces_stock_dishes_and_admits_new_kinds():
     pytest.importorskip("fcl")
     from dishsim_frigidaire.paths import ASSET_DIR, REPO_ROOT
-    hotec = REPO_ROOT / "data/assets/models/hotec_wheatstraw/v2"
+    hotec = REPO_ROOT / "data/assets/hotec_wheatstraw/usd"
     if not (Path(ASSET_DIR).is_dir() and hotec.is_dir()):
         pytest.skip("collection build or HOTEC assets not present")
     tableware = {kind: hotec / f"{kind}.usda" for kind in ("plate", "bowl", "cup")}

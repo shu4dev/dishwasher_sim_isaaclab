@@ -36,7 +36,7 @@ def scored(layout, name, device, samples, directions):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--assets", type=Path, default=ROOT / "data/assets/models/hotec_wheatstraw/v2")
+    p.add_argument("--assets", type=Path, default=ROOT / "data/assets/hotec_wheatstraw/usd")
     p.add_argument("--start", type=Path, required=True)
     p.add_argument("--best", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)

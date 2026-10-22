@@ -2907,7 +2907,7 @@ def main():
     parser.add_argument("--restricted-dir", type=Path, default=ROOT / "data/results/dot_rules/restricted/loads")
     parser.add_argument("--farm-dir", type=Path, default=ROOT / "data/results/random_loads/rl_20261009")
     parser.add_argument("--baseline", type=Path, default=ROOT / "data/results/benchmark/frigidaire_hotec/baseline/result.json")
-    parser.add_argument("--usd", type=Path, default=ROOT / "data/build/frigidaire_collection/usd/fdpc4221as.usdc")
+    parser.add_argument("--usd", type=Path, default=ROOT / "data/assets/frigidaire_fdpc4221as/usd/fdpc4221as.usdc")
     parser.add_argument("--out", type=Path, default=ROOT / "data/results/dot_rules/dependency")
     parser.add_argument("--out-dir", type=Path, metavar="PATH",
                         help="write <load_id>.json and _kit/<load_id>/ under PATH instead of the folder under --out")

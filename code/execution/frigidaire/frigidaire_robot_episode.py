@@ -76,7 +76,7 @@ def main():
     parser.add_argument("--max-moves", type=int, default=None)
     parser.add_argument("--video", action="store_true", help="accepted for compatibility: media are always recorded")
     parser.add_argument("--no-media", action="store_true", help="explicitly run without cameras (logged as such)")
-    parser.add_argument("--usd", type=Path, default=ROOT / "data/build/frigidaire_collection/usd/fdpc4221as.usdc")
+    parser.add_argument("--usd", type=Path, default=ROOT / "data/assets/frigidaire_fdpc4221as/usd/fdpc4221as.usdc")
     parser.add_argument("--max-wall-seconds", type=float, default=1700.,
                         help="wall budget of the physics loop (D16: no single run beyond 30 min without asking)")
     parser.add_argument("--run-id", default=None,

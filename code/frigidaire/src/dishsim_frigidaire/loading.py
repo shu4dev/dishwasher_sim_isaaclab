@@ -119,6 +119,7 @@ class CollisionWorld:
     def __init__(self, asset_dir):
         import fcl
         from .asset import BODY_POSITIONS, COMPONENT_FILES
+        from .paths import PROTOTYPES_DIR
         self.fcl = fcl
         self.parts = {}
         self.points = {}
@@ -135,7 +136,7 @@ class CollisionWorld:
         self.manager.registerObjects(self.static_objects)
         self.manager.setup()
         for kind in ORDER:
-            filename = Path(asset_dir) / "tableware" / (kind + ".usdc")
+            filename = PROTOTYPES_DIR / (kind + ".usdc")
             self.parts[kind] = collision_parts(filename)
             self.points[kind] = visual_points(filename)
 
@@ -375,3 +376,86 @@ def plan_full_load(asset_dir, output, banned=()):
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest
+
+
+# ----------------------------------------------------------------------------- claim candidates
+# The bowl and floor helpers the HOTEC planner reuses, verbatim from the retired claim layouts (claims.py, moved to
+# data/assets/frigidaire_fdpc4221as/source/ on 2026-10-21).
+from .geometry import PARAMETERS as _PARAMETERS, lower_tine_positions as _lower_tine_positions  # noqa: E402
+
+LOWER_PLATE_FLOOR = .006
+LOWER_BOWL_FLOOR = .007
+UPPER_CENTRE_FLOOR = -.0081      # centre rib top (-10 mm) + 1.9 mm wire radius
+UPPER_GLASS_FLOOR = -.002         # wire top at the tumbler mouth's higher (outer, wall-foot) contact; the inner rim point hovers over the ridge flank
+BASKET_FRONT_Y = _PARAMETERS["lower_rack"]["basket_reserved_y"][0] - .004   # lower bowls stay ahead of the basket bay
+BOWL_SLAB_CLEARANCE = .003
+LOWER_BOWL_LIFTS = (0., .020, .040, .060)
+
+
+def _tilted(kind, rack, slot, x, y, orient, points, floor, variant):
+    """Candidate plus the rotation matrix, kept for the nesting check."""
+    return _candidate(kind, rack, slot, x, y, orient, points, floor, variant), orient
+
+
+def lower_bowl_variants(points, y_bank, slot, x_start=.060):
+    """Bowls in the front-right zone ahead of the basket, scanning x rightward from ``x_start``.
+
+    Vertical tines cannot straddle a 140 mm bowl, so the bowl goes OVER them: mouth facing
+    down and sideways (rotation about Y past 90 deg) or down and forward (about X), rim on
+    the floor, tines entering the cavity from below. The v2 mouth-up family (65 deg about Y)
+    is kept last as a fallback; it only fit the old 150 mm row pitch.
+    """
+    out = []
+    _, rows = _lower_tine_positions()
+    families = ([("Y", t) for t in (120, 135, 105, 150)] + [("X", t) for t in (120, 135, 105, 150)]
+                + [("Y", t) for t in (65, 55, 75)])
+    for axis, tilt in families:
+        orient = rotation(axis, math.radians(tilt))
+        for base_y in (y_bank, float(rows[1]), float(rows[0])):   # bank centreline, second row, front row
+            for dy in (0., .010, -.010):
+                y = base_y + dy
+                for x in np.arange(x_start, .2251, .005):
+                    base, _ = _tilted("bowl", "LowerRack", slot, x, y, orient, points,
+                                      LOWER_BOWL_FLOOR, f"{axis}{tilt}_y{y:.4f}_x{x:.3f}")
+                    world_pts = points @ orient.T + np.asarray(base["position"])
+                    if world_pts[:, 1].max() > BASKET_FRONT_Y:
+                        continue
+                    # lifts let the bowl ride on tine tips instead of the floor rib
+                    for lift in LOWER_BOWL_LIFTS:
+                        c = dict(base, position=[base["position"][0], base["position"][1],
+                                                 base["position"][2] + lift],
+                                 variant=f'{base["variant"]}_lift{lift}')
+                        out.append((c, orient))
+    return out
+
+
+def upper_bowl_variants(gap, y, points):
+    """Bowl in one centre gap (index of its front tine, or "wide" for the gap at the absent
+    centre positions), mouth facing down and forward, tines inside the cavity.
+
+    Rotation about X past 90 deg turns the mouth toward the front and the floor; the rim
+    rests on the centre floor rib and the base leans on the tine row behind. Mouth-up
+    poses (tilt < 90) cannot clear the inner tine columns and are kept only as a fallback.
+    """
+    out = []
+    slot = f"upper_bowl_{gap:02d}" if isinstance(gap, int) else f"upper_bowl_{gap}"
+    for tilt in (120, 135, 110, 150, 100, 82, 70):
+        orient = rotation("X", math.radians(tilt))
+        for offset in (0., .010, -.010, .020, -.020):
+            out.append(_tilted("bowl", "UpperRack", slot, 0., y + offset, orient,
+                               points, UPPER_CENTRE_FLOOR, f"tilt{tilt}_offset{offset}"))
+    return out
+
+
+def _slab(points, orient, position, normal):
+    projected = (points @ orient.T + np.asarray(position)) @ normal
+    return float(projected.min()), float(projected.max())
+
+
+def slabs_disjoint(points, first, second, clearance=BOWL_SLAB_CLEARANCE):
+    """Two bowls cannot nest when their depth slabs along the first bowl's mouth axis
+    do not overlap. ``first``/``second`` are (candidate, orient) pairs."""
+    normal = first[1] @ np.array([0., 0., 1.])
+    a = _slab(points, first[1], first[0]["position"], normal)
+    b = _slab(points, second[1], second[0]["position"], normal)
+    return b[0] >= a[1] + clearance or a[0] >= b[1] + clearance

@@ -6,8 +6,7 @@ PhysX, FCL, or Isaac Lab. USD authoring and simulation require their runtimes.
 from importlib import import_module
 
 __all__ = [
-    "asset", "claims", "geometry", "loading", "load_validation", "lower_rack_asset", "paths", "tableware",
-    "usd_bootstrap",
+    "asset", "geometry", "loading", "load_validation", "paths", "tableware",
 ]
 
 

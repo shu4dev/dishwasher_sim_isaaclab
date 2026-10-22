@@ -1,7 +1,7 @@
 # Project overview (long form)
 
 The full write-up that the top-level README carried until 2026-09-17: benchmark definition,
-environment, archive, quickstart with gates, results with evidence, limitations and licenses.
+environment, assets, quickstart with gates, results with evidence, limitations and licenses.
 The README is now the short, action-first version; this file is the reference. Links resolve
 from `docs/` (rebased 2026-09-29), and the Frigidaire v3-era block that stood at the top of §1
 was replaced by a pointer on the same day.
@@ -11,9 +11,9 @@ was replaced by a pointer on the same day.
 ## 1 Overview
 
 The independently authored **Frigidaire FDPC4221AS** twin lives in its own package,
-`code/frigidaire/` ([source README](../code/frigidaire/README.md)); its current build is staged in
-`data/build/frigidaire_collection/` (`data/build/` is a symlink onto the 2 TB drive; this is the only
-copy of the current build, and no archive tarball contains it). Its v3-era experiments
+`code/frigidaire/` ([source README](../code/frigidaire/README.md)); its current build ships in the
+asset dataset as `data/assets/frigidaire_fdpc4221as/` (USD, `parameters.json`, `components.json`,
+and the generator in `source/`, since 2026-10-21; §2.3). Its v3-era experiments
 (single-dish random drops, multi-dish randomized states, organized counterparts, the first
 exposure and planner runs) ran on the 52/72-tine photo-fitted racks, before the 2026-09-22
 and 2026-09-28 rebuilds, and were retired on 2026-09-29: the code is in git history (last
@@ -153,82 +153,77 @@ after 2026-10-29; each has a `MANIFEST.txt`). Pick the least-loaded GPU per shel
 (`nvidia-smi`, then `DISHSIM_GPU=<n> docker compose ... up -d` — shared machine).
 `requirements-planning.txt` pins the measured working set (the table in
 [docs/environment.md](environment.md) is the measurement of record); the Dockerfile
-installs it plus pytest and the archive tooling into Kit's python — no venv.
+installs it plus pytest and the HF hub client into Kit's python — no venv.
 
-### 2.3 Assets (public archive — the one-command path)
+### 2.3 Assets (the HF dataset, downloaded)
 
 Every asset this project uses is publicly redistributable with attribution (see §7): the
 ArtVIP dishwasher (Apache-2.0), YCB-scan-derived objects incl. the mug (YCB dataset terms),
-and this project's own procedural props, racks and geometry caches. One command restores
-all of them, no token needed:
+and this project's own procedural props, racks and geometry caches. Since 2026-10-21
+`data/assets` is a copy of the public HF dataset `shu4dev/dishsim-assets`: `hf download` to
+restore (and update; no token needed), `hf upload` to publish (needs `hf auth login` with write
+access). It is a plain folder (no local git); the hub stores the large files as LFS itself.
 
 ```bash
-code/util/run_py.sh code/util/tools/restore_assets.py --repo shu4dev/dishsim-assets
+hf download shu4dev/dishsim-assets --repo-type dataset --local-dir data/assets      # restore / update
+hf upload shu4dev/dishsim-assets data/assets . --repo-type dataset \
+    --commit-message "<what changed>"                                                # publish
+hf repo-files delete shu4dev/dishsim-assets "dishsim_*.tar.gz" latest.json \
+    --repo-type dataset                                                              # remove files from the hub
 ```
 
-The restore downloads the archive (built props, every geometry cache — the ~1.5 h-of-Kit
-part — derived dishwasher USDs), re-downloads the ArtVIP originals, validates every cache's
-`config_hash` against the current `config.py`, and runs the test suite. It extracts `data/assets/`
-members only (`EXTRACT_PREFIXES` in `restore_assets.py`): the `assets` tarball also packs the
-recorded Bosch instances, episode records and comparison table (`data/results/`), but they are
-skipped, so a restored box regenerates instances with `gen_instances.py`; the same rule makes
-`--with_media` download a tarball whose members are all skipped, so the command omits it.
-`data/assets/`, `data/media/`, `data/results/` are gitignored; only curated figures under `docs/figures/`
-are tracked.
+The dataset holds six flat folders, one per dishwasher or dish set, latest version only (its
+history on the hub keeps earlier ones and the 20260910 archive tarballs of the retired restore
+tooling; the `hf repo-files delete` line, run once, drops those tarballs and `latest.json` from
+the current revision). Each folder has `source/` — the generator or fetch code, moved out of this repo, with a README
+giving the exact command and the git SHA of its last run — beside the artifacts experiments
+load; `data/assets/README.md` is the index.
 
-**The archive ships the complete Bosch 800 digital-twin world**: collision caches for all
-five Bosch rack states baked at the measured `side_winner` anchor
-(`data/assets/cache/machines/bosch800/`); the machine USDs re-author on demand at import. Tags
-dated 2026-09-10 or later carry the exact `E_door_4` CoACD pieces and need no post-restore
-step; an OLDER tag's pieces predate a static-CoACD param change, so run
-`decompose_meshes.py` once per cached context (quickstart step 2; the loud
-`missing CoACD pieces` load error names the fix). `--machine bosch800` switches the whole
-stack via `config.apply_machine`; `--placement side_winner` selects the frozen base-frame
+| Folder | What experiments load |
+|---|---|
+| `bosch800/` | `usd/model_bosch800_v0_<state>.usda` (the benchmark machine per rack state, racks built in); `usd/standalone/` (the standalone SHP78CM5N asset, a visual/manipulation asset, not the benchmark machine: [docs/bosch800_asset.md](bosch800_asset.md)); collision caches `cache/<state>/<object>/` and `cache/coacd/<body>_<digest>/` |
+| `frigidaire_fdpc4221as/` | `usd/` (`fdpc4221as.usdc`, its components, `fixtures/`, `example_scene.usda`, `geometry_validation.json`), `parameters.json`, `components.json` |
+| `artvip_dishwasher_2/` | `usd/` (the ArtVIP `dishwasher_2` original and the derived `model_dishwasher_2_v0*.usda`), `cache/<state>/<object>/`, `cache/coacd/` |
+| `hotec_wheatstraw/` | `usd/{plate,bowl,cup}.usda` (v2), `parameters.json`, `catalog.json` ([docs/hotec_wheatstraw_asset.md](hotec_wheatstraw_asset.md)) |
+| `bosch_props/` | `usd/<name>_physics.usd` + `usd/textures/`, `meshes/`, `parts/`, `pieces/object_<digest>/` (the carried objects' convex pieces) |
+| `frigidaire_prototypes/` | `usd/<kind>.usdc` (the ten tableware prototypes), `catalog.json` |
+
+Evidence (stills, validation reports) and experiment results stay out of the dataset, under
+`data/media/` and `data/results/`. `data/assets/`, `data/media/`, `data/results/` are gitignored
+in this repo; only curated figures under `docs/figures/` are tracked.
+
+**The dataset ships the complete Bosch 800 digital-twin world**: the collision caches baked at
+the measured `side_winner` anchor (`data/assets/bosch800/cache/<state>/<object>/`) and one
+machine USD per rack state, which `dishsim.machine` loads instead of authoring it at import
+(new states: `data/assets/bosch800/source/export_usd.py`). `--machine bosch800` switches the
+whole stack via `config.apply_machine`; `--placement side_winner` selects the frozen base-frame
 anchor the Bosch caches are expressed in. Bosch numbers and their provenance:
 [docs/bosch800_source_data.md](bosch800_source_data.md).
 
-**Standalone Bosch 800 asset (opt-in tarball kinds).** The same dataset also carries an
-independently authored, redistributable Bosch 800 USD (`bosch800.usdc` + rack exports +
-textures) and its validation evidence, as two extra tarball kinds that `latest.json` names
-beside the cache archive; every file is sha256-verified against the tarball manifest on
-restore. It is a visual/manipulation asset, not (yet) the benchmark machine — see
-[docs/bosch800_asset.md](bosch800_asset.md):
-
-```bash
-code/util/run_py.sh code/util/tools/restore_assets.py --kinds models            # ~3.5 MB
-code/util/run_py.sh code/util/tools/restore_assets.py --kinds models evidence   # +74 MB stills/video
-```
-
-Producer side (re-cut + publish after an asset revision): `code/util/tools/archive_assets.py
---kinds models evidence [--upload]`; the upload merges into the remote `latest.json`.
-
-**One-command bring-up** — everything in §2.2–2.3 (image build if absent, container start,
-archive restore + cache validation) in one idempotent script:
+**One-command bring-up** — everything in §2.2 (image build if absent, container start, the
+kit_smoke gate) in one idempotent script, after the download above:
 
 ```bash
 code/util/tools/bootstrap.sh          # fresh clone -> planning in ~5 minutes
 ```
 
 The division of labor is deliberate: everything expensive **runs once and ships in the
-archive** — geometry extraction and CoACD decomposition (~1.5 h of Kit across both machines).
+dataset** — geometry extraction and CoACD decomposition (~1.5 h of Kit across both machines).
 What a clone actually iterates on — instances and algorithms — plans per-call against the
-restored caches. If a run asks you to bake, either the archive is stale for your config or
+downloaded caches. If a run asks you to bake, either the dataset is stale for your config or
 you changed a hashed value (see §4); baking during a benchmark sweep is always a smell.
 
 ### 2.4 Rebaking after a config change
 
 The shipped caches serve reproduction as-is; a hashed-config change invalidates loudly and
-rebuilds with the two-stage `extract_geometry` → `decompose_meshes` pair (§4). If rebuilding
-the world from nothing instead of restoring, first fetch the ArtVIP source:
+rebuilds with the two-stage `extract_geometry` → `decompose_meshes` pair in
+`data/assets/bosch800/source/` (§4); since the machine USDs are no longer authored at import, a
+`RACK_GEN`/`MACHINE_GEN` change also re-exports them (`export_usd.py`, same folder). The ArtVIP
+`dishwasher_2` original ships in `data/assets/artvip_dishwasher_2/usd/`; its fetch script is that
+folder's `source/fetch_artvip.py`.
 
-```bash
-code/util/run_py.sh -c "from huggingface_hub import snapshot_download; \
-  snapshot_download(repo_id='X-Humanoid/ArtVIP', repo_type='dataset', \
-  allow_patterns=['Articulated_objects/major_appliances/dishwasher/**'], local_dir='data/assets/artvip')"
-```
-
-(The one-time authoring/inspection scripts live in git history; the archive ships their
-outputs and `docs/joint_report.md` records the measured numbers.)
+(The machine-authoring and cache scripts live in each asset folder's `source/` since 2026-10-21,
+the retired inspection scripts in git history; `docs/joint_report.md` records the measured numbers.)
 
 ### 2.5 Verify the install
 
@@ -240,10 +235,11 @@ code/util/run_py.sh -m pytest code/frigidaire/tests/
 
 `kit_smoke.py` proves the collision stack imports *inside* the Kit process and that headless
 camera capture produces non-black frames (bootstrap runs it automatically). `code/tests/` is
-**8 Kit-free files, 65 tests, about 70 s**: the two frozen-invariant pins (the tripwires that
-protect the shipped caches), the compat ground truth, the benchmark driver's and the RRT
-planners' toy-oracle checks, the instance sampler's tier knobs, the archive tool's tarball
-selection and the HOTEC generator's properties.
+**5 Kit-free files, 37 tests** since 2026-10-21: the frozen config-hash pin (the tripwire that
+protects the shipped caches), the compat ground truth, the benchmark driver's and the RRT
+planners' toy-oracle checks and the instance sampler's tier knobs. (Until then 8 files, 65 tests,
+about 70 s: the archive tool's tarball-selection tests went with the tool, the rack_gen digest
+pin and the HOTEC generator's property tests moved to their asset folders' `source/`.)
 
 > **Note:** `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is required outside Kit — the site-packages
 > carry hydra, whose pytest plugin breaks collection there. `code/util/run_py.sh` bakes it in.
@@ -259,21 +255,15 @@ crashes).
 nvidia-smi
 DISHSIM_GPU=<n> docker compose -f code/util/docker/compose.yaml up -d
 
-# 1. bring-up: image build if absent + container + archive restore + the kit_smoke gate
-code/util/tools/bootstrap.sh
-#    GATE: restore prints "[OK] ... @ <placement>" per cache, then kit_smoke "[RESULT] PASS"
+# 1. assets: download the HF dataset into data/assets
+hf download shu4dev/dishsim-assets --repo-type dataset --local-dir data/assets
 
-# 2. only after restoring an archive tag dated before 2026-09-10 (later tags already carry the
-#    exact E_door_4 pieces): re-decompose once per restored context.
-#    The anchor MUST match the restore log's "@ side_winner" — a wrong anchor reads as
-#    "cache is stale".
-code/util/run_py.sh code/initialization/bosch/decompose_meshes.py \
-    --machine bosch800 --placement side_winner --scenario placement --object plate
-code/util/run_py.sh code/initialization/bosch/decompose_meshes.py \
-    --machine bosch800 --placement side_winner --scenario placement --object bowl
+# 2. bring-up: image build if absent + container + the kit_smoke gate
+code/util/tools/bootstrap.sh
+#    GATE: kit_smoke "[RESULT] PASS"
 
 # 3. gates: tests + Kit-free capacity sanity
-code/util/run_py.sh -m pytest code/tests/          # GATE: 65 passed (about 70 s)
+code/util/run_py.sh -m pytest code/tests/          # GATE: 37 pass (36 + 1 skip before step 4's instances exist)
 code/util/run_py.sh -c "
 import sys; sys.path.insert(0, 'code/src')
 from dishsim import config
@@ -335,15 +325,16 @@ a FROZEN CACHE ANCHOR, which you must not touch): the affected caches invalidate
 rebuild with the two-stage pair, per (object, state):
 
 ```bash
-code/util/run_kit.sh code/initialization/bosch/extract_geometry.py --headless \
+code/util/run_kit.sh data/assets/bosch800/source/extract_geometry.py --headless \
     --machine bosch800 --placement side_winner --scenario <state> --object <class>
-code/util/run_py.sh code/initialization/bosch/decompose_meshes.py \
+code/util/run_py.sh data/assets/bosch800/source/decompose_meshes.py \
     --machine bosch800 --placement side_winner --scenario <state> --object <class>
 ```
 
-Restore the public archive any time with
-`code/util/run_py.sh code/util/tools/restore_assets.py --repo shu4dev/dishsim-assets`
-(the producer side is `code/util/tools/archive_assets.py`).
+Publish a rebake with
+`hf upload shu4dev/dishsim-assets data/assets . --repo-type dataset --commit-message "<what changed>"`;
+`hf download shu4dev/dishsim-assets --repo-type dataset --local-dir data/assets` restores and
+updates any box's copy.
 
 ## 5 Results
 
@@ -354,15 +345,15 @@ Every claim maps to a recorded artifact; artifacts live under the gitignored `da
 |---|---|---|
 | **The benchmark runs closed-loop** (corallab, 2026-09-04 tier benchmark of record): greedy_offline and rrt_connect on easy / medium / hard (5 / 10 / 15 items, 10 instances each, no move budget, 60 s planning budget) solve **39 of 60** — easy 10/10 for both, medium 8/10 for both, hard 1/10 (greedy_offline) and 2/10 (rrt_connect). Provable optima on the three pinned perturbed instances are 9/9/9 (`compat.optimal_moves`, `code/tests/test_compat.py`); the 2026-08-30 "greedy 3/3 in 9 moves" run left no records | `data/results/rearrange/bosch800/placement/` (60 records), `data/results/compare/summary.md` | `data/media/rearrange/bosch800/placement/` (11 episode MP4s, illustrative reruns of a subset of the episodes), `data/media/instances/bosch800/placement/` (initial vs goal) |
 | **Bosch 800 full load settles**: a planned multi-rack load teleported to its release poses settles with max drift 1.1 mm — the plan's poses are physically self-consistent | episode-era artifact of record (robot-era media, retired; HF archive + git history) | `docs/figures/bosch800_loaded_reveal.png` |
-| **Measured settle-reliability gates**: bowls 59/60 upright on the Bosch lower rack; scaled cups 49/82 and tumblers 64/88 wedge into the OEM wire lattice — which is why drinkware sits out of the certified Bosch count | probe campaign of record (records kept outside the repo roots, in `/media/corallab-s1/2tbhdd/brianshu/dishsim/robot_era_evidence/results/plate_settle/`; the current archive tarballs, tag `20260910_b3584ae`, do not carry them); gates frozen in `capacity.MEASURED_SETTLE_RELIABILITY` | [docs/known_limitations.md](known_limitations.md) |
+| **Measured settle-reliability gates**: bowls 59/60 upright on the Bosch lower rack; scaled cups 49/82 and tumblers 64/88 wedge into the OEM wire lattice — which is why drinkware sits out of the certified Bosch count | probe campaign of record (records kept outside the repo roots, in `/media/corallab-s1/2tbhdd/brianshu/dishsim/robot_era_evidence/results/plate_settle/`; the last archive tarballs, tag `20260910_b3584ae`, now in the asset dataset's history on the hub, do not carry them); gates frozen in `capacity.MEASURED_SETTLE_RELIABILITY` | [docs/known_limitations.md](known_limitations.md) |
 
 ## 6 Known limitations
 
 The honest edges, each with measured evidence: scaled drinkware does not stand reliably on
 the Bosch OEM wire lattice; the loaded lower rack cannot be driven back over the door sill;
 the stemware lie-in never settles. Added 2026-08-28: `config_hash` is **not** the only cache
-key (a static-CoACD change is invisible to the staleness check, so a box restored from an
-archive tag older than 2026-09-10 must re-run `decompose_meshes.py` once); CoACD's manifold
+key (a static-CoACD change is invisible to the staleness check until the load fails, and is
+fixed by a `decompose_meshes.py` re-run uploaded to the dataset); CoACD's manifold
 preprocess inflates authored bodies by millimetres of phantom volume; only the `placement`
 rack state is Kit-validated; the move model has **no insertion-path gate**, so blocking and
 non-monotonicity are unrepresentable; the stowed lower
@@ -396,6 +387,6 @@ for their respective licenses:
 Rack geometry is procedurally generated, styled after publicly documented Whirlpool, Bosch and
 Frigidaire rack designs (design reference only; no third-party geometry is redistributed).
 
-Downloaded and derived assets are never committed (`data/assets/`, `data/media/`, `data/results/` are
-gitignored); the public archive redistributes only what its sources' licenses allow, with
-attribution.
+Downloaded and derived assets are never committed to this repo (`data/assets/`, `data/media/`,
+`data/results/` are gitignored); the public asset dataset `shu4dev/dishsim-assets` redistributes
+only what its sources' licenses allow, with attribution.

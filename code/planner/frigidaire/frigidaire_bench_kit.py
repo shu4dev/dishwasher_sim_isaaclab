@@ -1337,7 +1337,7 @@ def main():
     parser.add_argument("--algorithms", nargs="*", default=None)
     parser.add_argument("--baseline", type=Path, default=ROOT / "data/results/benchmark/frigidaire_hotec/baseline/result.json")
     parser.add_argument("--out", type=Path, default=ROOT / "data/results/benchmark/frigidaire_hotec")
-    parser.add_argument("--usd", type=Path, default=ROOT / "data/build/frigidaire_collection/usd/fdpc4221as.usdc")
+    parser.add_argument("--usd", type=Path, default=ROOT / "data/assets/frigidaire_fdpc4221as/usd/fdpc4221as.usdc")
     parser.add_argument("--max-wall-seconds", type=float, default=7200.)
     parser.add_argument("--pile-coverage", type=float, default=PILE_COVERAGE, help="summed dish footprint / pile box area")
     from isaaclab.app import AppLauncher

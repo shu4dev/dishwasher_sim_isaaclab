@@ -176,9 +176,9 @@ def motion_is_settled(metrics):
 
 @lru_cache(maxsize=1)
 def _source_geometry_domains():
-    from .geometry import PARAMETERS, build_components
+    from .geometry import PARAMETERS, components as asset_components
 
-    components = build_components()
+    components = asset_components()
     solids = {solid["name"]: solid for solid in components["Cabinet"]["solids"]}
 
     def surface(name, axis, side):

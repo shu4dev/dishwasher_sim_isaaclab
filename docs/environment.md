@@ -35,7 +35,7 @@ release NVIDIA documents for this driver series; 5.x/6.0 want ≥ 570/580).
 | Isaac Lab | **v2.1.1** (git checkout at `/workspace/isaaclab`, editable-installed into Kit python) |
 | Python | Kit python **3.10.15** — no venv (the old venv was the sole cause of the `EXP_PATH` landmine) |
 | PyTorch | 2.7.0+cu128 (runs on the 535 driver via CUDA minor-version compat — precompiled sm_86 kernels) |
-| numpy | 1.26.0 (byte-hash digests in tests are pinned per numeric environment — see `code/tests/test_rack_gen_frozen.py`) |
+| numpy | 1.26.0 (byte-hash digests in tests are pinned per numeric environment — see `test_rack_gen_frozen.py`, in `data/assets/bosch800/source/` since 2026-10-21) |
 | Repo | bind-mounted at `/workspace/dishsim`, `pip install -e` on every container start |
 
 **Local-image caveat**: the built `dishsim-isaac:4.5.0` on this box predates the Dockerfile
@@ -97,7 +97,7 @@ stack and every collision cache are version-independent and carried over unchang
    `dishwasher_sim_isaaclab`: Kit's extension scan turns a directory whose name matches an
    importable package into a shadowing namespace package (`unknown location` ImportErrors).
    Keep module-scope `pxr`/`omni` imports out of the package (lazy in-function imports, see
-   `code/src/dishsim/usd_prep.py`).
+   `code/src/dishsim/media.py`).
 3. **`./isaaclab.sh -p` exits 0 even when the wrapped script crashes** — verify success from
    log content (`[RESULT] PASS`, absence of tracebacks / `free(): invalid pointer`), never
    from the exit code. `code/util/run_kit.sh` inherits this property.
@@ -111,8 +111,10 @@ stack and every collision cache are version-independent and carried over unchang
 - `code/util/run_py.sh ...` — same forwarding, but execs Kit's python directly (pytest,
   planners, tools; no Kit boot). `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is baked in: hydra's
   auto-registered pytest plugin breaks collection outside Kit.
-- `code/util/tools/bootstrap.sh` — image build (if absent) + `compose up -d` + archive restore
-  + the kit_smoke install gate.
+- `code/util/tools/bootstrap.sh` — image build (if absent) + `compose up -d` + the kit_smoke
+  install gate. It restores nothing: `data/assets` is a copy of the HF dataset
+  `shu4dev/dishsim-assets`, downloaded once beforehand with
+  `hf download shu4dev/dishsim-assets --repo-type dataset --local-dir data/assets` (since 2026-10-21).
 - The base image's entrypoint launches the streaming sim — `code/util/docker/compose.yaml` overrides
   it (isaaclab-core + pytest self-heal, editable-install of the repo, then `sleep infinity`
   for `docker exec`).
@@ -145,9 +147,9 @@ Kit's python, no venv:
 | Location | Contents |
 |---|---|
 | `/` (root disk) | the `dishsim-isaac:4.5.0` image (~24 GB) plus the container's writable layer (0.93 GiB on 2026-09-29: the isaaclab and pytest installs the entrypoint re-applies at every start) |
-| `2tbhdd …/dishsim/repo_data/` | `assets/ build/ media/ results/ logs/ outputs/` — the repo's `data/` dirs are symlinks here; `build/` holds the only copy of the current Frigidaire twin build (no archive tarball contains it) |
+| `2tbhdd …/dishsim/repo_data/` | `assets/ build/ media/ results/ logs/ outputs/` — the repo's `data/` dirs are symlinks here; `build/` held the only copy of the current Frigidaire twin build until it moved into the asset dataset (`data/assets/frigidaire_fdpc4221as/`, 2026-10-21) |
 | `2tbhdd …/dishsim/kit_cache/ ov_data/ pip_cache/` | Kit shader/extension caches and the pip cache mount (compose mounts; `pip_cache/` stays empty, see below) |
-| `2tbhdd …/dishsim/hf_home/` | `HF_HOME` (asset-archive downloads) |
+| `2tbhdd …/dishsim/hf_home/` | `HF_HOME` (HF hub downloads; the asset-archive tarballs until 2026-10-21) |
 | `2tbhdd …/dishsim/_trash_20260917/`, `_trash_20260929/` | 30-day hold folders of retired data, each with a `MANIFEST.txt` (delete after 2026-10-17 / 2026-10-29) |
 | `2tbhdd …/dishsim/robot_era_evidence/` | robot-era `results/` and `media/` kept outside the repo roots (includes `results/plate_settle/`, the settle-reliability probe records) |
 
@@ -157,14 +159,12 @@ is owned by uid 1029, and pip run as root refuses a cache directory it does not 
 out, and the folder stays empty.
 
 The 2tbhdd mount appears at the identical path inside the container so the symlinks resolve
-on both sides. Python-3.10 note: `tarfile`'s `data` filter refuses extraction through those
-symlinks — `restore_assets.py` extracts its prefix-vetted members with `filter="fully_trusted"`.
-The container runs as root, so files it writes on the drive/repo are root-owned — clean them
-via `docker exec rm`, not host sudo.
+on both sides. The container runs as root, so files it writes on the drive/repo are
+root-owned — clean them via `docker exec rm`, not host sudo.
 
-Cache-anchor note: the shipped bosch800 caches were baked at base placement `side_winner`
-(the restore log prints the matched anchor per cache) — Kit-free tools that recompute
-`config_hash` (`decompose_meshes.py`, `extract_geometry.py`) need the matching
+Cache-anchor note: the shipped bosch800 caches were baked at base placement `side_winner` —
+tools that recompute `config_hash` (`decompose_meshes.py`, `extract_geometry.py`, both in
+`data/assets/bosch800/source/`) need the matching
 `--machine bosch800 --placement side_winner`, or they will mis-report the cache as stale.
 
 ## Pausing & releasing the machine (shared box)

@@ -68,6 +68,7 @@ def render(args, report):
     from dishsim.media import CameraRig
     from dishsim.quats import xyzw_to_wxyz
     from dishsim_frigidaire.asset import COMPONENT_FILES
+    from dishsim_frigidaire.paths import PROTOTYPES_DIR
     from frigidaire_initial_state_report import validate_state, pose_error
 
     state = json.loads(args.state.read_text())
@@ -93,7 +94,7 @@ def render(args, report):
         assets = json.loads(summary_path.read_text()).get("input_hashes", {}).get("asset_hashes", {})
     required = [args.usd.name, *COMPONENT_FILES.values(), *(f"tableware/{kind}.usdc" for kind in {obj["kind"] for obj in state["objects"]})]
     for relative in required:
-        path = args.usd.parent / relative
+        path = PROTOTYPES_DIR / relative.split("/", 1)[1] if relative.startswith("tableware/") else args.usd.parent / relative
         if not path.is_file() or digest(path) != assets.get(relative):
             raise ValueError(f"Missing or changed experiment USD: {relative}")
     report.update(state_id=identity, state_sha256=digest(args.state), state_path=str(args.state),
@@ -156,7 +157,7 @@ def render(args, report):
         referenced_body(name, args.usd.parent / filename, saved[name])
     for obj in state["objects"]:
         name = obj["object_id"]
-        referenced_body(name, args.usd.parent / "tableware" / f"{obj['kind']}.usdc", saved[name], tints[name])
+        referenced_body(name, PROTOTYPES_DIR / f"{obj['kind']}.usdc", saved[name], tints[name])
     rig = CameraRig(CAMERA, hw=(HEIGHT, WIDTH))
     sim.reset()
     rig.apply_poses(sim.device)
@@ -205,7 +206,7 @@ def render(args, report):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", type=Path, required=True)
-    parser.add_argument("--usd", type=Path, default=ROOT / "data/build/frigidaire_collection/usd/fdpc4221as.usdc")
+    parser.add_argument("--usd", type=Path, default=ROOT / "data/assets/frigidaire_fdpc4221as/usd/fdpc4221as.usdc")
     parser.add_argument("--out-dir", type=Path, required=True)
     from isaaclab.app import AppLauncher
     AppLauncher.add_app_launcher_args(parser)

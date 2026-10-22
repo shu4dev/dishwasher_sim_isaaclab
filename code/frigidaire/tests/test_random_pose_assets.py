@@ -1,4 +1,5 @@
-"""Host tests for experiment provenance and measured component transforms."""
+"""Host tests for measured component transforms (the provenance half moved to the asset folder's
+source/ with ``random_pose_assets.validate_inputs``)."""
 import hashlib
 import json
 from pathlib import Path
@@ -11,7 +12,7 @@ from unittest.mock import patch
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from dishsim_frigidaire import random_pose_assets as experiment
+from dishsim_frigidaire import random_pose_runtime as experiment
 from dishsim_frigidaire import tableware
 from dishsim_frigidaire.asset import BODY_POSITIONS, COMPONENT_FILES, JOINT_LIMITS
 from dishsim_frigidaire.geometry import PARAMETERS
@@ -19,75 +20,6 @@ from dishsim_frigidaire.geometry import PARAMETERS
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-class InputTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
-        (self.root / "tableware").mkdir()
-        names = ["fdpc4221as.usdc", *COMPONENT_FILES.values(),
-                 *(f"tableware/{kind}.usdc" for kind in experiment.KINDS)]
-        for name in names:
-            (self.root / name).write_bytes(name.encode())
-        self.usd = self.root / "fdpc4221as.usdc"
-        self.parameters = {"geometry": PARAMETERS, "body_positions_m": BODY_POSITIONS,
-                           "joint_limits_usd": JOINT_LIMITS}
-        self.report = {"result": "PASS (USD authoring only)",
-                       "components": {name: {} for name in COMPONENT_FILES},
-                       "sha256": {name: digest(self.root / name) for name in names}}
-        for rack, key in (("LowerRack", "lower_rack"), ("UpperRack", "upper_rack"),
-                          ("SilverwareBasket", "silverware_basket")):
-            self.report["components"][rack]["geometry_revision"] = PARAMETERS[key]["geometry_revision"]
-        self.catalog = {"source_sha256": digest(Path(tableware.__file__)),
-                        "items": {kind: {**tableware.CATALOG[kind],
-                                         "sha256": digest(self.root / f"tableware/{kind}.usdc")}
-                                  for kind in experiment.KINDS}}
-        self.write()
-
-    def write(self):
-        for name, data in (("parameters.json", self.parameters), ("geometry_validation.json", self.report),
-                           ("tableware/catalog.json", self.catalog)):
-            (self.root / name).write_text(json.dumps(data))
-
-    def test_current_three_dishes_validate_without_a_rack_assignment(self):
-        metadata = experiment.validate_inputs(self.usd)
-        self.assertEqual(set(metadata["catalog"]), set(experiment.KINDS))
-        self.assertEqual(metadata["asset_hashes"]["fdpc4221as.usdc"], digest(self.usd))
-        self.assertEqual(metadata["catalog"]["mug"]["rack"], "upper")
-
-    def test_modified_component_and_missing_dish_are_rejected(self):
-        (self.root / "door.usdc").write_bytes(b"modified")
-        with self.assertRaisesRegex(ValueError, "hash mismatch: door"):
-            experiment.validate_inputs(self.usd)
-        (self.root / "door.usdc").write_bytes(b"door.usdc")
-        (self.root / "tableware/bowl.usdc").unlink()
-        with self.assertRaisesRegex(ValueError, "asset missing"):
-            experiment.validate_inputs(self.usd)
-
-    def test_stale_geometry_and_catalog_do_not_validate(self):
-        self.parameters = json.loads(json.dumps(self.parameters))
-        self.parameters["geometry"]["lower_rack"]["tines_per_bank"] += 1
-        self.write()
-        with self.assertRaisesRegex(ValueError, "Stale parameters.geometry"):
-            experiment.validate_inputs(self.usd)
-        self.parameters["geometry"] = PARAMETERS
-        self.catalog["items"]["mug"]["mass_kg"] = 10.
-        self.write()
-        with self.assertRaisesRegex(ValueError, "current CATALOG: mug"):
-            experiment.validate_inputs(self.usd)
-
-    def test_stale_catalog_source_and_component_report_are_rejected(self):
-        self.catalog["source_sha256"] = "old"
-        self.write()
-        with self.assertRaisesRegex(ValueError, "different tableware source"):
-            experiment.validate_inputs(self.usd)
-        self.catalog["source_sha256"] = digest(Path(tableware.__file__))
-        del self.report["components"]["Door"]
-        self.write()
-        with self.assertRaisesRegex(ValueError, "all appliance components"):
-            experiment.validate_inputs(self.usd)
 
 
 class Transform:

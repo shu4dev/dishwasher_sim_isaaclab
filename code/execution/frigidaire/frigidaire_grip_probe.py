@@ -20,7 +20,7 @@ import traceback
 
 ROOT = Path(__file__).resolve().parents[3]
 OUT = ROOT / "data/results/robot/grip_probe"
-BOWL_USD = ROOT / "data/assets/models/hotec_wheatstraw/v2/bowl.usda"
+BOWL_USD = ROOT / "data/assets/hotec_wheatstraw/usd/bowl.usda"
 RIM_R, WALL, HEIGHT = .074, .0035, .075
 FOOT_R, FOOT_W = .035, .005                   # HOTEC bowl foot ring: 70 mm diameter, 5 mm wide, 4 mm tall       # HOTEC bowl parameters (rim diameter 148 mm, wall 3.5 mm, height 75 mm)
 TCP_TARGET = (.45, 0., .30)                   # robot base frame [m]

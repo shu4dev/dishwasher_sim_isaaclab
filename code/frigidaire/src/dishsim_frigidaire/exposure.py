@@ -273,8 +273,8 @@ def component_triangles(name):
     """Component-frame wire triangles of a rack or the basket (solids skipped)."""
     global _COMPONENTS
     if _COMPONENTS is None:
-        from .geometry import build_components
-        _COMPONENTS = build_components()
+        from .geometry import components
+        _COMPONENTS = components()
     meshes = _COMPONENTS[name]["meshes"].values()
     return np.concatenate([np.asarray(m.points)[np.asarray(m.faces)] for m in meshes])
 
@@ -283,8 +283,8 @@ def rack_wires(name):
     """Simplified wire centrelines for drawing (component frame)."""
     global _COMPONENTS
     if _COMPONENTS is None:
-        from .geometry import build_components
-        _COMPONENTS = build_components()
+        from .geometry import components
+        _COMPONENTS = components()
     return [np.asarray(path) for _, path, _ in _COMPONENTS[name]["wires"]]
 
 

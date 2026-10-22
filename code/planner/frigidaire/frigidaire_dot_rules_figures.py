@@ -61,7 +61,7 @@ REASONS = ("knock", "need", "block", "learned")        # why only that order lan
                                                         # learned: a constraint the certifying build added, v20)
 DRIFT_MM = 2.0                                         # the context re-settles in place: more drift before a drop displaced it
 FAIL_RED = "#d00000"
-DEFAULT_ASSETS = ROOT / "data/assets/models/hotec_wheatstraw/v2"
+DEFAULT_ASSETS = ROOT / "data/assets/hotec_wheatstraw/usd"
 
 
 def log(*a):

@@ -32,7 +32,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT / "code/src"), str(ROOT / "code/frigidaire/src")]
 
-ASSETS = ROOT / "data/assets/models/hotec_wheatstraw/v2"
+ASSETS = ROOT / "data/assets/hotec_wheatstraw/usd"          # the three USDs; catalog.json and parameters.json one level up
 KINDS = ("plate", "bowl", "cup")
 # 7 bowls in every tier: the 8th-bowl poses settle past the tub wall (outer front-right) or wedge (third rear pair)
 # in Isaac goal gates (2026-09-23); without plates an 8-bowl packing exists but first-fit found it once in 300
@@ -310,9 +310,9 @@ class DishSet:
 
 def nests(points, c, o, others):
     """True when bowl candidate c would nest with a same-rack bowl in ``others``: their depth slabs overlap along
-    the bowl axis (claims.slabs_disjoint) AND their rack-frame xy footprints overlap. The claims rule alone calls two
+    the bowl axis (loading.slabs_disjoint, from the retired claims) AND their rack-frame xy footprints overlap. The claims rule alone calls two
     bowls side by side "nested" whatever their distance, which left the lower rack one bowl short (G2 7 / 15 / 23)."""
-    from dishsim_frigidaire.claims import slabs_disjoint
+    from dishsim_frigidaire.loading import slabs_disjoint
     o = quat_matrix(c["quaternion_xyzw"]) if o is None else o          # keep-in-place candidates carry no matrix
 
     def xy(e):
@@ -875,11 +875,11 @@ def collision_points(kind):
 
 
 def ceiling_height(frames, up):
-    """The tub ceiling's underside (geometry.py _cabinet: the TubCeiling box) as a height along ``up``, at the live
-    Cabinet frame in ``frames``."""
+    """The tub ceiling's underside (the Cabinet's TubCeiling box in components.json) as a height along ``up``, at the
+    live Cabinet frame in ``frames``."""
     if not _CEILING:
         from dishsim_frigidaire import geometry
-        box = next(s for s in geometry._cabinet()["solids"] if s["name"] == "TubCeiling")
+        box = next(s for s in geometry.components()["Cabinet"]["solids"] if s["name"] == "TubCeiling")
         _CEILING.append(np.array([box["center"][0], box["center"][1], box["center"][2] - box["size"][2] / 2]))
     f = frames["Cabinet"]
     point = quat_matrix(f["quaternion_xyzw"]) @ _CEILING[0] + np.asarray(f["position_m"], dtype=float)

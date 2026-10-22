@@ -157,11 +157,12 @@ class IsaacInitialStateBackend:
         from isaacsim.core.api.sensors import RigidContactView
         from .asset import spawn, apply_mode, COMPONENT_FILES
         from .loading import visual_points
+        from .paths import PROTOTYPES_DIR
 
         if device != "cpu":
             raise ValueError("This experiment requires CPU physics")
         # kind -> USD; the stock tableware by default, overridden per kind (e.g. the HOTEC set)
-        self.tableware = {kind: Path(usd_path).parent/"tableware"/(kind+".usdc") for kind in OBJECT_KINDS}
+        self.tableware = {kind: PROTOTYPES_DIR/(kind+".usdc") for kind in OBJECT_KINDS}
         self.tableware.update({kind: Path(path) for kind, path in (tableware or {}).items()})
         self.entries = normalize_candidates(candidates, kinds=set(self.tableware))
         self.assignments = {entry["object_id"]: entry["rack"] for entry in self.entries}

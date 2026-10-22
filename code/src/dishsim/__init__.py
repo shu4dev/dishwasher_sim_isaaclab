@@ -25,11 +25,25 @@ ASSETS_DIR = os.path.join(PROJECT_ROOT, "data", "assets")
 _DATA_NAMES = ("assets", "results", "media", "logs", "outputs", "build", "artifacts")
 
 
+# Asset files moved into the flat data/assets folders on 2026-10-21 (old prefix -> new prefix, first match wins).
+_MOVED_ASSETS = (
+    ("data/assets/models/hotec_wheatstraw/v2/", "data/assets/hotec_wheatstraw/usd/"),
+    ("data/build/frigidaire_collection/usd/tableware/", "data/assets/frigidaire_prototypes/usd/"),
+    ("data/build/frigidaire_collection/usd/", "data/assets/frigidaire_fdpc4221as/usd/"),
+)
+
+
 def legacy_data_path(p):
     """A path read from a stored record, as a string: ``/workspace/dishsim/<name>/...`` or ``<name>/...`` (one of
-    the seven data roots) maps to the same path under ``data/``; any other path comes back unchanged."""
+    the seven data roots) maps to the same path under ``data/``, and an asset file recorded before the 2026-10-21
+    move maps to its new folder (``_MOVED_ASSETS``); any other path comes back unchanged."""
     s = str(p)
     for prefix in ("/workspace/dishsim/", ""):
         if s.startswith(tuple(f"{prefix}{name}/" for name in _DATA_NAMES)):
-            return f"{prefix}data/{s[len(prefix):]}"
+            s = f"{prefix}data/{s[len(prefix):]}"
+            break
+    for prefix in ("/workspace/dishsim/", ""):
+        for old, new in _MOVED_ASSETS:
+            if s.startswith(prefix + old):
+                return prefix + new + s[len(prefix + old):]
     return s
