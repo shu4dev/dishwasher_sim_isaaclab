@@ -7,6 +7,9 @@ per-dot denominator), per-dot figure arrays and the New+G vs New+J convergence s
 
     code/util/run_py.sh code/planner/frigidaire/frigidaire_dot_rules_grid.py --sweep 64 262144 --deadline-utc 11:45
 
+Tilt check (plans/2026-10-22-tilt-score-check.md): --tilts=A:B:S (B included; < 0 leans the food side toward the disc
+centre), --spots "h,d ..." (cm, grid nodes; only those cells are cast), --theta 30 (comma list), always with its own --out.
+
 Outputs per N in OUT/N{N:07d}/ (OUT = --out, default data/results/dot_rules/grid): grid.json, perdot_{dish}.npz,
 convergence.json, partial/{dish}_t{tilt:03d}.npz (resume checkpoints; one without obj_means is stale, deleted and
 recomputed); after every level OUT/convergence_sweep.{json,csv}. Every level is complete or absent: the sweep stops
@@ -61,11 +64,13 @@ def deadline_of(hhmm):
     return now.replace(hour=h, minute=m, second=0, microsecond=0).timestamp()
 
 
-def run_tilt(DR, eng, geom, mesh, tilt, path):
+def run_tilt(DR, eng, geom, mesh, tilt, path, spots=None):
     """One (dish, tilt) batch: every non-skipped (h, d) cell, 500 dots each, all 10 theta."""
     TH = DR.THETAS_DEG
     Q = len(TH)
     cells = DR.grid_cells(geom, tilt)
+    if spots:
+        cells = [c for c in cells if (DR.GRID_H_CM[c[0]], DR.GRID_D_CM[c[1]]) in spots]
     if not cells:
         atomic_npz(path, cells=np.zeros((0, 2), np.int32), obj_means=np.zeros((0, len(DR.RULES), Q)))
         return {"cells": 0}
@@ -104,7 +109,7 @@ def run_tilt(DR, eng, geom, mesh, tilt, path):
            "above1": np.stack([(A[k] > 1 + 1e-9).sum(axis=(1, 2)) for k in DR.RULES], axis=1).astype(np.int32),
            "rays": rays, "t_rays": t1 - t0, "t_wstar": t2 - t1, "t_total": time.perf_counter() - t0,
            "diag": json.dumps(diag)}
-    if tilt in PERDOT_TILTS:
+    if tilt in PERDOT_TILTS and PERDOT_THETA in TH:
         hi_t, di_t = DR.GRID_H_CM.index(PERDOT_CELL_CM[0]), DR.GRID_D_CM.index(PERDOT_CELL_CM[1])
         ci = next((j for j, (hi, di, _) in enumerate(cells) if (hi, di) == (hi_t, di_t)), None)
         if ci is not None:
@@ -125,7 +130,7 @@ def run_tilt(DR, eng, geom, mesh, tilt, path):
 
 def dot_entity(DR, eng, sign):
     TH = DR.THETAS_DEG
-    dots = DR.dot_entity_dots(sign=sign)
+    dots = DR.dot_entity_dots(tilts=DR.GRID_TILTS, sign=sign)
     s = eng.ray_sums(None, dots, TH, cast=False)
     WF, WG, WJ, mF, diag = eng.wstar(dots, s, TH, all_f=True)
     sc, zG, zJ, above = eng.scores(s, WF, WG, WJ)
@@ -277,7 +282,7 @@ def run_level(DR, N, args, deadline):
             if deadline and time.time() > deadline:
                 log(f"N={N}: deadline reached inside the level ({dish} t{tilt}); partials kept")
                 return None, time.time() - started
-            r = run_tilt(DR, eng, geom, mesh, tilt, path)
+            r = run_tilt(DR, eng, geom, mesh, tilt, path, args.spots)
             if r["cells"]:
                 log(f"N={N} {dish} t{tilt:03d}: {r['cells']} cells, rays {r['rays']:.3e} in {r['t_rays']:.1f}s "
                     f"({r['rays'] / max(r['t_rays'], 1e-9):.3e}/s), W* {r['t_wstar']:.1f}s "
@@ -290,7 +295,9 @@ def run_level(DR, N, args, deadline):
     t_ent = time.perf_counter() - t_ent
     meta = {"generated_utc": dt.datetime.utcnow().isoformat() + "Z", "n_points": N, "arm_radius_m": DR.GRID_ARM_R,
             "dots_per_dish": 500, "offset_m": DR.OFFSET_M, "pose": "R_y(180-tilt) about the food-contact centroid, "
-            "centroid at (d, 0, h) over the disc centre; skip when any visual vertex dips below the disc plane",
+            "centroid at (d, 0, h) over the disc centre; skip when any visual vertex dips below the disc plane; "
+            "tilt < 0 leans the food side toward the disc centre",
+            "spots_cm": [list(s) for s in args.spots] if args.spots else "every (h, d) cell",
             "occluder": "the dish's own visual mesh", "wstar_method": "exact |sum d| when every line lies within 45 deg of "
             "down; else 256x512 screen + 8 seeds (own normal, down, top-4, +-120 deg) x <= %d ascent passes, "
             "every line of the set as a seed when N <= %d, then a polish round (rotations of the best direction "
@@ -314,7 +321,7 @@ def run_level(DR, N, args, deadline):
         dO = np.abs(np.asarray(ol["O"]) - np.asarray(dl["O"])).reshape(nC, -1)[live, 0]
         log(f"self-check N={N} {dish}: max |D_obj - D| = {int(dD.max()) if dD.size else 0} scaled (expected 0 or 1); "
             f"O_obj differs from O by > 1 scaled in {int((dO > 1).sum())} of {int(live.sum())} cells")
-    t30 = next(t for t in conv["per_theta"] if t["theta_deg"] == 30)
+    t30 = next((t for t in conv["per_theta"] if t["theta_deg"] == 30), conv["per_theta"][0])
     log(f"[RESULT] PASS level N={N}: wall {conv['wall_s']:.0f}s, rays {conv['rays']:.3e} at {conv['rays_per_s']:.3e}/s, "
         f"kappa {conv['kappa_rays_per_dotpose_over_N']:.2f}, W* {conv['seconds_wstar']:.0f}s, binds {conv['wstar']['binds']}, "
         f"above1 {sum(conv['n_above_1'].values())}; theta 30 |NG-NJ| max {t30['gap_max']:.3e} mean {t30['gap_mean']:.3e}")
@@ -325,13 +332,18 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sweep", nargs=2, type=int, metavar=("N_MIN", "N_MAX"))
     ap.add_argument("--N", type=int)
-    ap.add_argument("--dishes", nargs="+", default=["plate", "bowl", "cup"])
+    ap.add_argument("--dishes", "--kinds", nargs="+", default=["plate", "bowl", "cup"], help="names or comma lists")
+    ap.add_argument("--tilts", help="A:B:S degrees, B included (a negative A needs --tilts=A:B:S); default 0:180:5")
+    ap.add_argument("--spots", help='"h,d h,d ..." in cm, each a grid node; default every (h, d) cell')
+    ap.add_argument("--theta", help="comma list of cone half-angles in degrees; default all ten")
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--chunk", type=int, default=1024)
     ap.add_argument("--seeds", type=int, default=8)
     ap.add_argument("--iters", type=int, default=12)
     ap.add_argument("--deadline-utc", default=None)
     args = ap.parse_args()
+    args.dishes = [k for s in args.dishes for k in s.split(",") if k]
+    args.spots = [tuple(int(v) for v in s.split(",")) for s in args.spots.split()] if args.spots else None
     if args.sweep:
         levels, n = [], args.sweep[0]
         while n <= args.sweep[1]:
@@ -343,8 +355,17 @@ def main():
         ap.error("--sweep or --N")
     B.HX().register_hotec(B.ASSETS)
     from dishsim_frigidaire import dot_rules as DR
+    if args.tilts:                         # ponytail: overrides the module's grid axes for this process only
+        a, b, st = (int(v) for v in args.tilts.split(":"))
+        DR.GRID_TILTS = tuple(range(a, b + 1, st))
+    if args.theta:
+        DR.THETAS_DEG = tuple(int(v) for v in args.theta.split(","))
+    off = [s for s in args.spots or () if s[0] not in DR.GRID_H_CM or s[1] not in DR.GRID_D_CM]
+    if off:
+        ap.error(f"--spots off the grid nodes {DR.GRID_H_CM} x {DR.GRID_D_CM}: {off}")
     deadline = deadline_of(args.deadline_utc)
-    log(f"levels {levels}, dishes {args.dishes}, out {args.out}, deadline {args.deadline_utc}")
+    log(f"levels {levels}, dishes {args.dishes}, tilts {DR.GRID_TILTS[0]}..{DR.GRID_TILTS[-1]} ({len(DR.GRID_TILTS)}), "
+        f"spots {args.spots or 'all'}, thetas {DR.THETAS_DEG}, out {args.out}, deadline {args.deadline_utc}")
     prev = None
     for N in levels:
         if prev is not None and deadline:

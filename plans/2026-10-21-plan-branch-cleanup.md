@@ -1,0 +1,27 @@
+# Clean the plan branch down to the live method (= section 3 of plans/2026-10-21-repo-refactor.md)
+Slug: 2026-10-21-plan-branch-cleanup | From: results/2026-10-21-kind-ceiling-score.md (structural change; no lit review)
+
+Update 2026-10-22: runs on the section-1 layout (plan at 1ebdc1d: data/assets holds the six asset folders, the generators are gone from code/, `rack_layout.py` replaced the runtime uses of `rack_gen`). The Kit-free checks below are the acceptance test for this run; the box smoke (one HOTEC bench episode plus one `--sample --edges physical --max-packings 1` packing) is deferred to the coordinator's next box window, because the box is shared with the asset refactor's window 3. `instance-notes/` was already deleted. The `frigidaire_bench.py` deletions must keep the HOTEC bench's episode path intact (it shares `build_sequence`).
+
+## Goal
+The branch holds only what the live pages and the fair score use: the re-posing sampler with the insertion move, the physical-cause graph, the kind-ceiling score, and page scripts that rebuild Dot Score Rules Version 23 and Dependency graphs Version 13 from data; the docs describe that and nothing retired.
+
+## Decisions (user had no preference, 2026-10-21; these are the session's calls)
+- Delete the dead code paths of rounds 1-6: in `frigidaire_dependency_kit.py` the modes `--edges pairs|build|swaps`, `--goal built`, `--tolerance library`, `--rejudge`, `--learn-rounds`, `--backtrack`, `--library`, `--perturb-*`, the swap tests, library, refinement, learning and their records; in `frigidaire_bench_kit.py` backtracking, fixed-order library builds, learning hooks, the joint `together=` build, the clear release; in `frigidaire_bench.py` `clear_release`, `RELEASE_RULE`, `AT_GOAL_LIBRARY`, `CONTACT_LIBRARY_M`. Keep: the sampler (`--sample`, random order with lean-side chains, re-posing, deferral, the 1 mm overlap rule for dishes and appliance), `insertion_release`, `upright_pose`, `lean_side`, the ceiling cap, `--manifest-out`, the joint gate call, `--certify`, the physical graph, the confirmation drops, `--resume-from`. Git history keeps the rest; old page versions are not rebuildable from the live code. Rejected: keeping the modes behind flags.
+- Delete scripts nothing uses: `frigidaire_dot_rules_bench.py`, `_isaac.py`, `_tail.py`, `_loads.py` (its one reference is in a section that goes), `frigidaire_dependency_score.py` (v18 rescoring; the kit scores samples itself). Keep the HOTEC bench scripts (`frigidaire_bench_page.py`, `mcts_*`, `hotec_*`, `planner_video.py`): the benchmark, out of scope. Bosch out of scope.
+- Pages rebuildable: `frigidaire_dot_rules_page.py` builds exactly the trimmed page (header, rules, explorer with "relative to the kind's best", per-dot) from the grid payload (`--grid-payload` from the saved page or `--grid-dir`), the per-dot PNGs and the three ceilings; its goal-loads, Isaac, dependency, object-level and appendix sections and the matching parts of `frigidaire_dot_rules_figures.py` go. `frigidaire_dependency_page.py` builds the physical page only (tuple, three graph variants, no checker or library). `frigidaire_dependency_clips.py`: physical clips only. `frigidaire_dot_rules_relative.py`: `--reference kind` only (per-dish engine references go), `--summary` stays.
+- Docs current: CLAUDE.md's "Dot Score Rules page" section becomes "Pages and the fair score" (both URLs and versions, the score definition with the three ceilings and the pooling rule, the sampler and graph in five lines, rebuild and publish commands); the 2026-09-29 cleanup section shrinks to one line about the hold folders; a new `code/frigidaire/docs/dependency.md` holds the method, commands and landmines (session history, overlap rule, box recipe); `exposure.md` gets the fair-score definition beside revision 5. Tracked media and the test fixtures stay. `instance-notes/` (an untracked copy of committed notes) is deleted; `racks_img/` is left.
+
+## Change
+- `code/planner/frigidaire/`: the deletions and trims above; every remaining flag has a live path; module docstrings rewritten to the live method.
+- Docs as above; `README.md` only where it names a deleted script.
+
+## Run
+Kit-free, on the worktree: `python3 -m py_compile` on every changed script; `frigidaire_dependency_page.py` on `data/results/dot_rules/dependency/samples_v5/r05_00027.json` and `frigidaire_dot_rules_page.py --grid-payload data/media/dot_rules/page_v22/index.html`, each diffed against the published HTML (read with the Artifact tool) with only version lines allowed to differ; the kit's fake-job scheduler check (`data/logs/dot_rules/samples_v5/check_physical.py`, adapted); `grep` proves no deleted flag or function is referenced anywhere in code or docs.
+
+## Works when
+The planner folder has no dead mode flags or unreferenced scripts, both pages rebuild from data to the published HTML except version lines, CLAUDE.md and the frigidaire docs match the tree, py_compile and the Kit-free checks pass, and the worktree branch holds one commit per step with a one-line message. The Isaac smoke (`code/util/run_py.sh -m pytest code/tests/ -q` plus one `--sample` packing) runs at the next box window, not in this plan.
+
+## Assumed / skipped
+- Assumed: data/ files are read-only inputs for the checks; the three ceilings are read from the saved `--summary` output or the grid payload; the refactorer works on its own worktree branch off plan and the user merges.
+- Skipped this round: the Bosch side, the HOTEC bench scripts, tracked media, test fixtures, any Isaac run.

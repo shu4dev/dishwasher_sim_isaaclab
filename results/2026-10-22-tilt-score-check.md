@@ -1,0 +1,20 @@
+# Run note: tilt score check (plans/2026-10-22-tilt-score-check.md), 2026-10-22, box dishsim-l4
+Works: 850 of 882 cells (32 poses skipped: a vertex below the disc), `[RESULT] PASS level N=262144: wall 757s, rays 1.176e+11 at 1.923e+08/s, kappa 1.06, W* 140s, binds 0, above1 0`, no traceback. Figure `data/media/dot_rules/tilt_check/tilt_check.png` (rows = the 6 spots; columns plate, bowl, cup, single dot; object-level New, New+J and score, the argmax marked, dot-level score dashed); table `tilt_check.md` beside it (checks, then every curve at -30 ... 180°).
+Command (box, repo root): `code/util/run_py.sh code/planner/frigidaire/frigidaire_dot_rules_grid.py --kinds plate,bowl,cup --tilts=-60:180:5 --spots "14,0 14,10 14,20 14,25 8,0 20,0" --theta 30 --N 262144 --out data/results/dot_rules/tilt_check`; then on the Mac `python3 code/planner/frigidaire/frigidaire_tilt_check_figure.py --grid data/results/dot_rules/tilt_check --out data/media/dot_rules/tilt_check`.
+Checks, object level, per cell: argmax (gain of the best over 0°), score(90), score(180). Score = 1 at exactly one tilt in all 18 dish-spot pairs; score(180) = 0.0000 in all 18; nothing above 1 (largest New+J 0.885). All three criteria hold in 11 of 18:
+| up, out (cm) | plate | bowl | cup |
+|---|---|---|---|
+| 14, 0 | 0°, 0.1255, 0: pass | 0°, 0.1244, 0: pass | 0°, 0.1267, 0: pass |
+| 14, 10 | 0°, 0.1166, 0: pass | 0°, 0.1199, 0: pass | 0°, 0.1205, 0: pass |
+| 14, 20 | -20° (+4.6 %), 0.0082, 0: fail | -20° (+8.9 %), 0.0018, 0: fail | -15° (+8.7 %), 0.0018, 0: fail |
+| 14, 25 | -30° (+12.0 %), 0.0000, 0: fail | -45° (+41.6 %), 0.0000, 0: fail | -35° (+87.2 %), 0.0000, 0: fail |
+| 8, 0 | 0°, skipped, 0: fail | 0°, 0.1244, 0: pass | 0°, 0.1267, 0: pass |
+| 20, 0 | 0°, 0.1255, 0: pass | 0°, 0.1244, 0: pass | 0°, 0.1267, 0: pass |
+Box window (UTC): `brev start` 07:51:47, RUNNING 07:53:31, grid 07:55:18-08:07:56, `brev stop` 08:08:12 (16.4 min), STOPPED 08:16:37. First the coordinator's `docker builder prune -af`: root disk 98 % to 78 % (114 to 90 GB used); the self-stop was running (cron @reboot, PID 619).
+Files: `code/planner/frigidaire/frigidaire_dot_rules_grid.py` (--tilts, --spots, --theta, --kinds; the dot entity follows --tilts), new `code/planner/frigidaire/frigidaire_tilt_check_figure.py` (stdlib SVG plus rsvg-convert, since no Python on the Mac has matplotlib). Outputs (Mac and box): `data/results/dot_rules/tilt_check/N0262144/`, log `data/logs/dot_rules/tilt_check.log`.
+Plan missed: (1) the 0.08-0.20 band holds only while the 8.1 cm J cone stays inside the disc; at 20 and 25 cm out, score(90) is 0.000-0.008, because the outward edge faces away from the centre-side lines that remain (-90° was not swept); (2) there the best leans inward and New+J passes the kind ceilings (plate 0.885, bowl 0.659, cup 0.281 against 0.872, 0.548, 0.213), which came from the outward-only grid; (3) the plate at 8 cm up skips 35-125° (rim 11.4 cm), so its on-edge check is void; (4) over the centre, New+J does not depend on height (0.814, 0.504, 0.183 at 0°, the 2026-10-14 grid's values), so the 8 and 20 cm spots repeat 14 cm; (5) `--tilts -60:180:5` fails under the container's Python 3.10 argparse, so the command uses `--tilts=`; (6) 12.6 min, not 5. Missing: the inward edge-on pose and the middle arm. Near the edge, the dot level puts the argmax elsewhere (-5, -10, -5° at 20 cm).
+
+## Section 3 smokes
+Not run, and no logs exist (no `data/outputs/section3_smoke/`). The auto-mode permission classifier denied copying the cleanup worktree (`worktree-agent-a1f214059350c52a4`) onto the box to run it ("Untrusted Code Integration"), so no branch code reached the box. Either the user merges the branch into `plan` and the box pulls it, or the user allows the action. Note: `code/util/run_kit.sh` started from `~/section3` would run the main clone's code anyway, since the wrapper docker-execs into `/workspace/dishsim`. On the box, `instances/easy/easy_s0.json`, `restricted/loads/r05_00027.json` and the baseline exist; `samples_v5` (smoke 2) does not.
+
+Suggested commit: Add tilt and spot flags to the grid, tilt check figure

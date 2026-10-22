@@ -1,0 +1,71 @@
+# Repo refactor, built up section by section (the user adds sections as each area is reviewed)
+Slug: 2026-10-21-repo-refactor | From: results/2026-10-21-kind-ceiling-score.md and the branch inventory of 2026-10-21
+
+## Goal
+The repo only samples, scores, runs planners and runs robot experiments. Everything computed once per dishwasher or dish set (generator source, USD, meshes, caches) lives in the asset dataset, which is the experiments' input and nothing more.
+
+## Section 1: assets (grilled 2026-10-21)
+### Decisions
+- Two categories, flat folders, one folder per dishwasher or dish set, latest version only: `bosch800`, `frigidaire_fdpc4221as`, `artvip_dishwasher_2`, `hotec_wheatstraw`, `bosch_props`, `frigidaire_prototypes`. Older revisions go (models/frigidaire_fdpc4221as{,_v2} twins, build history v3-v5, HOTEC v1, the Aug/Sept tarballs); the dataset's git history keeps them. Rejected: grouped dishwashers/ and dishes/ folders, a new dataset repo.
+- Each folder = `source/` (the generator or fetch code, moved out of the repo, with the command and the git SHA of its last run) + the artifacts the experiments load (USD, meshes, parameters, caches). Evidence stays out of the asset (docs/figures and run notes keep it); experiment results stay out (data/results is the box's). Rejected: snapshot copies with the live code in the repo, pointers only, keeping evidence, shipping results.
+- Caches keyed by machine live under the dishwasher (`bosch800/cache/<state>/<object>/`); a dish folder holds only its own mesh and pieces.
+- `data/assets` on every machine is a git clone of the HF dataset `shu4dev/dishsim-assets` (git + LFS), restructured in place: `git pull` restores, `git push` publishes. `archive_assets.py`, `restore_assets.py`, `latest.json`, the tarballs and `bootstrap.sh`'s restore step go. Rejected: tarballs with manifests, upload/download scripts.
+- The repo stops generating. Generator-only modules move to `source/`: `prop_gen.py`, `hotec_gen.py`, `usd_prep.py`, `lower_rack_asset.py`, `claims.py`, `usd_bootstrap.py`, `random_pose_assets.py`, `extract_geometry.py`, `decompose_meshes.py`, the Frigidaire stage/package/evidence/preview/tape scripts and their tests. Mixed modules are split first: `dishsim_frigidaire/geometry.py` and `asset.py` (generator code out; the runtime constants the bench, scorer, renderer and clips read, such as BODY_POSITIONS and rack heights, become `parameters.json` fields the loader reads), `dishsim/rack_gen.py` and `machine.py` (the Bosch racks are built in-scene today; the asset ships the built rack USDs and caches and `scene.py` loads them). The frozen `config_hash` anchors stay in `config.py` because caches are keyed by them.
+### Target layout (repo `data/assets` = the HF dataset, flat)
+```
+assets/
+  README.md                              what each folder is, licences, how to restore (git clone)
+  bosch800/              source/ (rack_gen, machine, extract, decompose, command, SHA)  usd/ (racks per state, machine)  cache/<state>/<object>/
+  frigidaire_fdpc4221as/ source/ (geometry, asset, lower_rack_asset, stage, package)  usd/ (fdpc4221as, cabinet, door, racks, basket, fixtures)  parameters.json
+  artvip_dishwasher_2/   source/ (fetch script, usd_prep)  usd/ (derived machine USDs)  cache/
+  hotec_wheatstraw/      source/ (hotec_gen, command, SHA)  usd/ (plate, bowl, cup v2)  parameters.json  catalog.json
+  bosch_props/           source/ (prop_gen)  usd/ (mug, plate, bowl, cup, tumbler, fork)  meshes/
+  frigidaire_prototypes/ source/ (tableware generator)  usd/ (the ten prototypes)
+```
+### Order of work (each its own refactorer run, smoke-tested on the box)
+1. Dishes first (smallest): `hotec_wheatstraw`, `bosch_props`, `frigidaire_prototypes`; loaders read the new paths.
+2. `frigidaire_fdpc4221as`: split geometry/asset, parameters.json carries the runtime constants, the twin's USD moves from data/build.
+3. `bosch800` and `artvip_dishwasher_2`: export the built racks and caches, `scene.py` loads USDs; the archive tooling is deleted; the HF dataset is restructured in place and `data/assets` becomes the clone.
+### Works when
+`grep` finds no generator import in code/; `pytest code/tests/ -q` and the Frigidaire suite pass on the box against the cloned assets; one HOTEC bench episode, one `--sample` packing and one Bosch `placement` instance run from a fresh clone of the dataset with no baking; the HF dataset shows the six folders and nothing else at HEAD.
+### Open, to grill before section 1 runs
+- Whether the Bosch benchmark stays in the repo at all (its racks are generated in-scene; exporting them is the largest piece of this section).
+- Whether `data/build/frigidaire_collection/history/` is kept anywhere outside git history.
+- The dataset's licence card per folder (ArtVIP is Apache-2.0; the rest are self-authored).
+
+## Section 2: the sampler as one input-output pipeline, with a general loader (grilled 2026-10-22)
+### What the repo is for
+`sample(dishwasher, dish set, seed) -> a pair`: an INITIAL configuration (some dishes in messy counter stacks, the rest in the racks; physics-settled, racks gated) and a GOAL configuration (every dish in the racks, organized; settled and gated, with its score, one certified order and the dependency graph). Pairs are the input of the next stage (planning, robot). No pages, images or video are outputs of the sampler.
+### Decisions
+- Loading is general: no code per (dishwasher, dish set) pair. Each asset's `source/` emits a manifest at build time, checked against a schema in the repo: `machine.json` (usd, root prim, units, up axis, front; joints with their "in" and "out" values; containers = racks and baskets with link, extended frame, box, tine grid, rim height; spray arms per container with disc centre, radius, jet angle; collision cache dir per rack state) and `<kind>.json` per dish (usd, visual mesh, collision pieces, mass, origin, footprint; food-contact samples and normals as a file; pooling ring; allowed orientations per container type). One loader builds the scene, the FCL world, the scorer inputs and the gate parameters from them. Rejected: hand-written manifests in the repo.
+- Slots are computed, not listed: tine grid x dish footprint x allowed orientations gives the candidate sites for any pair; the hand-built HOTEC families for the Frigidaire become a test the finder must reproduce. Rejected: sites listed per pair.
+- Frames stay as they are for now (Bosch and ArtVIP in the robot-era mount frame with their frozen anchors; the Frigidaire in the machine frame): rebaking costs hours. Defaults: dishwasher `frigidaire_fdpc4221as`, dishes `hotec_wheatstraw`; the Bosch and ArtVIP path keeps working through a per-machine frame flag until a later section merges the stacks.
+- Initial configuration = the HOTEC bench's generator (n dishes in counter stacks on the worktop slab, the rest dropped into the racks and settled; n a parameter) and it must pass settle plus the same loaded-rack gate as a goal. Goal configuration = the physical-cause pipeline of section 1's branch (sampler build, gate, fresh-session witness, support + access edges, confirmation drops, kind-ceiling score). Rejected: undoing a goal to make a start, everything-on-the-counter starts, settle-only gating.
+- Output: one file per sample, `<out>/<machine>__<dishes>__<seed>.json`, holding both configurations (per-dish poses, rack states, counter poses, settle and gate results) and, for the goal, score, order and graph; a JSON schema in the repo validates it; PhysX is not reproducible across sessions, so poses are stored, never re-derived from the seed. Rejected: today's two formats linked by id.
+### Parameters of `sample.py` (added 2026-10-22)
+- `--machine`, `--dishes` (defaults frigidaire_fdpc4221as, hotec_wheatstraw); `--kinds plate,bowl,cup` (which types); `--count plate=8,bowl=8,cup=8` (how many of each; capped by the dish set's catalog); `--on-counter N` (dishes that start in counter stacks) and `--counter-allowance K` (counter capacity beyond N); `--difficulty easy|medium|hard` = presets for the four above, taken from the HOTEC bench (easy: bowls, N+3; medium: + plates, N+2; hard: + cups, N+1); `--n-samples M` (valid pairs wanted) with `--max-attempts` and `--max-hours` as the stop point; `--seed`; `--out`. Explicit flags override a preset. Rejected: difficulty as a label with no definition in data.
+### Principle: rename, move and connect; almost no new code
+Existing files become the sampler's modules; the only new pieces are the CLI, the manifest readers with their schemas, and the slot finder (which generalises the hand-built HOTEC families). Mapping, old -> new (`code/src/sampler/`):
+- `loader.py` <- `dishsim_frigidaire/{loading, tableware (CATALOG), geometry (components, parameters), asset (BODY_POSITIONS), random_poses, planner (PlannerWorld, the FCL world)}` + manifest readers (new) + `slots.py` (new; `hotec_top5` families as its test).
+- `initial.py` <- `dishsim_frigidaire/initial_state_runtime.py` + `initial_state_candidates.py` + the counter-stack and drop code of `frigidaire_bench.py`.
+- `build.py` <- `frigidaire_bench_kit.build_sequence` + `frigidaire_bench.{insertion_release, upright_pose, lean_side, rack_heights, ceiling cap}`.
+- `gate.py` <- `frigidaire_initial_state_validate.py` + `load_validation.py`.
+- `goal.py` <- `frigidaire_dependency_kit.py`'s `--sample --edges physical` loop, `--manifest-out`, `--certify`.
+- `graph.py` <- the kit's `physical_certify` (support from contacts, access from the path check, confirmation drops, DAG).
+- `score.py` <- `dot_rules.py` (engine; stays importable), `frigidaire_dot_rules_grid.py` (ceilings), `frigidaire_dot_rules_relative.py --reference kind`.
+- `difficulty.py` <- the HOTEC bench's kind/allowance table in `frigidaire_bench.py` (and `dishsim/tiers.py` for Bosch, through the frame flag).
+- `schema/{pair,machine,dish}.json` (new). `sample.py` (new, thin).
+- Stays beside the sampler, unchanged: `random_pose_runtime`, `harness`, `organization`, the bench planners (`mcts`, `planner`'s sequencer), the pages and clips (presentation, not sampler outputs), the robot stack, the Bosch benchmark.
+- Each asset's `source/` gains the manifest writer; the Frigidaire's `parameters.json` and HOTEC's `catalog.json` are the starting points; Bosch's from `config.py`'s object specs and rack layout; ArtVIP's from its USD.
+### Stage interface, for testing and ablation (added 2026-10-22)
+- Every stage is a function `stage(state, params) -> state` over the pair file: `load -> initial -> gate_initial`, `load -> build -> gate_goal -> certify -> score -> graph`. The pair file is written after every stage (a `stages` ledger records which stage ran with which params and code SHA), and a stage that needs Isaac starts from the STORED poses of its input (teleport in, re-settle 150 ticks, proceed), never from the seed: PhysX is not reproducible across sessions, so stored poses are the contract.
+- `sample.py --from <stage> --to <stage> --input <pair files>` reruns only those stages on stored upstream state; `--variant key=value` swaps one stage's rule while everything upstream stays fixed (`build.order=lean-side|random`, `build.release=insertion|clear`, `build.plates=upright|packed`, `gate=full|settle-only`, `score.reference=kind|spot|none`, `graph=physical|none`, `initial.on_counter=N`). An ablation is one command over the stored samples, and its outputs are new pair files tagged with the variant, never overwriting the baseline.
+- Tests: Kit-free unit tests per stage on fixture states (`slots`, `score`, access edges, the schema, the ledger); the Isaac stages get one stored fixture state each and a box smoke that runs `--from build --to graph` on it. Cost of a rerun by stage: `score` minutes on the GPU for every stored load; `graph` minutes per goal (confirmation drops only); `build` is the only expensive stage and the only one an ablation ever needs the sampler loop for.
+### Works when
+`sample.py --machine frigidaire_fdpc4221as --dishes hotec_wheatstraw --n 1` writes a schema-valid pair with both gates passed, the goal's score, order and graph, in one box window; the slot finder reproduces the HOTEC families on the Frigidaire; the same command with `--machine bosch800 --dishes bosch_props` loads and gates through the frame flag.
+### Open
+- The order of sections: section 3 (delete the dead study modes) before this one, so the goal path is the physical pipeline only.
+- The counter allowance per difficulty (n+1..n+3 today) and whether difficulty is a sampler parameter.
+- The schema's treatment of cutlery and the basket (the HOTEC set has none).
+
+## Section 3: (next area, to be added)
