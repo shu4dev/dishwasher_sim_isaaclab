@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, dishsim project.
 # SPDX-License-Identifier: BSD-3-Clause
-"""The fair load score: each dish over its kind's ceiling, the plain mean over the dishes (Kit-free, standard library).
+"""The fair load score: each dish over its kind's ceiling under its arm, the plain mean over the dishes (Kit-free,
+standard library).
 
-The kind-ceiling score (2026-10-21, plans/2026-10-21-kind-ceiling-score.md): one ceiling per kind = the largest
-<kind>_obj New+J of the grid over every tilt, height and distance at the records' theta (lower-arm disc, used for the
-middle arm too), read from --grid-obj-dir or from the window.GRID payload of a saved Dot Score Rules page
-(--grid-payload). Per dish S_kind = min(1, NJ / ceiling[kind]), 0 for a dish that pools (the pooling list of the score
+The kind-ceiling score (2026-10-21, plans/2026-10-21-kind-ceiling-score.md; computed per arm since 2026-10-22, never a
+typed number): ceiling(kind, arm, theta) = the largest <kind>_obj New+J over every cell of the given grids at the records'
+theta whose spot lies inside the arm's disc (distance from the arm centre <= the arm's radius, read from ARM_SOURCES in
+exposure.py) and over every tilt swept: the window.GRID payload of a saved Dot Score Rules page (--grid-payload, tilts
+0..180, the food side leaning out) and each --grid-obj-dir's grid.json (repeatable; the inward-tilt grid, tilts -60..0).
+The grids are cast under the lower arm's disc (dot_rules.GRID_ARM_R); a middle-arm dish uses them too this round, limited
+to the middle arm's radius, and the record says so (grids_cast_for). Every .relative.json keeps each ceiling's provenance
+in ceilings_kind[arm][kind] (kind, arm, theta, radius, the grids with their tilt ranges and N, the argmax cell, the
+value), and reference_kind states the computed values in one line.
+Per dish S_kind = min(1, NJ / ceiling[its arm][kind]), 0 for a dish that pools (the pooling list of the score
 record beside the .relative.json, exposure.pools: interior more than 2 mm below the rim; a state whose score record is not
 there is scored with pooling NOT checked, n_pooling None, and the [RESULT] says PARTIAL); ratio_kind = NJ / ceiling
 unclipped. Per state S = the plain mean of S_kind, S_area = its area-weighted mean ("surface reached"), S_by_kind,
@@ -23,11 +30,13 @@ and against S_rel_best (the retired passes' saved fields), the farm top and bott
 
     python3 code/planner/frigidaire/frigidaire_dot_rules_relative.py --grid-payload data/media/dot_rules/page_v22/index.html \\
         --loads-dir data/results/dot_rules/loads/N0262144 --restricted-dir data/results/dot_rules/restricted \\
-        --dependency-dir data/results/dot_rules/dependency/samples_v5 --summary
+        --dependency-dir data/results/dot_rules/dependency/samples_v5 --summary \\
+        --grid-obj-dir data/results/dot_rules/ceiling_inward/N0262144
 """
 from __future__ import annotations
 
 import argparse
+import ast
 import datetime as dt
 import json
 import os
@@ -38,9 +47,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[3]
 RESTRICTED_SCORES = "scores_N0262144"     # the restricted loads rescored at the farm's and the grid's N
-KIND_TEXT = ("one ceiling per kind: the largest <kind>_obj New+J of the grid over every tilt, height and distance at the "
-             "load's theta (lower-arm disc, used for the middle arm too); S_kind = min(1, NJ / ceiling), 0 for a dish "
-             "that pools (interior more than 2 mm below the rim); S = mean of S_kind, S_area = area-weighted mean")
+EXPOSURE = ROOT / "code/frigidaire/src/dishsim_frigidaire/exposure.py"     # ARM_SOURCES: each arm's disc radius
+KINDS = ("plate", "bowl", "cup")
 
 
 def log(*a):
@@ -67,22 +75,70 @@ def spearman(a, b):
     return cov / (sum((x - ma) ** 2 for x in ra) * sum((y - mb) ** 2 for y in rb)) ** .5
 
 
-def read_grid(args):
-    """The object-level grid: --grid-obj-dir's grid.json, else the window.GRID payload of a saved Dot Score Rules page."""
-    if args.grid_obj_dir:
-        return json.loads((Path(args.grid_obj_dir) / "grid.json").read_text())
-    text = Path(args.grid_payload).read_text()
-    i = text.index("window.GRID =") + len("window.GRID =")
-    return json.JSONDecoder().raw_decode(text[i:].lstrip())[0]
+def rel(p):
+    return os.path.relpath(Path(p).resolve(), ROOT)
 
 
-def kind_ceilings(g, theta):
-    """{kind: the largest <kind>_obj New+J over every tilt, height and distance at theta} (skipped poses are negative)."""
-    nT, nH, nD, nQ = (len(g[k]) for k in ("tilts", "heights", "distances", "thetas"))
-    qi = g["thetas"].index(theta)                  # the loads' theta must be a grid node
-    return {kind: max(g[f"{kind}_obj"]["NJ"][((t * nH + hi) * nD + di) * nQ + qi]
-                      for t in range(nT) for hi in range(nH) for di in range(nD)) / float(g.get("scale", 1))
-            for kind in ("plate", "bowl", "cup")}
+def arm_radii():
+    """{arm: disc radius in m} from ARM_SOURCES in exposure.py, parsed, not imported (exposure needs numpy)."""
+    node = next(n.value for n in ast.parse(EXPOSURE.read_text()).body if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "ARM_SOURCES" for t in n.targets))
+    return {arm: float(spec["radius"]) for arm, spec in ast.literal_eval(node).items()}
+
+
+def read_grids(args):
+    """[(name, grid)]: the window.GRID payload of a saved Dot Score Rules page, then each --grid-obj-dir's grid.json."""
+    grids = []
+    if args.grid_payload:
+        text = Path(args.grid_payload).read_text()
+        i = text.index("window.GRID =") + len("window.GRID =")
+        grids.append((rel(args.grid_payload) + " (window.GRID)", json.JSONDecoder().raw_decode(text[i:].lstrip())[0]))
+    for d in args.grid_obj_dir or []:
+        grids.append((rel(Path(d) / "grid.json"), json.loads((Path(d) / "grid.json").read_text())))
+    return grids
+
+
+def ceilings(grids, theta, radii):
+    """{arm: {kind: provenance}}: ceiling(kind, arm, theta) = the largest <kind>_obj New+J over every cell of every grid at
+    theta (a grid node) whose spot lies inside the arm's disc (distance from the arm centre <= its radius; grid spots are
+    in cm) and over every tilt; the first grid wins a tie. Skipped poses are negative."""
+    used = [{"grid": name, "tilts_deg": [min(g["tilts"]), max(g["tilts"])], "N": g["n_points"]} for name, g in grids]
+    out = {}
+    for arm, r in radii.items():
+        for kind in KINDS:
+            cells = []
+            for name, g in grids:
+                nH, nD, nQ = (len(g[k]) for k in ("heights", "distances", "thetas"))
+                qi, nj = g["thetas"].index(theta), g[f"{kind}_obj"]["NJ"]
+                cells += [(nj[((t * nH + hi) * nD + di) * nQ + qi] / float(g["scale"]), name, h, d, tilt)
+                          for t, tilt in enumerate(g["tilts"]) for hi, h in enumerate(g["heights"])
+                          for di, d in enumerate(g["distances"]) if d / 100. <= r]
+            v, name, h, d, tilt = max(cells, key=lambda c: c[0])
+            out.setdefault(arm, {})[kind] = {
+                "kind": kind, "arm": arm, "theta_deg": theta, "radius_m": r,
+                "radius_from": f"ARM_SOURCES['{arm}']['radius'] in {rel(EXPOSURE)}", "grids": used,
+                "grids_cast_for": "lower_arm",       # dot_rules.GRID_ARM_R; every arm uses these grids this round
+                "argmax": {"grid": name, "height_cm": h, "distance_cm": d, "tilt_deg": tilt}, "value": v}
+    return out
+
+
+def ceil_line(ceil):
+    """Per arm its radius, per kind the ceiling and its argmax cell (tilt, cm up, cm out)."""
+    return "; ".join(f"{arm} r {next(iter(c.values()))['radius_m']:g} m: " + ", ".join(
+        f"{k} {e['value']:.4f} ({e['argmax']['tilt_deg']:g} deg, {e['argmax']['height_cm']:g} up, "
+        f"{e['argmax']['distance_cm']:g} out)" for k, e in c.items()) for arm, c in ceil.items())
+
+
+def kind_text(ceil):
+    """The rule and the computed ceilings with their provenance, one line (each record's reference_kind)."""
+    e = next(iter(next(iter(ceil.values())).values()))
+    grids = ", ".join(f"{x['grid']} (tilts {x['tilts_deg'][0]:g} to {x['tilts_deg'][1]:g} deg, N {x['N']})"
+                      for x in e["grids"])
+    return (f"ceiling(kind, arm, theta) = the largest <kind>_obj New+J over every cell at theta {e['theta_deg']:g} whose "
+            "spot lies inside the arm's disc (distance from the arm centre <= the arm's radius in exposure.ARM_SOURCES) "
+            f"and over every tilt of {grids}; the grids are cast under the {e['grids_cast_for']} disc and serve every "
+            f"arm this round. Computed: {ceil_line(ceil)}. S_kind = min(1, NJ / ceiling(kind, the dish's arm)), 0 for a "
+            "dish that pools (interior more than 2 mm below the rim); S = mean of S_kind, S_area = area-weighted mean")
 
 
 def kind_jobs(args):
@@ -118,7 +174,7 @@ def kind_state(s, ceil, pooling):
         raise SystemExit(f"pooling ids not among the dishes: {sorted(unknown)}")
     for p in per:
         k, pools = p["kind"].replace("hotec_", ""), p["id"] in pset
-        ratio = p["NJ"] / ceil[k]
+        ratio = p["NJ"] / ceil[p["arm"]][k]["value"]
         p.update({"pools": pools, "ratio_kind": ratio, "S_kind": 0. if pools else min(1., ratio)})
     a = sum(p["area_m2"] for p in per)
     s["S"] = sum(p["S_kind"] for p in per) / len(per)
@@ -130,7 +186,7 @@ def kind_state(s, ceil, pooling):
     s["n_clipped_kind"] = sum(p["ratio_kind"] > 1 and not p["pools"] for p in per)
 
 
-def kind_pass(kj, ceil, theta, source):
+def kind_pass(kj, ceil, theta):
     """The kind pass: kind_state per state of every .relative.json, the pooling ids from the score record beside it."""
     for src, dst in kj:
         rec = json.loads(dst.read_text())
@@ -138,7 +194,8 @@ def kind_pass(kj, ceil, theta, source):
             raise SystemExit(f"{dst}: theta {rec['theta_deg']}, the ceilings are at {theta}")
         for st, s in rec["states"].items():
             kind_state(s, ceil, pooling_of(src, st))
-        rec.update({"reference_kind": KIND_TEXT, "ceilings_kind": ceil, "ceilings_source": source,
+        rec.pop("ceilings_source", None)          # before 2026-10-22: the grid paths only
+        rec.update({"reference_kind": kind_text(ceil), "ceilings_kind": ceil,
                     "kind_utc": dt.datetime.utcnow().isoformat() + "Z"})
         tmp = dst.with_name(dst.name + ".tmp")
         tmp.write_text(json.dumps(rec, indent=1) + "\n")
@@ -154,7 +211,7 @@ def summary_kind(kj, args, ceil):
         if args.restricted_dir and str(dst).startswith(str(Path(args.restricted_dir))):
             return "restricted"
         return os.path.relpath(dst.parent, ROOT)
-    log("ceilings (" + ", ".join(f"{k} {v:.4f}" for k, v in ceil.items()) + ")")
+    log(kind_text(ceil))
     groups = {}
     for _, dst in kj:
         r = json.loads(dst.read_text())
@@ -207,22 +264,22 @@ def main():
     ap.add_argument("--loads-dir", default=None)
     ap.add_argument("--dependency-dir", action="append", default=None)
     ap.add_argument("--restricted-dir", default=None, help=f"restricted sampler dir: its {RESTRICTED_SCORES}/<id>.json")
-    ap.add_argument("--grid-obj-dir", default=None, help="the object-level grid level (grid.json)")
-    ap.add_argument("--grid-payload", default=None,
-                    help="a saved Dot Score Rules index.html (its window.GRID) instead of --grid-obj-dir")
+    ap.add_argument("--grid-obj-dir", action="append", default=None,
+                    help="an object-level grid level (grid.json); repeatable, the ceilings are the max over every grid")
+    ap.add_argument("--grid-payload", default=None, help="a saved Dot Score Rules index.html (its window.GRID)")
     ap.add_argument("--summary", action="store_true", help="Spearman, top / bottom five, counts")
     args = ap.parse_args()
     if not (args.grid_obj_dir or args.grid_payload):
         raise SystemExit("the kind ceilings need --grid-obj-dir or --grid-payload")
     t0 = time.time()
     kj = kind_jobs(args)
-    thetas = {float(json.loads(dst.read_text())["theta_deg"]) for _, dst in kj}
-    if len(thetas) != 1:
-        raise SystemExit(f"mixed theta {thetas}")
-    theta = thetas.pop()
-    source = os.path.relpath(Path(args.grid_obj_dir or args.grid_payload).resolve(), ROOT)
-    ceil = kind_ceilings(read_grid(args), theta)
-    kind_pass(kj, ceil, theta, source)
+    tn = {(float(r["theta_deg"]), r["N"]) for r in (json.loads(dst.read_text()) for _, dst in kj)}
+    grids = read_grids(args)
+    if len(tn) != 1 or any(g["n_points"] != next(iter(tn))[1] for _, g in grids):
+        raise SystemExit(f"mixed theta / N: records {tn}, grids {[g['n_points'] for _, g in grids]}")
+    theta = next(iter(tn))[0]
+    ceil = ceilings(grids, theta, arm_radii())
+    kind_pass(kj, ceil, theta)
     if args.summary:
         summary_kind(kj, args, ceil)
     sts = [s for _, dst in kj for s in json.loads(dst.read_text())["states"].values()]
@@ -230,8 +287,7 @@ def main():
     bad = [p["id"] for p in dishes if not 0. <= p["S_kind"] <= 1.]
     unchecked = sum(s["n_pooling"] is None for s in sts)
     log(f"[RESULT] {'FAIL' if bad else 'PARTIAL' if unchecked else 'PASS'} kind ceilings: {len(kj)} files, "
-        f"{len(sts)} states, {len(dishes)} dishes, ceilings at theta {theta:g} "
-        + " / ".join(f"{k} {v:.4f}" for k, v in ceil.items()) + f" ({source}); "
+        f"{len(sts)} states, {len(dishes)} dishes, ceilings at theta {theta:g} " + ceil_line(ceil) + "; "
         + (f"pooling NOT CHECKED in {unchecked} states (no score record beside their .relative.json); " if unchecked
            else "") + f"{sum(p['pools'] for p in dishes)} pooling (scored 0), "
         f"{sum(p['ratio_kind'] > 1 and not p['pools'] for p in dishes)} clipped at 1"

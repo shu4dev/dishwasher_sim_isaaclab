@@ -60,6 +60,23 @@ def scores_of(record_path, load_id):
     return out
 
 
+def ceilings_text(c):
+    """One line: the computed kind ceilings with their provenance, from the record's ceilings_kind[arm][kind]
+    (frigidaire_dot_rules_relative.py, 2026-10-22)."""
+    e = next(iter(next(iter(c.values())).values()))
+    grids = " and ".join(f"{x['tilts_deg'][0]:g}° to {x['tilts_deg'][1]:g}°" for x in e["grids"])
+    ns = " / ".join(sorted({f"{x['N']:,}" for x in e["grids"]}))
+    arms = "; ".join(
+        f"{arm.replace('_', ' ')} (radius {next(iter(k.values()))['radius_m']:g} m"
+        + ("" if arm == e["grids_cast_for"] else f", the {e['grids_cast_for'].replace('_', ' ')}'s grids") + "): "
+        + ", ".join(f"{kind} {x['value']:.3f} (tilt {x['argmax']['tilt_deg']:g}°, {x['argmax']['height_cm']:g} cm up, "
+                    f"{x['argmax']['distance_cm']:g} cm out)" for kind, x in k.items())
+        for arm, k in c.items())
+    return (f"Ceilings, computed: the largest New+J the kind reaches alone over every tilt of the grids (tilts {grids}; "
+            f"N {ns}) at θ {e['theta_deg']:g}° with its spot inside the arm's disc (radius from ARM_SOURCES in "
+            f"exposure.py): {arms}.")
+
+
 # --------------------------------------------------------------------------- the page (plans/2026-10-16-physical-cause-graph.md)
 # Per valid sample exactly three PNG images and one video (coordinator, 2026-10-16): the load still (S and the gate numbers
 # in its caption), the graph along the witness order, the same graph layered as a DAG, and the witness rebuild. One edge
@@ -232,12 +249,10 @@ def physical_page(a, records, clip_dirs, state):
             s_text = (f"S {k['S']:.4f} for the built poses (surface reached {k['S_area']:.4f}; {means}; {pool})"
                       + (f" and {kp['S']:.4f} for the packing it came from (surface reached {kp['S_area']:.4f})"
                          if kp else "")
-                      + ". S: each dish's object-level New+J over the best its kind reaches alone anywhere under the "
-                        f"arm at θ 30° (plate {c['plate']:.3f}, bowl {c['bowl']:.3f}, cup {c['cup']:.3f}: the "
-                        "lower arm's, used for the middle arm too), clipped at 1 and 0 for a dish that pools water (its "
-                        "interior more than 2 mm below its rim), then the plain mean over the dishes; surface reached "
-                        f"weights the same values by food-contact area. Absolute S (New+J) {b['NJ']:.4f} (New "
-                        f"{b['N']:.4f}, Old {b['O']:.4f})")
+                      + ". S: each dish's object-level New+J over its kind's ceiling under its arm, clipped at 1 and 0 "
+                        "for a dish that pools water (its interior more than 2 mm below its rim), then the plain mean over "
+                        "the dishes; surface reached weights the same values by food-contact area. " + ceilings_text(c)
+                      + f" Absolute S (New+J) {b['NJ']:.4f} (New {b['N']:.4f}, Old {b['O']:.4f})")
         lower =list(gate.get("order") or []) == ["LowerRack", "UpperRack"]      # the gate records its retraction order
         g_text = (f"Joint gate accepted{' with the lower rack retracted first (upper first: ' + gate['first_try']['outcome'] + ')' if lower and gate.get('first_try') else ''}: "
                   f"all 24 settled together with a peak penetration of {gate.get('settle_peak_mm')} mm and a last-window "
