@@ -6,12 +6,14 @@
 Reads the tilt-check grid (frigidaire_dot_rules_grid.py with --tilts/--spots; --grid is its --out or one N*/ level)
 and writes into --out:
   tilt_check.svg / .png   one row per spot, one column per entity (plate, bowl, cup, the single dot): object-level
-                          New, New+J and score = New+J / its max over the tilts at that spot, the argmax marked; the
+                          New, New+J and score(τ) = New+J(τ) / max_τ′ New+J(τ′) over the sweep at that spot, the argmax marked; the
                           dot-level score dashed; the plan's 0.08-0.20 band at 90 degrees. PNG via rsvg-convert.
   tilt_check.md           the plan's checks per dish and spot, then the values at -30 ... 180 degrees.
 
     python3 code/planner/frigidaire/frigidaire_tilt_check_figure.py --grid data/results/dot_rules/tilt_check \\
         --out data/media/dot_rules/tilt_check
+Trimmed view (the page's): --spots "14,0" --tilts 0:180 --curves NJ,score draws one row, the outward tilts only and
+New+J with the score (the dot-level score follows it); the score still divides by the max over the whole sweep.
 """
 from __future__ import annotations
 
@@ -68,7 +70,7 @@ def spot_name(h, d):
     return f"{h} cm up, {d} cm out"
 
 
-def svg_panel(x0, y0, tilts, curves, marks, title):
+def svg_panel(x0, y0, tilts, curves, marks, title, band=True):
     X = lambda t: x0 + (t - tilts[0]) / (tilts[-1] - tilts[0]) * PW
     Y = lambda v: y0 + PH - v / YMAX * PH
     o = [f'<rect x="{x0}" y="{y0}" width="{PW}" height="{PH}" fill="#ffffff" stroke="#bbbbbb"/>']
@@ -80,8 +82,9 @@ def svg_panel(x0, y0, tilts, curves, marks, title):
     for v in (0, .2, .4, .6, .8, 1.):
         o.append(f'<line x1="{x0}" y1="{Y(v):.1f}" x2="{x0 + PW}" y2="{Y(v):.1f}" stroke="#ececec"/>')
         o.append(f'<text x="{x0 - 4}" y="{Y(v) + 3.5:.1f}" font-size="10" text-anchor="end" fill="#555">{v:g}</text>')
-    o.append(f'<rect x="{X(87.5):.1f}" y="{Y(.20):.1f}" width="{X(92.5) - X(87.5):.1f}" height="{Y(.08) - Y(.20):.1f}" '
-             f'fill="#2ca02c" opacity="0.35"/>')
+    if band:
+        o.append(f'<rect x="{X(87.5):.1f}" y="{Y(.20):.1f}" width="{X(92.5) - X(87.5):.1f}" height="{Y(.08) - Y(.20):.1f}" '
+                 f'fill="#2ca02c" opacity="0.35"/>')
     for vals, colour, width, dash in curves:
         seg = []
         for t, v in list(zip(tilts, vals)) + [(None, None)]:
@@ -104,24 +107,42 @@ def main():
     ap.add_argument("--grid", default="data/results/dot_rules/tilt_check")
     ap.add_argument("--out", default="data/media/dot_rules/tilt_check")
     ap.add_argument("--theta", type=int, default=30)
+    ap.add_argument("--spots", default=None, help='rows to draw, e.g. "14,0 14,20" (default: every spot of the grid)')
+    ap.add_argument("--tilts", default=None, help="tilt range to draw, e.g. 0:180 (default: the whole sweep)")
+    ap.add_argument("--curves", default="N,NJ,score", help="object-level curves to draw, of N, NJ, score")
+    ap.add_argument("--no-band", action="store_true", help="leave out the plan's 0.08-0.20 band at 90 degrees")
     a = ap.parse_args()
     lv = level(a.grid)
     g = json.loads((lv / "grid.json").read_text())
     spots = [tuple(s) for s in g["meta"]["spots_cm"]]
+    if a.spots:
+        spots = [tuple(int(x) for x in sp.split(",")) for sp in a.spots.split()]
+        assert all(sp in [tuple(x) for x in g["meta"]["spots_cm"]] for sp in spots), spots
     tilts, th = g["tilts"], a.theta
+    lo, hi = (float(x) for x in a.tilts.split(":")) if a.tilts else (tilts[0], tilts[-1])
+    keep = [i for i, t in enumerate(tilts) if lo <= t <= hi]
+    crop = lambda v: [v[i] for i in keep]
+    tilts_draw, draw = crop(tilts), set(a.curves.split(","))
+    names = [n for k, n in (("N", "New(τ)"), ("NJ", "New+J(τ)"),
+                            ("score", 'score(τ) = New+J(τ) / max<tspan dy="4" font-size="11">τ′</tspan>'
+                                      '<tspan dy="-4" dx="4">New+J(τ′)</tspan>')) if k in draw]
+    head = (", ".join(names[:-1]) + " and " if len(names) > 1 else "") + names[-1]
+    lean = ("τ: tilt of the food side away from the arm (" + ("τ &lt; 0: leaned toward the arm\'s centre; " if lo < 0 else "")
+            + "0: facing the arm; 90: on edge; 180: facing away); τ′ runs over the whole sweep at the spot.")
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     W, H = ML + 4 * PW + 3 * CG + 24, MT + len(spots) * PH + (len(spots) - 1) * RG + 64
     svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" font-family="Helvetica, Arial, sans-serif">',
            f'<rect width="{W}" height="{H}" fill="#fafafa"/>',
-           f'<text x="{ML}" y="26" font-size="17" fill="#111">Tilt check: New, New+J and score = New+J ÷ its max over '
-           f'tilt at the spot (θ {th}°, N = {g["n_points"]:,} lines per set, lower arm, each dish alone)</text>',
-           f'<text x="{ML}" y="46" font-size="12.5" fill="#444">tilt &lt; 0: food side leaned toward the arm\'s centre; '
-           f'0: facing the arm; 90: on edge; 180: facing away (the grid\'s direction is &gt; 0).</text>',
+           f'<text x="{ML}" y="26" font-size="17" fill="#111">{head} '
+           f'(θ {th}°, N = {g["n_points"]:,} lines per set, lower arm, each dish alone)</text>',
+           f'<text x="{ML}" y="46" font-size="12.5" fill="#444">{lean}</text>',
            f'<text x="{ML}" y="63" font-size="12.5" fill="#444">Gaps: poses skipped (a vertex below the disc plane). '
-           f'Red dot: the argmax of New+J; green bar: the plan\'s 0.08-0.20 band at 90°.</text>']
+           f'Red dot: the argmax of New+J' + ("." if a.no_band else "; green bar: the plan\'s 0.08-0.20 band at 90°.")
+           + '</text>']
     legend = [("New, object level", COLOUR["N"], 1.6, None), ("New+J, object level", COLOUR["NJ"], 1.6, None),
               ("score (object level)", COLOUR["score"], 2.4, None), ("score, dot level", "#666666", 1.2, "5 3")]
+    legend = [lg for k, lg in zip(("N", "NJ", "score", "score"), legend) if k in draw]
     lx = ML
     for name, colour, width, dash in legend:
         da = f' stroke-dasharray="{dash}"' if dash else ""
@@ -139,15 +160,18 @@ def main():
             N, NJ = curve(g, obj, "N", h, d, th), curve(g, obj, "NJ", h, d, th)
             c, s = check(tilts, NJ, d == 0)
             curves = [(N, COLOUR["N"], 1.6, None), (NJ, COLOUR["NJ"], 1.6, None), (s, COLOUR["score"], 2.4, None)]
+            curves = [cv for k, cv in zip(("N", "NJ", "score"), curves) if k in draw]
             sd = None
             if ent != "dot":
                 cd, sd = check(tilts, curve(g, ent, "NJ", h, d, th), d == 0)
-                curves.insert(0, (sd, "#666666", 1.2, "5 3"))
+                if "score" in draw:
+                    curves.insert(0, (sd, "#666666", 1.2, "5 3"))
                 c["dot_level"] = cd
             gain = "" if c["argmax"] in (0, None) else f" (+{100 * c['gain0']:.1f} % over 0°)"
             label = "single dot" if ent == "dot" else ent
-            svg += svg_panel(ML + ci * (PW + CG), y0, tilts, curves, [c["argmax"]] if c["argmax"] is not None else [],
-                             f"{label}: best {c['argmax']}°{gain}")
+            svg += svg_panel(ML + ci * (PW + CG), y0, tilts_draw, [(crop(v), *rest) for v, *rest in curves],
+                             [c["argmax"]] if c["argmax"] is not None and lo <= c["argmax"] <= hi else [],
+                             f"{label}: best {c['argmax']}°{gain}", band=not a.no_band)
             checks.append(((h, d), ent, c))
             at = {k: dict(zip(tilts, v)) for k, v in (("New", N), ("New+J", NJ), ("score", s), ("score, dot level", sd))
                   if v is not None}
