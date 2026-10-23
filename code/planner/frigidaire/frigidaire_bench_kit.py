@@ -465,7 +465,7 @@ def chain_order(order, by_id, side):
 
 
 def build_sequence(backend, B, P, by_id, targets, centroids, landing, fixed=None, release="clear", on_path=None,
-                   moves=None, order=None, repose=None, trace=None, chains=None):
+                   moves=None, order=None, repose=None, trace=None, chains=None, strict=False):
     """Build a load in Isaac one dish at a time, lowest centre first (a valid order for "rests on"), each released at
     its LOWEST CLEAR HOVER above the target (B.clear_release, 2026-10-14: the 1 mm checker allowance against the placed
     dishes and the appliance, 1 mm steps, 60 mm cap; past it "no clear release" = not landed) and settled like a move
@@ -497,6 +497,9 @@ def build_sequence(backend, B, P, by_id, targets, centroids, landing, fixed=None
     ``reposed``. ``chains`` (chain_order's, plans/2026-10-16-lean-side-plate-order.md): a plate that found no slot goes
     after the plates still queued that have not failed since the last placement instead of the back of the order (to the
     back when every queued plate has: re-inserting it among failed plates looped forever).
+    ``strict`` (plans/2026-10-22-dag-build-order.md: ``order`` is the packing's DAG order): no deferral, the build fails at
+    the first dish that does not go in, and ``repose`` runs only on a physical miss (a clear descent whose dish settles
+    more than DEV_MAX_M off its target).
     The disturbance judgment uses B.AT_GOAL and every landing the 2 mm LIMITS contact depth. Each landed step also
     records d_mm (its visual centroid minus its goal's, world, mm) and rack_mm (its rack's displacement since the build's
     empty racks, mm), so a rack-local judgment can be made afterwards."""
@@ -657,7 +660,8 @@ def build_sequence(backend, B, P, by_id, targets, centroids, landing, fixed=None
                     put_back(placed, before, out=[r])
                 if trace is not None:
                     trace.cut(mark)
-                if k == 0:
+                if k == 0 and (not strict or (not s[-1].get("no_clear_release")
+                                              and s[-1]["settle_dev_mm"] > DEV_MAX_M * 1e3)):
                     tries += repose(r, dict(entries), list(placed), backend.poses())
                 k += 1
             targets[r], moves[r], goals[r], entries[r] = own[r]   # back to its own pose
@@ -679,7 +683,7 @@ def build_sequence(backend, B, P, by_id, targets, centroids, landing, fixed=None
                 stuck.clear()
                 continue
             stuck.add(r)                                   # at its own pose, later in the order
-            if all(i in stuck for i in [r, *queue]):
+            if strict or all(i in stuck for i in [r, *queue]):
                 return last[0], r, last[2], steps + last[1], attempts, placed
             defer(r)
         return "ok", None, None, steps, attempts, placed
@@ -744,8 +748,9 @@ def build_sequence(backend, B, P, by_id, targets, centroids, landing, fixed=None
         if status != "ok":
             mine = [a for a in tries if a["dish"] == x]
             record["reason"] = (f"the re-posing sampler placed {len(placed)} of {len(by_id)}: {x} did not go in "
-                                f"({status}; {len(mine)} attempts, own pose and re-poses) and no dish left went in since "
-                                f"the last placement; {len(tries)} attempts in all")
+                                f"({status}; {len(mine)} attempts, own pose and re-poses)"
+                                + ("" if strict else " and no dish left went in since the last placement")
+                                + f"; {len(tries)} attempts in all")
         else:
             record["reason"] = (f"placed {len(placed)} of {len(by_id)} in {len(tries)} attempts "
                                 f"({len(record['reposed'])} re-posed), {len(record['support'])} support contacts")

@@ -29,6 +29,11 @@ the back of the order); the load fails only when no dish left goes in. Writes <o
 and moves_world (the pose and move each dish went in with), the witness {order, status, support, steps, traj, plate_order,
 chains: plate -> bank, index, slot, placed_index, placed_slot} and its tick poses _kit/<load_id>/traj/witness.json, the
 built poses as entries_settled; or status 'resettle_failed' when the packing did not build.
+With --order FILE (plans/2026-10-22-dag-build-order.md; code/src/sampler/order.py's DAG order of the packing, JSON
+{order: [ids], pose_model, strict}) the build follows that order (no chain order), re-posing to free poses whose descent
+is clear and which add no cycle (dag_accept, at the file's pose_model). strict (the default): no deferral (the build fails
+at the first dish that does not go in), a re-pose only on a physical miss (a clear descent that settles more than
+DEV_MAX_M off); strict false (plans/2026-10-22-plate-rest-pose-dag.md): re-pose and deferral as without --order.
 
 --manifest-out PATH (Kit-free: run it through run_py.sh, inside the container, since frigidaire_hotec_top5.manifest_of
 writes the container's absolute tableware paths): the joint-gate manifest of the record's built poses (entries_settled);
@@ -262,14 +267,15 @@ class Reposer:
     start is clear). A plate's move depends only on its slot, so a plate gets at most one candidate per slot, never its
     own slot. ``calls`` keeps one line per call (dish, placed, screened, found, seconds). ``chain`` (the lean-side order,
     plans/2026-10-16-lean-side-plate-order.md: entry -> (bank, rank), frigidaire_bench_kit.plate_bank): a plate walks its
-    chain instead, only the slots of its own bank past its own along the chain, nearest first (a random variant per slot)."""
+    chain instead, only the slots of its own bank past its own along the chain, nearest first (a random variant per slot).
+    ``accept`` (dish, entry, placed) -> bool filters the clear poses (--order: dag_accept)."""
 
-    def __init__(self, B, P, frames, seed, chain=None):
+    def __init__(self, B, P, frames, seed, chain=None, accept=None):
         import importlib.util
         spec = importlib.util.spec_from_file_location("top5_repose", ROOT / "code/planner/frigidaire/frigidaire_hotec_top5.py")
         T = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(T)    # its private frigidaire_bench copy: TolerantDishSet, nesting allowed (the packing's rules)
-        self.T, self.B, self.P, self.frames, self.chain = T, B, P, frames, chain
+        self.T, self.B, self.P, self.frames, self.chain, self.accept = T, B, P, frames, chain, accept
         self.fam, self.parts, self.points = T.level_families(0)
         self.masks = T.level_masks(self.fam, self.parts, self.points, 0)
         self.bans = T.all_bans()
@@ -321,6 +327,8 @@ class Reposer:
             screened += 1
             if B.insertion_release(checker, [(kind, move, dish)], bodies, appliance, up, rim_z, top_z)["poses"] is None:
                 continue
+            if self.accept is not None and not self.accept(dish, entry, placed):
+                continue
             out.append({"entry": entry, "target": target, "move": move})
         self.calls.append({"dish": dish, "placed": len(placed), "screened": screened, "found": len(out),
                            "seconds": round(time.monotonic() - t0, 2), **({"chain": True} if walk else {})})
@@ -328,6 +336,24 @@ class Reposer:
               f"({time.monotonic() - t0:.1f} s): " + ", ".join(f"{o['entry']['slot']} {o['entry']['variant']}" for o in out),
               flush=True)
         return out
+
+
+def dag_accept(order, by_id, frames, pose_model="packed", cap=2 * REPOSE_TRIES):
+    """The Reposer's ``accept`` under --order (plans/2026-10-22-dag-build-order.md): a re-pose adds no cycle when no dish
+    still to go in gets an access or support edge into it (sampler/order.py at ``pose_model``, ``frames`` = the
+    baseline's five component poses); in the rest model a bowl or cup takes edges from plates too
+    (plans/2026-10-22-bowl-plate-edges.md), so every kind is checked."""
+    from sampler.order import access_edges, support_edges
+    calls = []
+
+    def accept(dish, entry, placed):
+        calls.append(dish)          # ponytail: each call redoes every later dish's path (~5 s); cap it, prune by distance if it binds
+        if calls.count(dish) > cap:
+            return False
+        group = [entry, *(by_id[i] for i in order if i != dish and i not in placed)]
+        edges = access_edges(group, frames, pose_model) + ([] if pose_model == "rest" else support_edges(group, frames))
+        return all(b != dish for _, b in edges)
+    return accept
 
 
 def sampler(args, source, entries, out_path, kit_dir, report, started):
@@ -356,18 +382,28 @@ def sampler(args, source, entries, out_path, kit_dir, report, started):
           flush=True)
     t_resettle = time.monotonic()
     seed = seed_of("reposing", args.load)
-    order0 = list(ids)
-    random.Random(seed).shuffle(order0)
-    order0, chains = K.chain_order(order0, by_id, B.lean_side)  # the same permutation, each bank's plates in chain order
+    strict = False
+    if args.order:                                              # the packing's DAG order (module docstring)
+        spec = json.loads(Path(args.order).read_text())
+        order0, chains, strict = list(spec["order"]), {}, spec.get("strict", True)
+        if sorted(order0) != sorted(ids):
+            raise Refused(f"--order {rel(args.order)} does not list this load's dishes")
+        reposer = Reposer(B, P, frames, seed + 1,
+                          accept=dag_accept(order0, by_id, snapshot["poses"], spec.get("pose_model", "packed")))
+    else:
+        order0 = list(ids)
+        random.Random(seed).shuffle(order0)
+        order0, chains = K.chain_order(order0, by_id, B.lean_side)  # the same permutation, each bank's plates in chain order
+        reposer = Reposer(B, P, frames, seed + 1, chain=lambda e: K.plate_bank(e, B.lean_side))
     moves = {i: P.world_from_local(frames[by_id[i]["rack"]], B.move_local(by_id[i])) for i in ids}
-    reposer = Reposer(B, P, frames, seed + 1, chain=lambda e: K.plate_bank(e, B.lean_side))
     links = ", ".join(f"{i} {c['bank']} {c['index']}" for i, c in chains.items())
-    print(f"re-posing sampler: candidates ready ({time.monotonic() - t_resettle:.0f} s); lean-side order "
-          f"{' '.join(order0)}" + (f"; chains {links}" if chains else ""), flush=True)
+    print(f"re-posing sampler: candidates ready ({time.monotonic() - t_resettle:.0f} s); "
+          f"{'dag' if args.order else 'lean-side'} order {' '.join(order0)}" + (f"; chains {links}" if chains else ""),
+          flush=True)
     built, record, _ = K.build_sequence(backend, B, P, by_id, targets, centroids,
                                         lambda kind, dist, dev: dev <= K.DEV_MAX_M, release="insertion",
                                         on_path=rec.descent, moves=moves, order=order0, repose=reposer, trace=rec,
-                                        chains=chains)
+                                        chains=chains, strict=strict)
     for a in record["attempts"]:
         s = a["step"]
         print(f"  attempt {a['dish']} try {a['try']} {a['slot']} {a['variant']} ({a['placed']} placed): "
@@ -378,7 +414,8 @@ def sampler(args, source, entries, out_path, kit_dir, report, started):
                                   + (f" overlap {s['overlap']}" if s.get("overlap") else "")),
               flush=True)
     moves, chosen = record["moves"], [record["entries"][i] for i in ids]
-    sampled = {"seed": seed, "order": order0, "plate_order": "lean-side", "attempts": record["attempts"],
+    sampled = {"seed": seed, "order": order0, "plate_order": "dag" if args.order else "lean-side",
+               "attempts": record["attempts"],
                "reposed": record["reposed"], "repose_calls": reposer.calls, "entries_chosen": chosen}
     if chains:                    # per plate: its bank, chain index, slot planned, slot and place in its bank built
         ok, per = {a["dish"] for a in record["attempts"] if a["status"] == "ok"}, {}
@@ -1082,6 +1119,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--load", "--loads", dest="load", metavar="ID", help="one load id per Kit process (required but with --sample)")
     parser.add_argument("--restricted-dir", type=Path, default=ROOT / "data/results/dot_rules/restricted/loads")
+    parser.add_argument("--order", type=Path, metavar="FILE",
+                        help="the sampler: build in this order (code/src/sampler/order.py's DAG order, JSON {order: [ids], "
+                             "pose_model, strict}); strict (default): no deferral, a re-pose only on a physical miss")
     parser.add_argument("--baseline", type=Path, default=ROOT / "data/results/benchmark/frigidaire_hotec/baseline/result.json")
     parser.add_argument("--usd", type=Path, default=ROOT / "data/assets/frigidaire_fdpc4221as/usd/fdpc4221as.usdc")
     parser.add_argument("--out-dir", type=Path, metavar="PATH", required=True,
