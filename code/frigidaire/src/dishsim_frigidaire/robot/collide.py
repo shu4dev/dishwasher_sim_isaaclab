@@ -199,9 +199,74 @@ def calibrate(robot, q, T_wb):
     return X
 
 
+def rrt_connect_np(world, q0, goals, time_s=10., seed=1, collide_kw=None, resolution=.03, rng_range=.3):
+    """RRT-Connect in joint space without OMPL (the dishsim-l4 container has no ompl, 2026-10-23): same bounds, range
+    and edge resolution as ``rrt_connect``; random shortcuts, then waypoints <= 0.02 rad apart. None on timeout."""
+    import time
+    collide_kw = collide_kw or {}
+    rng = np.random.default_rng(int(seed) or 1)
+    lo, hi = kin.JOINT_LIMITS[:, 0] + .02, kin.JOINT_LIMITS[:, 1] - .02
+
+    def edge_free(a, b):
+        n = max(2, int(np.ceil(float(np.abs(b - a).max()) / resolution)) + 1)
+        return all(world.free(a + (b - a) * s, **collide_kw) for s in np.linspace(0., 1., n)[1:])
+
+    def extend(tree, q):
+        nodes = np.asarray([n for n, _ in tree])
+        i = int(np.argmin(np.linalg.norm(nodes - q, axis=1)))
+        d = q - nodes[i]
+        dist = float(np.linalg.norm(d))
+        new = q if dist <= rng_range else nodes[i] + d * rng_range / dist
+        if not edge_free(nodes[i], new):
+            return "trapped"
+        tree.append((new, i))
+        return "reached" if dist <= rng_range else "advanced"
+
+    def branch(tree, k):
+        out = []
+        while k >= 0:
+            out.append(tree[k][0])
+            k = tree[k][1]
+        return out
+
+    ta = [(np.asarray(q0, dtype=float), -1)]
+    tb = [(np.asarray(goals[0], dtype=float), -1)]
+    a_is_start = True
+    t_end = time.monotonic() + float(time_s)
+    path = None
+    while time.monotonic() < t_end and path is None:
+        if extend(ta, rng.uniform(lo, hi)) != "trapped":
+            q_new = ta[-1][0]
+            r = "advanced"
+            while r == "advanced" and time.monotonic() < t_end:
+                r = extend(tb, q_new)
+            if r == "reached":
+                pa, pb = branch(ta, len(ta) - 1), branch(tb, len(tb) - 1)
+                path = pa[::-1] + pb[1:] if a_is_start else pb[::-1] + pa[1:]
+        ta, tb, a_is_start = tb, ta, not a_is_start
+    if path is None:
+        return None
+    t_sc = time.monotonic() + min(2., float(time_s))      # shortcuts get their own 2 s (a long edge with a carried dish
+    for _ in range(60):                                    # costs hundreds of checks: unbounded, it ran > 10 min)
+        if len(path) < 3 or time.monotonic() > t_sc:
+            break
+        i, j = sorted(rng.choice(len(path), 2, replace=False))
+        if j - i > 1 and edge_free(path[i], path[j]):
+            path = path[:i + 1] + path[j:]
+    out = [path[0]]
+    for a, b in zip(path[:-1], path[1:]):
+        n = max(1, int(np.ceil(float(np.abs(b - a).max()) / .02)))
+        out += [a + (b - a) * s for s in np.linspace(0., 1., n + 1)[1:]]
+    return out
+
+
 def rrt_connect(world, q0, goals, time_s=10., seed=1, collide_kw=None, resolution=.03):
-    """OMPL RRT-Connect in joint space; returns a list of joint waypoints (simplified, interpolated) or None."""
-    from ompl import base as ob, geometric as og, util as ou
+    """OMPL RRT-Connect in joint space; returns a list of joint waypoints (simplified, interpolated) or None.
+    Without OMPL: ``rrt_connect_np`` (first goal only)."""
+    try:
+        from ompl import base as ob, geometric as og, util as ou
+    except ImportError:
+        return rrt_connect_np(world, q0, goals, time_s=time_s, seed=seed, collide_kw=collide_kw, resolution=resolution)
     collide_kw = collide_kw or {}
     ou.setLogLevel(ou.LOG_WARN)
     try:

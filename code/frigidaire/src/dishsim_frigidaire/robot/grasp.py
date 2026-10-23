@@ -21,6 +21,10 @@ FOOT_R, FOOT_W = .035, .005
 RIM_INSERT_M = .025                              # rim top above the TCP
 FOOT_INSERT_M = .006                             # ring top above the TCP
 SIDE_INSET_M, SIDE_DROP_M = .008, .016           # pads 8 mm inside the rim edge, pad height centred on the rim point
+# mouth-up rim pinch per HOTEC kind: (rim radius, wall, height, rim top above the TCP); parameters.json nominal/estimated
+# values (2026-10-23 limits round). Plate: the TCP 10 mm under the rim top so the fingertips stay ~24 mm above the counter.
+KIND_RIM = {"bowl": (RIM_R, WALL, HEIGHT, RIM_INSERT_M), "cup": (.0711 / 2, .0025, .1049, .025),
+            "plate": (.2286 / 2, .0035, .040, .010)}
 UPRIGHT, INVERTED = .7, -.7                      # bowl axis z component thresholds
 AXIS_EPS = 1e-6                                  # a direction shorter than this is degenerate (plan Phase 0.5)
 
@@ -50,14 +54,18 @@ def bowl_class(T_obj):
     return "rim" if a[2] > UPRIGHT else "foot" if a[2] < INVERTED else "side"
 
 
-def bowl_grasps(T_obj, n_yaw=12):
-    """Candidate grasps [{"kind", "T_tcp", "yaw"}] for a bowl whose base-centred origin pose is ``T_obj``."""
+def bowl_grasps(T_obj, n_yaw=12, dish="bowl"):
+    """Candidate grasps [{"kind", "T_tcp", "yaw"}] for a bowl whose base-centred origin pose is ``T_obj``; ``dish``
+    cup/plate = the same mouth-up rim pinch with that kind's KIND_RIM (upright only)."""
     T_obj = np.asarray(T_obj, dtype=float)
     if not np.isfinite(T_obj).all():
         raise ValueError("non-finite bowl pose")
     o, a = T_obj[:3, 3], T_obj[:3, 2]
     unit(a, "bowl axis")                         # validated only: the values stay bit-identical to the PASS run
     kind = bowl_class(T_obj)
+    if dish != "bowl" and kind != "rim":
+        raise ValueError(f"{dish}: only the mouth-up rim pinch exists (got {kind})")
+    rim_r, wall, height, insert = KIND_RIM[dish]
     out = []
     if kind in ("rim", "foot"):
         # a direction perpendicular to the axis to start the yaw sweep
@@ -67,10 +75,10 @@ def bowl_grasps(T_obj, n_yaw=12):
             phi = 2 * np.pi * k / n_yaw
             n = np.cos(phi) * e1 + np.sin(phi) * e2                  # radial direction in the ring plane
             if kind == "rim":
-                c = o + HEIGHT * a
-                p = c + (RIM_R - WALL / 2) * n
+                c = o + height * a
+                p = c + (rim_r - wall / 2) * n
                 top = p[2]
-                p = np.array([p[0], p[1], top - RIM_INSERT_M])
+                p = np.array([p[0], p[1], top - insert])
             else:
                 p = o + (FOOT_R - FOOT_W / 2) * n                     # the ring top is the base plane (mouth down)
                 p = np.array([p[0], p[1], o[2] - FOOT_INSERT_M])
@@ -128,10 +136,10 @@ def hits_counter(T_tcp, box=COUNTER_BOX, radius=GRIPPER_RADIUS_M, length=GRIPPER
     return any(np.all(p > lo) and np.all(p < hi) for p in pts)
 
 
-def tilted_grasps(T_obj, n_yaw=12):
+def tilted_grasps(T_obj, n_yaw=12, dish="bowl"):
     """``bowl_grasps`` with the least tilt that keeps the gripper and its transit line off the counter slab."""
     out = []
-    for g in bowl_grasps(T_obj, n_yaw):
+    for g in bowl_grasps(T_obj, n_yaw, dish):
         for deg in TILTS_DEG:
             T = tilt(g["T_tcp"], deg)
             if not hits_counter(T):

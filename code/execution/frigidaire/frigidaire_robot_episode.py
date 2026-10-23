@@ -61,7 +61,51 @@ def code_hashes():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--instance", type=Path, required=True)
+    parser.add_argument("--instance", type=Path, default=None, help="required unless --grasp-gate / --place-slot")
+    parser.add_argument("--grasp-gate", choices=("bowl", "cup", "plate"), default=None,
+                        help="limits round (plans/2026-10-23-hardware-limits-mouth-up.md, Experiment 1): one mouth-up dish on "
+                             "the counter, --n trials of pick (one candidate), lift 0.15 m, hold 5 s (G3)")
+    parser.add_argument("--place-slot", choices=("bowl", "cup", "plate"), default=None,
+                        help="limits round, Experiment 2 (G4): pick from the counter, place at each --sites site of --reach, settle")
+    parser.add_argument("--n", type=int, default=10, help="trials per object (grasp gate) or per site (place-slot)")
+    parser.add_argument("--seed", type=int, default=0, help="seed of the +-5 mm counter-pose perturbation")
+    parser.add_argument("--sites", default="", help="place-slot: comma-separated site names of --reach")
+    parser.add_argument("--target", choices=("family", "level", "tilt"), default="family",
+                        help="place-slot target: the packer's pose at the site, or the dish as held (mouth up, level) at the "
+                             "site's clear height (reach.json world pose)")
+    parser.add_argument("--reach", type=Path, default=ROOT / "data/results/robot/limits_v1/reach.json")
+    parser.add_argument("--waive-dish-clearance", action="store_true",
+                        help="limits round, plate: the approach line is NOT collision-checked and the hover ignores the dish "
+                             "(the planner's 15 mm margin rejects every plate approach) so the PHYSICAL pinch is measured; "
+                             "contacts stay recorded by the harness")
+    parser.add_argument("--release", choices=("air", "down"), default="air",
+                        help="place-slot release: air = at the target pose (place()); down = the upright3 rule (place_down(): "
+                             "lowered as it hangs to the target x, y until contact, then opened); G4 is then judged against "
+                             "the dish pose at the release")
+    parser.add_argument("--plate-slide", action="store_true",
+                        help="limits round 3, grasp gate: Voysey 2021's surface slide on the plate (jaws horizontal, lower "
+                             "finger 2 mm above the counter, slide 40 mm toward the centre, close, lift) with the 15 mm "
+                             "clearance check on; only the gripper may touch the counter and the plate on the descent and slide")
+    parser.add_argument("--contact-lag", type=float, default=None,
+                        help="place_down's lag threshold read as contact (flag place_down_contact_lag, default 0.05)")
+    parser.add_argument("--down-orient", choices=("hang", "target"), default="hang",
+                        help="down release: lower the dish as it hangs (round 2) or at the target orientation (round 3)")
+    parser.add_argument("--orient", type=Path, default=ROOT / "data/results/robot/limits_v1/orient.json",
+                        help="--target tilt: the orientation sweep's cells (frigidaire_robot_reach.py --orient)")
+    parser.add_argument("--tilts", default="0,30,60,90,120,150",
+                        help="--target tilt: tilts tried per site in this order; a site stops at its first failing tilt")
+    parser.add_argument("--interleave", action="store_true",
+                        help="place-slot: trial-major order (one trial per site per lap, sites in the --sites order), so a "
+                             "run cut short leaves every site with about the same n")
+    parser.add_argument("--diag-hover", action="store_true",
+                        help="limits round 2: before the trials, count Isaac's free hover IK / approach lines per grasp at "
+                             "hovers 0.10, 0.125, 0.15 m and dump the arm model's calibration (diag_hover.json)")
+    parser.add_argument("--legacy-tolerances", action="store_true",
+                        help="R7: every blocked-motion settle tolerance at 0.08 rad (the upright3 values, plus the rig's "
+                             "settled lag): a carried, pivoted bowl lags wrist_3 by 0.042-0.044 rad after the rise and the "
+                             "insertion (limits round, 2026-10-23)")
+    parser.add_argument("--gate-racks", choices=("upper_in", "both_out"), default="upper_in",
+                        help="grasp gate rack state (upper_in = the episode's phase L: upper rack pushed in)")
     parser.add_argument("--profile", choices=("headline", "legacy_upright3"), default="headline")
     parser.add_argument("--test-case", choices=("upright3",), default=None,
                         help="R4 (benchmark relaxation): 3 upright bowls on the counter -> 2 lower-rack + 1 upper-rack "
@@ -86,13 +130,19 @@ def main():
     from isaaclab.app import AppLauncher
     AppLauncher.add_app_launcher_args(parser)
     args = parser.parse_args()
+    args.mode = "grasp_gate" if args.grasp_gate else "place_slot" if args.place_slot else None
+    if args.mode is None and args.instance is None:
+        raise SystemExit("[RESULT] FAIL --instance is required without --grasp-gate / --place-slot")
     args.cameras = bool(getattr(args, "enable_cameras", False))
     if not args.cameras and not args.no_media:
         raise SystemExit("[RESULT] FAIL counted trials record media: launch with --enable_cameras (or pass --no-media)")
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    args.run_id = args.run_id or f"{args.profile}_{args.instance.stem}_{stamp}"
+    args.run_id = args.run_id or f"{args.profile}_{args.instance.stem if args.instance else args.mode}_{stamp}"
     args.out_dir = RUNS / args.run_id
     args.trial_dir = ARTIFACTS / args.run_id / args.trial_id
+    if args.mode:                                     # the limits round keeps its records and replays together
+        args.out_dir = LIMITS / args.run_id
+        args.trial_dir = args.out_dir / "trials"
     if args.out_dir.exists() or args.trial_dir.exists():
         raise SystemExit(f"[RESULT] FAIL refusing to overwrite run {args.run_id} ({args.out_dir} or {args.trial_dir} exists)")
     args.out_dir.mkdir(parents=True)
@@ -112,8 +162,21 @@ def main():
         overrides["sleep_threshold"] = None
     if args.mount:
         overrides["mount"] = str(args.mount)
+    if args.mode:                                     # invariants recorded per trial, never abort the trial loop
+        overrides.update(invariants_abort=False, counter_cap=False)
+    if args.contact_lag is not None:
+        overrides["place_down_contact_lag"] = float(args.contact_lag)
+    if args.legacy_tolerances:
+        overrides.update(tol_approach=.08, tol_joint_move_held=.08, tol_rrt=.08, tol_rise=.08, tol_lift=.08, tol_reaim=.08,
+                         settled_lag_rad=.08)       # place()'s insertion line settles with the rig default
+    if args.mode == "grasp_gate":                     # G3: hold 5 s (the 0.15 m lift: pick's lift_m)
+        overrides.update(hold_window_s=5.)
     flags = F.resolve(args.profile, **overrides)
-    inst = json.loads(args.instance.read_text())
+    if args.mode:
+        kind = args.grasp_gate or args.place_slot
+        inst = limits_instance(kind)
+    else:
+        inst = json.loads(args.instance.read_text())
     if flags.test_case:
         inst = test_instance(inst, flags.test_case)
     iid = inst["instance_id"]
@@ -146,6 +209,25 @@ def main():
         release_sim_for_close()
     finally:
         app.close()
+
+
+LIMITS = ROOT / "data/results/robot/limits_v1"
+LIMITS_COUNTER_XY = (.20, -.16)       # = frigidaire_robot_reach.COUNTER_XY (the plate's edge stays 26 mm inside the slab)
+PIVOT_DEG = 10.                       # a held dish rotated more than this in the hand after the lift counts as "pivot"
+TRAJ_EVERY = 12                       # ticks between replay samples (10 fps of simulated time at 120 Hz)
+
+
+def limits_instance(kind):
+    """One mouth-up dish of ``kind`` on the counter, on the benchmark's extended baseline (no instance file needed)."""
+    base = json.loads((ROOT / "data/results/benchmark/frigidaire_hotec/baseline/result.json").read_text())
+    snap = base.get("snapshot", base)
+    oid = f"{kind}_01"
+    pose = {"position_m": [LIMITS_COUNTER_XY[0], LIMITS_COUNTER_XY[1], .914 + .002], "quaternion_xyzw": [0., 0., 0., 1.]}
+    poses = {**{n: v for n, v in snap["poses"].items() if not n.startswith(("plate_", "bowl_", "cup_"))}, oid: pose}
+    return {"instance_id": f"limits_{kind}", "tier": "easy", "baseline": snap, "initial_snapshot": {"poses": poses},
+            "objects": [{"object_id": oid, "kind": kind, "start": "Counter", "rack": "LowerRack", "pose_world": pose}],
+            "counter": {"start_count": 1, "cap": 3}, "support": [],
+            "goal": {"objects": {oid: {"rack": "LowerRack", "slot": "counter", "settled_pose_world": pose}}, "order": []}}
 
 
 TEST_COUNTER_XY = ((.15, -.20), (.35, -.20), (.25, .00))        # upright on the counter (front edge y -0.30)
@@ -558,21 +640,31 @@ def episode(args, inst, report, flags, closers=None):
                         foreign.add(k_[1] if k_[0] == oid else k_[0])
         return drift, not foreign, sorted(foreign)
 
-    def pick(oid, att):
+    lift_m = .15 if args.mode == "grasp_gate" else None      # G3 lift height (None: back to the hover)
+
+    def pick(oid, att, tries=6, waive=False):
         sync_world()
         T_obj = T_now(oid)
-        cands = G.tilted_grasps(T_obj)
+        cands = G.tilted_grasps(T_obj, dish=kinds[oid])
         scored = []
         base_xy = np.asarray(mount["base"][:2])
+        cand_why = []
         for g in cands:
             H = G.hover_along(g["T_tcp"], flags.hover_m)
-            for q_h in goal_qs(H)[:4]:
+            hov = goal_qs(H, **({"ignore": (oid,)} if waive else {}))[:4]
+            cand_why.append(f"{len(hov)} free hover IK")
+            for q_h in hov:
                 qs_line = rig.line_q(H, g["T_tcp"], 100, q_h)
                 if qs_line is None:
+                    cand_why[-1] += "; line IK jump"
                     continue
                 d = float(np.linalg.norm(g["T_tcp"][:3, 3] - H[:3, 3]))
-                ok = all(arm.free(q, gripper_may_touch=(oid,) if d * (1 - i / 99) < ALLOW_CONTACT_M else ())
-                         for i, q in enumerate(qs_line))
+                kws = [({"ignore": (oid,)} if waive else
+                        {"gripper_may_touch": (oid,) if d * (1 - i / 99) < ALLOW_CONTACT_M else ()}) for i in range(len(qs_line))]
+                bad = None if waive else next((i for i, q in enumerate(qs_line) if not arm.free(q, **kws[i])), None)
+                ok = bad is None
+                if not ok:
+                    cand_why[-1] += f"; line hits at {bad}/100 {arm.collisions(qs_line[bad], **kws[bad])[:2]}"
                 if ok:
                     to_base = base_xy - T_obj[:2, 3]
                     side = g["T_tcp"][:2, 3] - T_obj[:2, 3]
@@ -587,11 +679,11 @@ def episode(args, inst, report, flags, closers=None):
                 info.append({"kind": g["kind"], "tilt": g.get("tilt_deg"), "tcp": np.round(g["T_tcp"][:3, 3], 3).tolist(),
                              "ik_grasp": len(sg), "hit_grasp": arm.collisions(sg[0], ignore=(oid,), first=False)[:4] if sg else None,
                              "ik_hover": len(sh), "hit_hover": arm.collisions(sh[0], first=False)[:4] if sh else None})
-            return None, f"no collision-free grasp ({len(cands)} candidates): {info}"
+            return None, f"no collision-free grasp ({len(cands)} candidates): {info} per candidate: {cand_why}"
         scored.sort(key=lambda s: s[0])
         why = None
         tried = []
-        for _, g, q_h, qs_line in scored[:6]:
+        for _, g, q_h, qs_line in scored[:tries]:
             rig.gripper(False)
             H = G.hover_along(g["T_tcp"], flags.hover_m)
             tlog.set(phase="transit to the pre-grasp")
@@ -630,7 +722,8 @@ def episode(args, inst, report, flags, closers=None):
             z0 = T_now(oid)[2, 3]
             M_close = np.linalg.inv(rig.tcp()) @ T_now(oid)
             tlog.set(phase="lift")
-            qs_up = rig.line_q(rig.tcp(), H, 80, rig.q())
+            H_up = G.hover_along(g["T_tcp"], lift_m) if lift_m else H
+            qs_up = rig.line_q(rig.tcp(), H_up, 80, rig.q())
             ok_lift = qs_up is not None and rig.follow(qs_up, settle_tol=flags.tol_lift)   # the dish swings on the pinch
             key("lift-off")
             tlog.set(phase="in-hand settle")
@@ -666,6 +759,108 @@ def episode(args, inst, report, flags, closers=None):
             rig.gripper(False)
             rig.step(60)
         return None, f"{why} (tried {len(tried)}: {tried})"
+
+    SLIDE_M, SLIDE_START_OUT_M, SLIDE_LIFT_ABOVE_M = .040, .010, .080
+
+    def slide_pick(oid, att):
+        """Voysey 2021's surface slide on a flat dish (round 3, the plate): the closing axis vertical, the open gripper's
+        lowest point 2 mm above the counter, the fingertips (TCP) SLIDE_START_OUT_M outside the rim, a 40 mm slide toward
+        the centre, close on the edge, lift 0.15 m, the hold gate. The 15 mm clearance stays on for the arm links and for
+        the hover; only the gripper may come near the counter and the plate on the descent and the slide."""
+        sync_world()
+        T_obj = T_now(oid)
+        o = T_obj[:3, 3]
+        rim_r = G.KIND_RIM[kinds[oid]][0]
+        inv_tcp = np.linalg.inv(rig.T_w3_tcp)
+        verts = np.concatenate([np.asarray(v) for _, v in arm.hulls["gripper"]])
+        v_tcp = (inv_tcp @ np.c_[verts, np.ones(len(verts))].T).T[:, :3]
+        d_low = float(-v_tcp[:, 1].min())                   # open gripper below the TCP along -y (y = up below)
+        top = B.COUNTER["top_z_m"]
+        base_xy = np.asarray(mount["base"][:2])
+        cands = []
+        for k in range(12):
+            phi = 2 * np.pi * k / 12
+            n = np.array([np.cos(phi), np.sin(phi), 0.])
+            T = np.eye(4)
+            T[:3, 1] = [0., 0., 1.]                          # closing axis vertical: the jaws horizontal
+            T[:3, 2] = -n                                    # approach toward the plate centre
+            T[:3, 0] = np.cross(T[:3, 1], T[:3, 2])
+            T[:3, 3] = o + (rim_r + SLIDE_START_OUT_M) * n
+            T[2, 3] = top + .002 + d_low
+            T_end = T.copy()
+            T_end[:3, 3] -= SLIDE_M * n
+            facing = float(np.dot(n[:2], base_xy - o[:2]) / (np.linalg.norm(base_xy - o[:2]) + 1e-9))
+            cands.append((-facing, k, T, T_end))
+        cands.sort(key=lambda c: c[0])
+        allow = {"gripper_may_touch": ("Counter", oid)}
+        info = []
+        for _, k, T, T_end in cands:
+            H = T.copy()
+            H[2, 3] += SLIDE_LIFT_ABOVE_M
+            hov = goal_qs(H)
+            if not hov:
+                info.append(f"yaw {k}: no collision-free hover IK")
+                continue
+            line = rig.line_q(H, T, 50, hov[0])
+            slide = None if line is None else rig.line_q(T, T_end, 40, line[-1])
+            if line is None or slide is None:
+                info.append(f"yaw {k}: IK branch jump on the descent or the slide")
+                continue
+            bad = next((q for q in line + slide if not arm.free(q, **allow)), None)
+            if bad is not None:
+                info.append(f"yaw {k}: {arm.collisions(bad, **allow)[:2]}")
+                continue
+            tlog.set(phase="transit to the slide start")
+            why = transit_to(H, q_hover=hov[0])
+            if why:
+                return None, f"no approach: {why}"
+            tlog.set(phase="slide descent")
+            qs_d = rig.line_q(rig.tcp(), T, 50, rig.q())
+            if qs_d is None or not rig.follow(qs_d, settle_tol=flags.tol_approach):
+                return None, f"no approach: blocked on the descent {getattr(rig, 'last_fail', None)}"
+            tlog.set(phase="slide")
+            qs_s = rig.line_q(rig.tcp(), T_end, 40, rig.q())
+            slid = qs_s is not None and rig.follow(qs_s, settle_tol=flags.tol_approach)
+            partners = harness.set_carried(oid)
+            tlog.set(phase="close")
+            theta = rig.gripper(True)
+            tlog.write("note", what="closed (slide)", jaw_rad=round(theta, 4), at_close_partners=partners, yaw=k, slid=bool(slid))
+            if not (flags.jaw_wall_rad[0] <= theta < flags.jaw_wall_rad[1]):
+                harness.clear_carried()
+                rig.gripper(False)
+                return None, f"jaws at {theta:.2f} rad: no wall between the pads (slide yaw {k}, slid {bool(slid)})"
+            z0 = T_now(oid)[2, 3]
+            M_close = np.linalg.inv(rig.tcp()) @ T_now(oid)
+            tlog.set(phase="lift")
+            up = rig.tcp()
+            up[2, 3] += .15
+            qs_up = rig.line_q(rig.tcp(), up, 80, rig.q())
+            ok_lift = qs_up is not None and rig.follow(qs_up, settle_tol=flags.tol_lift)
+            tlog.set(phase="in-hand settle")
+            rig.step(flags.in_hand_settle_ticks)
+            T_t, T_o = rig.tcp(), T_now(oid)
+            M_set = np.linalg.inv(T_t) @ T_o
+            gate = {"rise_mm": round(float(T_o[2, 3] - z0) * 1e3, 2), "slid": bool(slid), "yaw": k,
+                    "dist_to_tcp_mm": round(float(np.linalg.norm(T_o[:3, 3] - T_t[:3, 3])) * 1e3, 2),
+                    "settle_displacement_mm": round(float(np.linalg.norm(M_set[:3, 3] - M_close[:3, 3])) * 1e3, 2),
+                    "settle_rotation_deg": round(R.rot_angle_deg(M_close, M_set), 2), "jaw_rad": round(theta, 4),
+                    "lift_ok": bool(ok_lift), "in_hand_settle_ticks": flags.in_hand_settle_ticks, "d_low_mm": round(d_low * 1e3, 1)}
+            tlog.set(phase="hold window")
+            nh = round(flags.hold_window_s / backend.dt)
+            drift, in_hand, foreign = in_hand_window(oid, nh)
+            held, rule = F.hold_verdict(flags, in_hand=in_hand, window_s=nh * backend.dt, window_drift_m=drift)
+            gate.update(window_s=round(nh * backend.dt, 4), drift_mm=round(drift * 1e3, 3), in_hand=in_hand,
+                        foreign_contacts=foreign, held=held, rule=rule)
+            tlog.write("hold", **gate)
+            att.setdefault("holds", []).append(gate)
+            if held:
+                return {"grasp": "slide", "yaw": float(k), "tilt_deg": None, "theta": theta, "M": np.linalg.inv(T_t) @ T_o}, None
+            harness.clear_carried()
+            rig.gripper(False)
+            rig.step(60)
+            return None, (f"not held after the lift (slide yaw {k}, jaws {theta:.2f}, lift ok {ok_lift}, dish rose "
+                          f"{1e3 * (T_o[2, 3] - z0):.0f} mm; gate {rule})")
+        return None, f"no collision-free slide approach (12 yaws): {info}"
 
     def release_and_retreat(H):
         harness.clear_carried()                                    # D4 window ends at the release command
@@ -745,6 +940,7 @@ def episode(args, inst, report, flags, closers=None):
                 contact = {"waypoint": i, "of": len(qs), "hand_closer_mm": round(closer * 1e3, 1), "lag": round(rig.lag(), 3)}
                 break
         held["contact"] = contact
+        held["T_release"] = T_now(oid)                # the dish pose when the pads open (limits round 2 judge)
         release_and_retreat(H)
         up = rig.line_q(rig.tcp(), H, 50, rig.q())
         if up is not None:
@@ -922,6 +1118,44 @@ def episode(args, inst, report, flags, closers=None):
                 return f"not racked in {goal_rack.get(att.get('dish'))} (got {j.get('racked_in')})"
             return f"out of tolerance {j.get('distance')} (lat mm, dz mm, tilt deg; limits {j.get('tolerance')})"
         return None
+
+    def hover_diag(hovers=(.10, .125, .15)):
+        """Isaac's side of the hover disagreement: per grasp and hover, the IK count, the free hover IK and whether one
+        approach line is free (the pick's own rule), plus the arm model's calibration and hull bounds."""
+        sync_world()
+        oid = ids[0]
+        T_obj = T_now(oid)
+        out = {"T_obj": T_obj.tolist(), "rig_q": rig.q().tolist(), "T_wb": T_wb.tolist(),
+               "X_link": {k: np.asarray(v).tolist() for k, v in arm.X.items()},
+               "hull_bounds": {k: [np.min([np.min(v, 0) for _, v in lst], 0).tolist(), np.max([np.max(v, 0) for _, v in lst], 0).tolist(), len(lst)]
+                               for k, lst in arm.hulls.items()}, "hovers": {}}
+        for hv in hovers:
+            rows_ = []
+            for g in G.tilted_grasps(T_obj, dish=kinds[oid]):
+                H = G.hover_along(g["T_tcp"], hv)
+                qs = goal_qs(H)
+                ok, why_ = False, None
+                for q_h in qs[:4]:
+                    line = rig.line_q(H, g["T_tcp"], 100, q_h)
+                    if line is None:
+                        why_ = "IK jump"
+                        continue
+                    d = float(np.linalg.norm(g["T_tcp"][:3, 3] - H[:3, 3]))
+                    bad = next((i for i, q in enumerate(line) if not arm.free(
+                        q, gripper_may_touch=(oid,) if d * (1 - i / 99) < ALLOW_CONTACT_M else ())), None)
+                    if bad is None:
+                        ok = True
+                        break
+                    why_ = f"hits at {bad}: {arm.collisions(line[bad], gripper_may_touch=(oid,))[:2]}"
+                rows_.append({"yaw": g["yaw"], "ik": len(rig.ik_all(H, rig.q())), "free_hover": len(qs), "approach_ok": ok,
+                              "why": why_, "q_free": [q.tolist() for q in qs[:4]]})
+            out["hovers"][f"{hv:.3f}"] = rows_
+        return out
+
+    if args.mode:
+        return limits_trials(args, report, backend, robot, rig, harness, tlog, hook, inst, kinds, ids, goal_world, q_home,
+                             pick, place, bench_settle, T_now, np, K, B, EXTENSION, RACK_JOINT, T_of, place_down, hover_diag,
+                             slide_pick)
 
     # ---------------------------------------------------------------- phase L: upper rack in (R3, scripted)
     t_run = time.monotonic()
@@ -1186,6 +1420,251 @@ def episode(args, inst, report, flags, closers=None):
                trial_sim_s=round(harness.trial_time(), 3), trial_wall_s=round(tlog.wall(), 1),
                video=None if media is None else {"path": "video.mp4", "frames": media.frames, "fps": VIDEO_FPS},
                final_poses=report["final_poses"], final_components=report["final_components"])
+    tlog.close()
+    backend.trace.close()
+    backend.trace = None
+
+
+def robot_meshes(robot):
+    """{body index: [collision-mesh points in that body's frame]} for the Warp replay (authored transforms within one
+    rigid body are static; the bodies are placed per frame by their logged poses)."""
+    import numpy as np
+    import omni.usd
+    from pxr import Usd, UsdGeom, UsdPhysics
+    stage = omni.usd.get_context().get_stage()
+    cache = UsdGeom.XformCache()
+    paths = list(robot.root_physx_view.link_paths[0])
+    out = {}
+    for prim in Usd.PrimRange(stage.GetPrimAtPath("/World/Robot"), Usd.TraverseInstanceProxies()):
+        if not (prim.HasAPI(UsdPhysics.CollisionAPI) and prim.IsA(UsdGeom.Mesh)):
+            continue
+        body = prim
+        while body and body.IsValid() and not body.HasAPI(UsdPhysics.RigidBodyAPI):
+            body = body.GetParent()
+        if not body or not body.IsValid() or str(body.GetPath()) not in paths:
+            continue
+        rel = np.linalg.inv(np.asarray(cache.GetLocalToWorldTransform(body)).T) @ np.asarray(cache.GetLocalToWorldTransform(prim)).T
+        pts = np.asarray(UsdGeom.Mesh(prim).GetPointsAttr().Get(), dtype=float)
+        loc = (rel @ np.c_[pts, np.ones(len(pts))].T).T[:, :3]
+        out.setdefault(paths.index(str(body.GetPath())), []).append(np.round(loc, 5).tolist())
+    return {"body_paths": paths, "hulls": out}
+
+
+def limits_trials(args, report, backend, robot, rig, harness, tlog, hook, inst, kinds, ids, goal_world, q_home,
+                  pick, place, bench_settle, T_now, np, K, B, EXTENSION, RACK_JOINT, T_of, place_down=None, hover_diag=None,
+                  slide_pick=None):
+    """plans/2026-10-23-hardware-limits-mouth-up.md: the grasp gate (G3) or the placement trials (G4) on one dish.
+    Each trial: the arm teleported home, the dish teleported to the counter spot +-5 mm (seeded), the racks set for the
+    cell, 300 ticks, then the guard re-armed (a trial counts only when no harness invariant fired in it)."""
+    from dishsim_frigidaire.random_poses import compose_pose
+    oid = ids[0]
+    kind = kinds[oid]
+    rng = np.random.default_rng(args.seed)
+    harness.abort_on = False
+    args.trial_dir.mkdir(parents=True, exist_ok=True)
+    (args.trial_dir / "robot_meshes.json").write_text(json.dumps(robot_meshes(robot)) + "\n")
+    traj = {"on": False, "rows": []}
+
+    def traj_tick(frames):
+        harness.on_tick(frames)
+        if traj["on"] and backend.tick_index % TRAJ_EVERY == 0:
+            d, lo, up = frames[oid], frames["LowerRack"], frames["UpperRack"]
+            traj["rows"].append((backend.tick_index * backend.dt, robot.data.body_link_pos_w[0].cpu().numpy().copy(),
+                                 robot.data.body_link_quat_w[0].cpu().numpy().copy(),
+                                 np.r_[d["position_m"], d["quaternion_xyzw"]], np.r_[lo["position_m"], lo["quaternion_xyzw"]],
+                                 np.r_[up["position_m"], up["quaternion_xyzw"]], float(rig.theta)))
+    hook["tick"] = traj_tick
+
+    def save_traj(tag):
+        r = traj["rows"]
+        traj["on"] = False
+        if not r:
+            return None
+        path = args.trial_dir / f"traj_{tag}.npz"
+        np.savez_compressed(path, t=np.array([x[0] for x in r]), body_pos=np.stack([x[1] for x in r]),
+                            body_quat_wxyz=np.stack([x[2] for x in r]), dish=np.stack([x[3] for x in r]),
+                            lower=np.stack([x[4] for x in r]), upper=np.stack([x[5] for x in r]), jaw=np.array([x[6] for x in r]))
+        traj["rows"] = []
+        return str(path.relative_to(ROOT))
+
+    def set_racks(rack):
+        """A lower-rack cell has the upper rack pushed in, an upper-rack cell the lower rack (None = both out)."""
+        want = {r: EXTENSION[r] for r in ("LowerRack", "UpperRack")}
+        if rack is not None:
+            want["UpperRack" if rack == "LowerRack" else "LowerRack"] = 0.
+        js = backend.joints()
+        move = {RACK_JOINT[r]: v for r, v in want.items() if abs(js[RACK_JOINT[r]] - v) > .005}
+        if move:
+            backend.ramp(move, f"limits_racks_{rack}")
+
+    def reset(t, rack=None):
+        harness.armed = False
+        harness.clear_carried()
+        rig.gripper(False)
+        rig.teleport_arm(q_home)
+        rig.step(5)                                    # the PD targets follow the teleport BEFORE a rack ramp: a ramp
+        set_racks(rack)                                # with stale targets swept the arm through the moving upper rack
+        d = rng.uniform(-.005, .005, 2)
+        pose = {"position_m": [LIMITS_COUNTER_XY[0] + d[0], LIMITS_COUNTER_XY[1] + d[1], .914 + .002],
+                "quaternion_xyzw": [0., 0., 0., 1.]}
+        backend.set_rigid_pose(backend.objects[oid], pose)
+        rig.step(K.RESET_TICKS)
+        harness.pad_max_interval = {"pad_L": 0., "pad_R": 0.}
+        harness.arm_guard()
+        return [round(float(v) * 1e3, 2) for v in d]
+
+    def outcome(held, why, gate):
+        if held is not None:
+            return "pivot" if gate and gate.get("settle_rotation_deg", 0.) >= PIVOT_DEG else "hold"
+        w = why or ""
+        if (w.startswith(("no collision-free grasp", "no approach", "no collision-free slide")) or "no path" in w
+                or "safe height" in w or "no collision-free IK" in w):
+            return "no-reach"
+        if "jaws at" in w:
+            return "miss"
+        if "not held" in w:
+            return "slip"
+        if "blocked on the approach" in w:
+            return "blocked"
+        return "other"
+
+    if args.diag_hover and hover_diag is not None:
+        set_racks("LowerRack")
+        rig.step(K.RESET_TICKS)
+        (args.out_dir / "diag_hover.json").write_text(json.dumps(hover_diag()) + "\n")
+        print("[INFO] hover diagnostic written", flush=True)
+    rows_path = args.out_dir / "trials.jsonl"
+    rows = []
+    jobs = [(None, t) for t in range(args.n)]
+    if args.mode == "place_slot":
+        reach = json.loads(args.reach.read_text())
+        want = [x for x in args.sites.split(",") if x]
+        named = {s["site"]: s for s in reach["sites"][kind]}
+        if set(want) - set(named):
+            raise RuntimeError(f"unknown sites {sorted(set(want) - set(named))}")
+        sites = [named[x] for x in want]
+        jobs = ([(s, t) for t in range(args.n) for s in sites] if args.interleave
+                else [(s, t) for s in sites for t in range(args.n)])
+    t_run = time.monotonic()
+    orient = json.loads(args.orient.read_text()) if args.target == "tilt" else None
+
+    def one(k, site, t, tilt=None, cell=None):
+        t0, s0 = time.monotonic(), backend.tick_index
+        tlog.set(move=k + 1, dish=oid, attempt=0, phase="trial reset")
+        rack = site["rack"] if site else ("LowerRack" if args.gate_racks == "upper_in" else None)
+        perturb = reset(t, rack)
+        n_viol = len(harness.violations)
+        traj["rows"], traj["on"] = [], True
+        att = {"attempt": 0, "dish": oid}
+        row = {"mode": args.mode, "kind": kind, "trial": t, "perturb_mm": perturb, "site": site["site"] if site else None,
+               "rack": rack, "racks": "upper rack pushed in" if rack == "LowerRack" else "lower rack pushed in"
+               if rack == "UpperRack" else "both racks extended", "waive_dish_clearance": bool(args.waive_dish_clearance),
+               "tilt_deg": tilt, "grasp_family": "slide" if args.plate_slide else "rim pinch"}
+        if args.plate_slide:
+            held, why = slide_pick(oid, att)
+        else:
+            held, why = pick(oid, att, tries=1 if args.mode == "grasp_gate" else 6, waive=args.waive_dish_clearance)
+        gate = (att.get("holds") or [None])[-1]
+        row.update(outcome=outcome(held, why, gate), g3=held is not None, why=why, hold=gate,
+                   grasp=None if held is None else {k_: v for k_, v in held.items() if k_ != "M"},
+                   pad_N_end=dict(harness.contacts.pad_N), pad_N_max=dict(harness.pad_max_interval))
+        if site is not None and held is not None:
+            frame = backend.poses()[site["rack"]]
+            if args.target == "tilt":                  # the orientation sweep's pose, turned to its first G2 yaw
+                T_goal = T_of(cell["world"]["position_m"], cell["world"]["quaternion_xyzw"])
+                phi = cell["phi_rad"]
+                Rz = np.array([[np.cos(phi), -np.sin(phi), 0.], [np.sin(phi), np.cos(phi), 0.], [0., 0., 1.]])
+                T_goal[:3, :3] = T_goal[:3, :3] @ Rz
+                row["phi_rad"] = phi
+            elif args.target == "level":               # world pose on the extended baseline frame of the site's rack
+                lv = site["world"]["level"]
+                T_goal = T_of(lv["position_m"], lv["quaternion_xyzw"])
+                row["rack_frame_live"] = frame
+            else:
+                p, q = compose_pose(frame["position_m"], frame["quaternion_xyzw"], site["local"]["position_m"],
+                                    site["local"]["quaternion_xyzw"])
+                T_goal = T_of(p.tolist(), q.tolist())
+            row["target"] = args.target
+            row["release"] = args.release
+            before = backend.poses()
+            if args.release == "down":                 # lowered until contact, then opened (upright3 rule, R5)
+                if args.down_orient == "target":
+                    T_t = np.array(T_goal, copy=True)
+                else:                                  # round 2: as it hangs
+                    T_t = np.array(rig.tcp() @ held["M"], copy=True)
+                    T_t[:3, 3] = T_goal[:3, 3]
+                goal_world[oid] = T_t
+                pw = place_down(oid, T_t, held)
+                T_judge = held.get("T_release", T_t)
+                row.update(contact=held.get("contact"), release_pose=np.round(T_judge[:3, 3], 4).tolist(),
+                           below_target_mm=round(float(T_goal[2, 3] - T_judge[2, 3]) * 1e3, 1),
+                           release_tilt_deg=round(float(np.degrees(np.arccos(np.clip(T_judge[2, 2], -1., 1.)))), 1),
+                           down_orient=args.down_orient)
+            else:
+                goal_world[oid] = T_goal
+                pw = place(oid, T_goal, held)
+                T_judge = T_goal
+            goal_world[oid] = T_judge
+            judge = bench_settle(oid, "goal", T_judge, before)
+            T_fin = T_now(oid)
+            row["final_tilt_deg"] = round(float(np.degrees(np.arccos(np.clip(T_fin[2, 2], -1., 1.)))), 1)
+            row.update(place_why=pw, judge={k_: judge.get(k_) for k_ in ("settle", "at_target", "distance", "tolerance")},
+                       g4=bool(pw is None and judge["settle"]["passed"] and judge["at_target"]))
+        elif site is not None:
+            row["g4"] = False
+        viol = harness.violations[n_viol:]
+        row["invariants"] = sorted({v["name"] for v in viol})
+        row["counted"] = not row["invariants"]
+        tag = (f"{site['site']}_{args.target}{'' if tilt is None else int(tilt)}{'_down' if args.release == 'down' else ''}"
+               if site else ("slide" if args.plate_slide else "gate"))
+        row["traj"] = save_traj(f"{kind}_{tag}_s{args.seed}_t{t:02d}".replace("@", "_"))
+        row["sim_s"] = round((backend.tick_index - s0) * backend.dt, 2)
+        row["wall_s"] = round(time.monotonic() - t0, 1)
+        rows.append(row)
+        with open(rows_path, "a") as f:
+            f.write(json.dumps(row, default=lambda o: o.tolist() if hasattr(o, "tolist") else str(o)) + "\n")
+        print(f"[INFO] trial {k + 1} {kind} {row['site'] or 'counter'}{'' if tilt is None else f' tilt {tilt}'} t{t}: "
+              f"{row['outcome']}{'' if site is None else ' G4 ' + str(row.get('g4'))} jaw {None if not gate else gate.get('jaw_rad')} "
+              f"pivot {None if not gate else gate.get('settle_rotation_deg')} drift {None if not gate else gate.get('drift_mm')} "
+              f"inv {row['invariants']} {row['wall_s']} s  why {str(why)[:160]}", flush=True)
+        return row
+
+    if args.target == "tilt":                          # per site: tilts in order, stop at the first failing tilt
+        k = 0
+        cells = {(c["site"], c["tilt_deg"]): c for c in orient["cells"][kind]}
+        tilts = [float(x) for x in args.tilts.split(",")]
+        report["tilt_runs"] = []
+        for site in sites:
+            for tilt in tilts:
+                cell = cells.get((site["site"], tilt))
+                if cell is None or cell.get("gate") != "G2":
+                    report["tilt_runs"].append({"site": site["site"], "tilt_deg": tilt, "stop": "kit-free",
+                                                "gate": None if cell is None else cell.get("gate"),
+                                                "why": None if cell is None else cell.get("why")})
+                    with open(args.out_dir / "tilt_stops.jsonl", "a") as f:
+                        f.write(json.dumps(report["tilt_runs"][-1]) + "\n")
+                    print(f"[INFO] {site['site']} tilt {tilt}: Kit-free {None if cell is None else cell.get('gate')} -> skipped", flush=True)
+                    continue                           # a Kit-free failure is recorded; only an Isaac 0/n ends the site
+                g4 = 0
+                for t in range(args.n):
+                    g4 += bool(one(k, site, t, tilt, cell).get("g4"))
+                    k += 1
+                report["tilt_runs"].append({"site": site["site"], "tilt_deg": tilt, "g4": g4, "n": args.n})
+                if g4 == 0:                            # recorded; the next tilt may still fit the tines better
+                    with open(args.out_dir / "tilt_stops.jsonl", "a") as f:
+                        f.write(json.dumps({"site": site["site"], "tilt_deg": tilt, "stop": "isaac", "g4": 0, "n": args.n}) + "\n")
+    else:
+        for k, (site, t) in enumerate(jobs):
+            one(k, site, t)
+    report["trials"] = rows
+    report["seconds_wall"] = round(time.monotonic() - t_run, 1)
+    n_g3 = sum(r["g3"] for r in rows)
+    n_g4 = sum(bool(r.get("g4")) for r in rows)
+    report["result"] = "PASS"
+    report["summary"] = {"trials": len(rows), "g3": n_g3, "g4": n_g4 if args.mode == "place_slot" else None,
+                         "outcomes": {o: sum(r["outcome"] == o for r in rows) for o in sorted({r["outcome"] for r in rows})},
+                         "counted": sum(r["counted"] for r in rows)}
+    print(f"[RESULT] PASS limits {args.mode} {kind}: {report['summary']}", flush=True)
     tlog.close()
     backend.trace.close()
     backend.trace = None
