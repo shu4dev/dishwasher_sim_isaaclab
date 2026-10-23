@@ -14,8 +14,10 @@ until the blocked step. mp4 (H.264 through imageio, as dishsim.media.VideoWriter
 
 Writes <out>/witness.mp4 (the fresh-process rebuild that certified the witness, poster witness.png), <out>/load.png (four
 labelled views), on disk only <out>/conf_<b>.mp4 per supported dish and <out>/access_<a>__<b>.png per access hit, and
-<out>/clips.json. --views front,side renders only the access stills, level from the door side and from +x along the
-plate row (access_<a>__<b>_front.png, _side.png; Stage.axis_view):
+<out>/clips.json. --initial <pair.json> renders only <out>/initial.png, the sampler pair's initial configuration (counter
+stacks on the worktop slab and the rack drops, four labelled views; initial_image). --views front,side renders only the
+access stills, level from the door side and from +x along the plate row (access_<a>__<b>_front.png, _side.png;
+Stage.axis_view):
 
     code/util/run_py.sh code/planner/frigidaire/frigidaire_dependency_clips.py --record data/results/dot_rules/dependency/samples_v5/r05_00027.json --out data/media/dot_rules/dependency_samples_v5/r05_00027 --views front,side
 """
@@ -35,6 +37,19 @@ import frigidaire_dot_rules_render as R  # noqa: E402  (Warp; R.B is frigidaire_
 W, H, HEAD, FPS, HOLD = 640, 432, 48, 13, 6      # render size, caption bar, playback, frames held at a segment's end
 GREY, RED = (.66, .67, .70), (.86, .16, .16)
 PARK_X = 2.
+RACKS = ("LowerRack", "UpperRack", "SilverwareBasket")
+LOAD_PANELS = (("oblique", RACKS, "oblique"), ("top: lower rack", ("LowerRack", "SilverwareBasket"), "top"),
+               ("top: upper rack", ("UpperRack",), "top"), ("front", RACKS, "front"))
+INITIAL_PANELS = (("counter, from the door side", ("Counter",), "counter"), ("racks (pushed in)", RACKS, "oblique"),
+                  ("top: lower rack", ("LowerRack", "SilverwareBasket"), "top"), ("top: upper rack", ("UpperRack",), "top"))
+
+
+def box_tris(center, size):
+    """The 12 triangles of an axis-aligned box (the counter slab)."""
+    v = np.asarray(center, float) + .5 * np.asarray(size, float) * np.array(
+        [[x, y, z] for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)], float)
+    return v[np.array([(0, 1, 3), (0, 3, 2), (4, 6, 7), (4, 7, 5), (0, 4, 5), (0, 5, 1), (2, 3, 7), (2, 7, 6),
+                       (0, 2, 6), (0, 6, 4), (1, 5, 7), (1, 7, 3)])]
 
 
 def short(i):
@@ -52,7 +67,8 @@ class Stage:
         from dishsim_frigidaire import exposure as E
         from dishsim_frigidaire.asset import BODY_POSITIONS
         from dishsim_frigidaire.random_poses import compose_pose, relative_pose
-        self.E, self.body, self.compose, self.relative = E, BODY_POSITIONS, compose_pose, relative_pose
+        self.E, self.compose, self.relative = E, compose_pose, relative_pose
+        self.body = {**BODY_POSITIONS, "Counter": (0., 0., 0.)}     # counter dishes: world = model frame (initial_image)
         parts = [E.component_triangles(n) + np.asarray(BODY_POSITIONS[n]) for n in ("LowerRack", "UpperRack")]
         parts.append(E.posed(E.component_triangles("SilverwareBasket"),
                              np.asarray(BODY_POSITIONS["SilverwareBasket"], float), np.asarray(E.IDENTITY, float)))
@@ -60,6 +76,9 @@ class Stage:
         self.static = np.concatenate(parts).astype(np.float32)
         self.static_obj = np.concatenate([np.full(len(p), k, np.int32) for k, p in enumerate(parts)])
         self.static_cols = [(.80, .80, .82), (.80, .80, .82), (.62, .62, .66)]
+        if record.get("counter"):                               # the start's worktop slab, for views() only
+            self.parts = parts + [box_tris(record["counter"]["center_m"], record["counter"]["size_m"])]
+            self.static_cols.append((.74, .68, .60))
         ents = record.get("entries_chosen") or record["entries"]     # a re-posed dish may have changed rack
         self.kind = {e["id"]: e["kind"] for e in ents}
         self.rack = {e["id"]: e["rack"] for e in ents}
@@ -90,20 +109,21 @@ class Stage:
         return R.render(np.concatenate(tris), np.concatenate(objs), np.asarray(cols, np.float32), self.eye,
                         self.target, W=W, H=H)
 
-    def views(self, poses, colors):
+    def views(self, poses, colors, panels=LOAD_PANELS):
         """The load from four angles, 2 x 2 (plans/2026-10-16-labelled-views-overlap-rule.md): the oblique view of
         frame(), a top view of the lower rack (with the basket) and of the upper rack (each hides the other rack), a front
-        view; every dish labelled with its short id at its visual centroid, white with a dark outline."""
-        names = ("LowerRack", "UpperRack", "SilverwareBasket")
+        view; every dish labelled with its short id at its visual centroid, white with a dark outline. ``panels``
+        (title, parts, how) picks other views: INITIAL_PANELS adds the counter slab from the door side ("counter")."""
+        names = (*RACKS, "Counter")[:len(self.parts)]
         tan_h, out = float(np.tan(np.radians(34.) / 2)), []    # R.render's default field of view
-        for title, racks, how in (("oblique", names, "oblique"), ("top: lower rack", ("LowerRack", "SilverwareBasket"), "top"),
-                                  ("top: upper rack", ("UpperRack",), "top"), ("front", names, "front")):
+        for title, racks, how in panels:
             tris, objs, cols, cent = [], [], [], {}
             for k, n in enumerate(names):
                 if n in racks:
                     tris.append(self.parts[k].astype(np.float32))
                     objs.append(np.full(len(self.parts[k]), len(cols), np.int32))
                     cols.append(self.static_cols[k])
+            n_static = len(tris)
             for i, (p, q) in poses.items():
                 if p[0] > PARK_X or self.rack[i] not in racks:
                     continue
@@ -120,6 +140,13 @@ class Stage:
             c, half = .5 * (lo + hi), .5 * (hi - lo)
             if how == "oblique":
                 eye, target = self.eye, self.target
+            elif how == "counter":                              # from the door side 40 deg down, framed on the dishes
+                d_pts = np.concatenate(tris[n_static:]).reshape(-1, 3) if len(tris) > n_static else pts
+                lo, hi = d_pts.min(axis=0), d_pts.max(axis=0)
+                c, half = .5 * (lo + hi), .5 * (hi - lo)
+                d = 1.2 * max(half[0] / (tan_h * W / H), float(np.hypot(half[1], half[2])) / tan_h)
+                el = np.radians(40.)
+                eye, target = c + d * np.array([0., -np.cos(el), np.sin(el)]), c
             elif how == "top":                                  # straight down (a 3 cm tilt keeps R.render's up defined)
                 d = 1.08 * max(half[1] / tan_h, half[0] / (tan_h * W / H))
                 eye, target = np.array([c[0], c[1] - .03, hi[2] + d]), np.array([c[0], c[1], lo[2]])
@@ -209,6 +236,29 @@ def captioned(img, title, detail):
     draw.text((12, 5), title, fill=(246, 249, 252), font=R.font(17, True))
     draw.text((12, 27), detail, fill=(190, 207, 222), font=R.font(13))
     return np.asarray(canvas)
+
+
+def initial_image(pair, out):
+    """initial.png: a sampler pair's initial configuration (the bench start, frigidaire_bench_kit.py --start: n dishes
+    in counter stacks on the worktop slab, the rest dropped into the extended racks, settled), every dish tinted and
+    labelled: the counter from the door side (world frame, the slab of start.json's "counter"), and the rack dishes taken
+    rack-local in the snapshot's rack frames into the racks-in model like the load views (oblique, each rack from the
+    top). Returns the caption's first line."""
+    ini = pair["initial"]
+    frames = {n: ini["poses"][n] for n in RACKS}
+    frames["Counter"] = {"position_m": [0., 0., 0.], "quaternion_xyzw": [0., 0., 0., 1.]}
+    stage = Stage({"entries": [{"id": o["object_id"], "kind": o["kind"], "rack": o["start"]} for o in ini["objects"]],
+                   "frames": frames, "counter": ini["counter"]})
+    poses = {i: (np.asarray(ini["poses"][i]["position_m"], float), np.asarray(ini["poses"][i]["quaternion_xyzw"], float))
+             for i in stage.kind}
+    c, v = ini["counter"], ini["settle"]
+    title = (f"Initial configuration: {c['start_count']} on the counter in {len(c['pile']['stacks'])} stacks, "
+             f"{len(poses) - c['start_count']} dropped into the racks")
+    Image.fromarray(captioned(stage.views(poses, {i: stage.tint(i) for i in stage.kind}, INITIAL_PANELS), title,
+                              f"Isaac settle {v['start']['outcome']}, reproduction {v['reproduction']['max_pos_mm']} mm / "
+                              f"{v['reproduction']['max_rot_deg']} deg; counter cap {c['cap']}; not gated (gate_initial "
+                              f"SKIP)")).save(out / "initial.png")
+    return title
 
 
 def load_traj(folder, name):
@@ -358,11 +408,19 @@ def physical(record, stage, folder, out):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--record", type=Path, required=True)
+    ap.add_argument("--record", type=Path)
+    ap.add_argument("--initial", type=Path, help="a sampler pair file after its initial stage: render <out>/initial.png only")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--views", default=None, help="render only the access stills, in these views (comma list of "
                     "oblique, front, side); front and side go to access_<a>__<b>_<view>.png")
     a = ap.parse_args()
+    if a.initial:
+        a.out.mkdir(parents=True, exist_ok=True)
+        print(f"[RESULT] PASS {a.initial.name} initial.png: {initial_image(json.loads(a.initial.read_text()), a.out)}",
+              flush=True)
+        return
+    if not a.record:
+        ap.error("--record or --initial is required")
     record = json.loads(a.record.read_text())
     if record.get("procedure") != "physical":
         raise SystemExit(f"{a.record}: not a frigidaire_dependency_kit.py sampler record")

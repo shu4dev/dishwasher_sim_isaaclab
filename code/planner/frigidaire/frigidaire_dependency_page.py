@@ -4,15 +4,19 @@ and the graph variants, plans/2026-10-16-labelled-views-overlap-rule.md; the kin
 plans/2026-10-21-kind-ceiling-score.md): one HTML file and its media (Kit-free, standard library only; rsvg-convert draws
 the graph PNGs).
 
-Per valid sample, behind a sample selector: the load from four angles (its S and the joint-gate numbers in the caption),
-the witness rebuilt in a fresh Isaac process (video), and the prerequisite arrows along the witness order and layered as
-a DAG, each in three variants behind a toggle (direct, reduction, closure); then every packing the run tried, from the
---sample scheduler's state, and how it was measured.
+Per valid sample, behind a sample selector labelled with its difficulty (a sampler pair, --pairs) or as the earlier
+hand-roster sample: the initial configuration (<clips>/initial.png, frigidaire_dependency_clips.py --initial; sampler
+pairs only), the load from four angles (its S and the joint-gate numbers in the caption), the witness rebuilt in a fresh
+Isaac process (video), and the prerequisite arrows along the witness order and layered as a DAG, each in three variants
+behind a toggle (direct, reduction, closure); then every packing the hand-roster run tried, from the --sample
+scheduler's state, and how it was measured.
 
     python3 code/planner/frigidaire/frigidaire_dependency_page.py --records r05_00027=data/results/dot_rules/dependency/samples_v5/r05_00027.json --clips r05_00027=data/media/dot_rules/dependency_samples_v6/r05_00027 --state data/logs/dot_rules/samples_v6b/scheduler_state_merged.json --out data/media/dot_rules/dependency_page_kind
 
+A sampler sample adds --records KEY=<pair dir>/_work/<pair>/goal/<pair>.json --clips KEY=DIR --pairs KEY=<pair>.json.
+
 Writes <out>/index.html and <out>/media/<key>_<file> (the load still, the witness video and poster named in
-<clips>/clips.json, six graph PNGs); a <load_id>.scores.json beside a record (frigidaire_dependency_score.py) adds the
+<clips>/clips.json, initial.png when the clips dir has it, six graph PNGs); a <load_id>.scores.json beside a record (frigidaire_dependency_score.py) adds the
 absolute S, a <load_id>.relative.json (frigidaire_dot_rules_relative.py) the kind-ceiling S; prints [RESULT].
 """
 import argparse
@@ -205,7 +209,7 @@ def rasterize(svg, path):
     src.unlink()
 
 
-def physical_page(a, records, clip_dirs, state):
+def physical_page(a, records, clip_dirs, state, pairs=None, picks=None):
     """The page (module comment above): the claim, the legend, per valid sample its four items behind a selector, every
     packing of the run and how it ended, how it was measured."""
     import html
@@ -224,8 +228,32 @@ def physical_page(a, records, clip_dirs, state):
             shutil.copy2(cdir / name, out_media / f"{key}_{name}")
             copied.append(out_media / f"{key}_{name}")
             files[role] = f"media/{key}_{name}"
+        if (cdir / "initial.png").is_file():                 # the pair's initial configuration (clips --initial)
+            shutil.copy2(cdir / "initial.png", out_media / f"{key}_initial.png")
+            copied.append(out_media / f"{key}_initial.png")
+            files["initial"] = f"media/{key}_initial.png"
         kinds = {e["id"]: e["kind"] for e in rec.get("entries_chosen") or rec["entries"]}
         order, free = rec["witness"]["order"], set(g["free"])
+        n_all = len(order)
+        pair = json.loads(pairs[key].read_text()) if key in (pairs or {}) else None
+        init = best = None
+        if pair:                                             # a sampler pair: its difficulty and initial stage
+            pp = pair["params"]
+            w = ((picks or {}).get("tiers") or {}).get(pp["difficulty"]) or {}    # code/src/sampler/pick.py's pick
+            if w.get("pick") and (Path(__file__).resolve().parents[3] / w["pick"]["pair"]).resolve() == pairs[key].resolve():
+                best = w["n"]
+            label = f"{pp['difficulty']}: " + " + ".join(f"{n} {k}s" for k, n in pp["count"].items())
+            title = f"{label[0].upper()}{label[1:]}, seed {pair['seed']}"
+            ini, led = pair.get("initial"), [x for x in pair["stages"] if x["stage"] == "initial"]
+            if ini:
+                c, v = ini["counter"], ini["settle"]
+                init = (f"{c['start_count']} of {n_all} on the counter in {len(c['pile']['stacks'])} stack(s) (counter "
+                        f"cap {c['cap']}), {n_all - c['start_count']} dropped into the racks; Isaac settle "
+                        f"{v['start']['outcome']}, reproduction {v['reproduction']['max_pos_mm']} mm / "
+                        f"{v['reproduction']['max_rot_deg']}°" + (f" (initial stage {led[-1]['result']}, "
+                                                                 f"{led[-1]['note']})" if led else ""))
+        else:
+            label, title = f"earlier: {rec['load_id']}", f"Earlier hand-roster sample {rec['load_id']}, {n_all} dishes"
         var = order_variants(order, g["edges"])
         for v, ev in var.items():                            # direct / reduction / closure, each drawn both ways
             for role, svg in (("arcs", svg_arcs(order, kinds, ev, free)),
@@ -255,14 +283,16 @@ def physical_page(a, records, clip_dirs, state):
                       + f" Absolute S (New+J) {b['NJ']:.4f} (New {b['N']:.4f}, Old {b['O']:.4f})")
         lower =list(gate.get("order") or []) == ["LowerRack", "UpperRack"]      # the gate records its retraction order
         g_text = (f"Joint gate accepted{' with the lower rack retracted first (upper first: ' + gate['first_try']['outcome'] + ')' if lower and gate.get('first_try') else ''}: "
-                  f"all 24 settled together with a peak penetration of {gate.get('settle_peak_mm')} mm and a last-window "
+                  f"all {n_all} settled together with a peak penetration of {gate.get('settle_peak_mm')} mm and a last-window "
                   f"median of {gate.get('window_median_mm')} mm (limits {gate.get('peak_limit_mm'):g} and "
                   f"{gate.get('median_limit_mm'):g} mm), both racks retracted with a peak of {gate.get('cycle_peak_mm')} mm, "
                   f"every dish contained")
         st = cert.get("steps") or []
         dev = [max((s_.get(k) or 0) for s_ in st) for k in ("lateral_mm", "dz_mm", "tilt_deg")] if st else None
         n = g["counts"]
-        samples.append({"key": key, "load": rec["load_id"], "files": files, "s": s_text, "gate": g_text, "arrows": arrows,
+        samples.append({"key": key, "load": rec["load_id"], "label": label, "title": title, "init": init,
+                        "pair": str(pairs[key]) if pair else None, "n_all": n_all, "best": best,
+                        "files": files, "s": s_text, "gate": g_text, "arrows": arrows,
                         "n": n, "free": len(free), "video_s": clips["witness"]["seconds"],
                         "dev": dev, "edges": len({(e["a"], e["b"]) for e in g["edges"]}),   # arrows (distinct pairs)
                         "disj": [f"{short(d['b'])} needs one of {', '.join(map(short, d['suffice']))}" if d["suffice"]
@@ -278,14 +308,25 @@ def physical_page(a, records, clip_dirs, state):
         nn = s["n"]
         sections.append(
             f'<section class="sample" data-key="{esc(s["key"])}"{"" if k == 0 else " hidden"}>'
-            f'<h2>Sample {esc(s["load"])}</h2>'
-            f'<figure><img src="{esc(s["files"]["load"])}" alt="{esc("Load " + s["load"] + " from four angles (oblique, top of the lower rack, top of the upper rack, front), every dish labelled with its id")}" '
-            f'width="1280" height="912"><figcaption><b>The load from four angles</b> (oblique; top of the lower rack; top of '
+            f'<h2>{esc(s["title"])}</h2>'
+            + (f'<p class="muted">Pair <span class="mono">{esc(s["pair"])}</span>, goal load <span class="mono">'
+               f'{esc(s["load"])}</span>' + (f': the highest-S valid load of {s["best"]} candidates' if s["best"] else "")
+               + '.</p>' if s["pair"] else "")
+            + (f'<figure><img src="{esc(s["files"]["initial"])}" alt="{esc("Initial configuration of " + s["title"] + ": the counter stacks from the door side, the racks oblique and from the top, every dish labelled with its id")}" '
+               f'width="1280" height="912"><figcaption><b>The initial configuration</b> (the bench\'s start generator for '
+               f'this tier and seed: dishes in random counter stacks on the worktop, the rest dropped into the extended '
+               f'racks, settled in Isaac; drawn with the racks pushed in): the counter from the door side, the racks '
+               f'oblique, each rack from the top, every dish labelled with its id. {esc(s["init"] or "")}. Not gated: the '
+               f'initial gate is not connected yet (gate_initial SKIP).</figcaption></figure>' if "initial" in s["files"]
+               else '<p class="muted">No initial configuration: this sample predates the sampler\'s initial stage.</p>')
+            + f'<figure><img src="{esc(s["files"]["load"])}" alt="{esc("Goal load " + s["load"] + " from four angles (oblique, top of the lower rack, top of the upper rack, front), every dish labelled with its id")}" '
+            f'width="1280" height="912"><figcaption><b>The goal configuration (the built load) from four angles</b> '
+            f'(oblique; top of the lower rack; top of '
             f'the upper rack; front), every dish labelled with its id (p plate, b bowl, c cup). {esc(s["s"])}. '
             f'{esc(s["gate"])}.</figcaption></figure><div class="two">'
             f'<figure><video controls preload="metadata" playsinline poster="{esc(s["files"]["poster"])}" '
             f'src="{esc(s["files"]["video"])}"></video><figcaption><b>The witness, rebuilt in a fresh Isaac process</b> '
-            f'({s["video_s"]:g} s): empty racks, the witness order, the same move; all 24 landed'
+            f'({s["video_s"]:g} s): empty racks, the witness order, the same move; all {s["n_all"]} landed'
             + (f", the furthest {s['dev'][0]:g} mm / {s['dev'][1]:g} mm / {s['dev'][2]:g}° from the built pose" if s["dev"] else "")
             + '.</figcaption></figure></div>'
             f'<div class="variants"><div class="seg" role="group" aria-label="Arrows shown">'
@@ -309,9 +350,9 @@ def physical_page(a, records, clip_dirs, state):
             f'holds the dishes that need nothing in place first, the free ones at its right end.</figcaption></figure>'
             f'</section>')
     buttons = "".join(f'<button type="button" data-k="{esc(s["key"])}" aria-pressed="{str(k == 0).lower()}">'
-                      f'{esc(s["load"])}</button>' for k, s in enumerate(samples))
+                      f'{esc(s["label"])}</button>' for k, s in enumerate(samples))
     stage_n = lambda *ks: sum(r["stage"] in ks for r in rows)                              # noqa: E731
-    stats = [(f"{nv} / {att}", "packings with a valid sample"), (stage_n("failed"), "the sampler could not place all 24"),
+    stats = [(f"{nv} / {att}", "hand-roster packings with a valid sample"), (stage_n("failed"), "the sampler could not place all 24"),
              (sum(r["stage"] == "invalid" and (r["gate"] or "accepted") != "accepted" for r in rows), "failed the joint gate"),
              (sum(r["stage"] == "invalid" and r["gate"] == "accepted" for r in rows), "witness did not rebuild"),
              (stage_n("killed", "error"), "stopped or errored")]
@@ -406,14 +447,16 @@ PHYSICAL_BODY = """<div class="wrap">
 <header>
   <div class="eyebrow">Frigidaire twin · HOTEC set · Isaac Sim 4.5 · physical causes · {date}</div>
   <h1>Dependency graphs</h1>
-  <p class="lead">Each sample is a load of 24 HOTEC dishes that Isaac built one dish at a time, every dish lowered from above
-  its rack's rim (plates upright, so they tip into a lean) and let go 20 mm above where the rack stops it. A sample is valid
-  when three things hold, and it claims nothing more:</p>
+  <p class="lead">Each sample is a load of HOTEC dishes that Isaac built one dish at a time, every dish lowered from above
+  its rack's rim (plates upright, so they tip into a lean) and let go 20 mm above where the rack stops it. One sample per
+  difficulty (easy 7 bowls, medium 8 plates + 7 bowls, hard 8 plates + 7 bowls + 8 cups) also shows the random initial
+  configuration it starts from; the fourth is the earlier hand-roster sample of 24. A sample is valid when three things
+  hold, and it claims nothing more:</p>
   <ol class="claim">
-    <li><b>Physically possible and stable.</b> The built poses pass the bench's joint gate: all 24 placed at once settle
+    <li><b>Physically possible and stable.</b> The built poses pass the bench's joint gate: all its dishes placed at once settle
     with a peak penetration under 5 mm and a median under 1 mm, both racks retract with them, every dish stays inside.</li>
     <li><b>One sequential order exists.</b> The witness order, replayed from empty racks in a fresh Isaac process with the same
-    move, lands all 24 within the bench's at-goal tolerance of the built poses.</li>
+    move, lands every dish within the bench's at-goal tolerance of the built poses.</li>
     <li><b>An arrow only for a physical cause in the finished load.</b> No arrow means no physical cause was found, not that
     any order works.</li>
   </ol>
@@ -441,7 +484,7 @@ PHYSICAL_BODY = """<div class="wrap">
 {sections}
 
 <section id="yieldsec">
-  <h2>Every packing this run tried</h2>
+  <h2>Every packing the hand-roster run tried</h2>
   <p class="muted">The two imported packings were built by the sampler in the previous rounds (their sampler output reused);
   the rest are new packings of the fresh list, sampled until {target} valid samples, {maxp} packings or three hours of
   the Isaac box; r07_00012 was then sampled again with the overlap rule below (2026-10-16, its row is that rerun).
@@ -508,12 +551,17 @@ def main():
                     help="one valid (certified) frigidaire_dependency_kit.py record per sample (page order)")
     ap.add_argument("--clips", nargs="*", default=[], metavar="KEY=DIR",
                     help="frigidaire_dependency_clips.py --out (with clips.json) per key")
+    ap.add_argument("--pairs", nargs="*", default=[], metavar="KEY=PATH",
+                    help="the sampler pair file (code/src/sampler/sample.py) per key: difficulty label, initial stage")
     ap.add_argument("--state", type=Path, help="the --sample scheduler's state (scheduler_state.json): the yield")
+    ap.add_argument("--picks", type=Path, help="code/src/sampler/pick.py's picks.json: a pair that is its tier's pick "
+                                                "says so (the highest-S valid load of n candidates)")
     ap.add_argument("--out", type=Path, required=True)
     a = ap.parse_args()
     records, clip_dirs = keyed(a.records, "--records"), keyed(a.clips, "--clips")
     state = json.loads(a.state.read_text()) if a.state and a.state.is_file() else None
-    return physical_page(a, records, clip_dirs, state)
+    picks = json.loads(a.picks.read_text()) if a.picks else {}
+    return physical_page(a, records, clip_dirs, state, keyed(a.pairs, "--pairs"), picks)
 
 
 # The page's CSS, inherited from the retired swap-test page: the published page carries it byte for byte (its

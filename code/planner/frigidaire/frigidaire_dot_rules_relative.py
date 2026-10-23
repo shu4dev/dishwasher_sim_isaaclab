@@ -24,8 +24,9 @@ n_pooling, n_clipped_kind; written next to the existing fields of every saved .r
   --restricted-dir DIR     DIR/scores_N0262144/<id>.relative.json beside the restricted loads' <id>.json (one state,
                            "packed")
 The per-dish NJ, kind and area come from the saved .relative.json, which the per-dish engine reference pass of
-2026-10-14 to 2026-10-16 wrote (relative S and the per-spot rescale, retired 2026-10-22: in git history); a score record
-with no .relative.json beside it is not scored. --summary prints the ceilings, the Spearman of S and S_area against S_NJ
+2026-10-14 to 2026-10-16 wrote (relative S and the per-spot rescale, retired 2026-10-22: in git history); a dependency
+score record with no .relative.json beside it (the sampler's goals, 2026-10-23) gets one seeded from its own per-dish
+id, kind, arm, area and NJ (seed_relative), other score records with none are not scored. --summary prints the ceilings, the Spearman of S and S_area against S_NJ
 and against S_rel_best (the retired passes' saved fields), the farm top and bottom five and the pooling / clipped counts.
 
     python3 code/planner/frigidaire/frigidaire_dot_rules_relative.py --grid-payload data/media/dot_rules/page_v22/index.html \\
@@ -141,9 +142,26 @@ def kind_text(ceil):
             "dish that pools (interior more than 2 mm below the rim); S = mean of S_kind, S_area = area-weighted mean")
 
 
+def seed_relative(src, dst):
+    """A .relative.json for a dependency score record that has none: per state (packed, settled, built, when scored) the
+    record's S_NJ and per-dish id, kind, arm, area and NJ, the fields the kind pass and --summary read."""
+    rec = json.loads(src.read_text())
+    states = {st: {"S_NJ": rec[st]["S"]["NJ"],
+                   "per_dish": [{**{k: d[k] for k in ("id", "kind", "arm", "area_m2")}, "NJ": d["E"]["NJ"]}
+                                for d in rec[st]["per_dish"]]} for st in ("packed", "settled", "built") if rec.get(st)}
+    dst.write_text(json.dumps({"load_id": rec["load_id"], "N": rec["N"], "theta_deg": rec["theta_deg"],
+                               "source": rel(src), "states": states}, indent=1) + "\n")
+
+
 def kind_jobs(args):
     """[(score record path, .relative.json path)] for the kind pass: every saved .relative.json of the given dirs and
-    the score record beside it (farm <id>.json, dependency <id>.scores.json, restricted <id>.json), present or not."""
+    the score record beside it (farm <id>.json, dependency <id>.scores.json, restricted <id>.json), present or not; a
+    dependency score record without one is seeded first (seed_relative)."""
+    for d in args.dependency_dir or []:
+        for src in Path(d).glob("*.scores.json"):
+            dst = src.with_name(src.name[:-len(".scores.json")] + ".relative.json")
+            if not dst.is_file():
+                seed_relative(src, dst)
     dirs = ([(Path(args.loads_dir), ".json")] if args.loads_dir else []) \
         + [(Path(d), ".scores.json") for d in args.dependency_dir or []] \
         + ([(Path(args.restricted_dir) / RESTRICTED_SCORES, ".json")] if args.restricted_dir else [])
@@ -237,8 +255,8 @@ def summary_kind(kj, args, ceil):
                 for k, s in r["states"].items():
                     log(f"{name} {lid} {k}: S {s['S']:.4f}, S_area {s['S_area']:.4f}, "
                         + ", ".join(f"{kk} {v:.4f}" for kk, v in s["S_by_kind"].items())
-                        + f"; pooling {s['n_pooling']}, clipped {s['n_clipped_kind']}; S_NJ {s['S_NJ']:.4f}, "
-                        f"S_rel_best {s['S_rel_best']:.4f}")
+                        + f"; pooling {s['n_pooling']}, clipped {s['n_clipped_kind']}; S_NJ {s['S_NJ']:.4f}"
+                        + (f", S_rel_best {s['S_rel_best']:.4f}" if "S_rel_best" in s else ""))
             continue
         st = "settled" if name == "farm" else "packed"
         rows = [(lid, r["states"][st]) for lid, r in recs]
