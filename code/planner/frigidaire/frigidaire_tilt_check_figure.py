@@ -29,6 +29,12 @@ ENTITIES = ("plate", "bowl", "cup", "dot")
 COLOUR = {"N": "#d55e00", "NJ": "#0072b2", "score": "#111111"}
 PW, PH, ML, MT, CG, RG = 270, 150, 74, 128, 46, 58          # panel size and margins [px]
 YMAX = 1.08
+# --merge: one panel, every (entity, rule) curve in its own colour; the score curves lie on top of each other, so each
+# score gets its own dash pattern too.
+MERGE_STYLE = {("plate", "N"): ("#6baed6", 1.4, None), ("plate", "NJ"): ("#0072b2", 1.8, None), ("plate", "score"): ("#08306b", 2.6, None),
+               ("bowl", "N"): ("#fdae6b", 1.4, None), ("bowl", "NJ"): ("#d55e00", 1.8, None), ("bowl", "score"): ("#7f2704", 2.6, "9 4"),
+               ("cup", "N"): ("#74c476", 1.4, None), ("cup", "NJ"): ("#009e73", 1.8, None), ("cup", "score"): ("#00441b", 2.6, "4 3"),
+               ("dot", "N"): ("#bdbdbd", 1.4, None), ("dot", "NJ"): ("#999999", 1.8, None), ("dot", "score"): ("#000000", 2.6, "12 3 3 3")}
 
 
 def level(path):
@@ -111,6 +117,7 @@ def main():
     ap.add_argument("--tilts", default=None, help="tilt range to draw, e.g. 0:180 (default: the whole sweep)")
     ap.add_argument("--curves", default="N,NJ,score", help="object-level curves to draw, of N, NJ, score")
     ap.add_argument("--no-band", action="store_true", help="leave out the plan's 0.08-0.20 band at 90 degrees")
+    ap.add_argument("--merge", action="store_true", help="one panel per spot with every entity's curves, each its own colour")
     a = ap.parse_args()
     lv = level(a.grid)
     g = json.loads((lv / "grid.json").read_text())
@@ -131,30 +138,40 @@ def main():
             + "0: facing the arm; 90: on edge; 180: facing away); τ′ runs over the whole sweep at the spot.")
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    W, H = ML + 4 * PW + 3 * CG + 24, MT + len(spots) * PH + (len(spots) - 1) * RG + 64
+    if a.merge:
+        globals().update(PW=760, PH=320, MT=172)
+    W, H = ML + (PW if a.merge else 4 * PW + 3 * CG) + 24, MT + len(spots) * PH + (len(spots) - 1) * RG + 64
+    conds = f'(θ {th}°, N = {g["n_points"]:,} lines per set, lower arm, each dish alone)'
+    gaps = 'Gaps: poses skipped (a vertex below the disc plane).' + ("" if a.merge else " Red dot: the argmax of New+J" + (
+        "." if a.no_band else "; green bar: the plan\'s 0.08-0.20 band at 90°."))
     svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" font-family="Helvetica, Arial, sans-serif">',
-           f'<rect width="{W}" height="{H}" fill="#fafafa"/>',
-           f'<text x="{ML}" y="26" font-size="17" fill="#111">{head} '
-           f'(θ {th}°, N = {g["n_points"]:,} lines per set, lower arm, each dish alone)</text>',
-           f'<text x="{ML}" y="46" font-size="12.5" fill="#444">{lean}</text>',
-           f'<text x="{ML}" y="63" font-size="12.5" fill="#444">Gaps: poses skipped (a vertex below the disc plane). '
-           f'Red dot: the argmax of New+J' + ("." if a.no_band else "; green bar: the plan\'s 0.08-0.20 band at 90°.")
-           + '</text>']
+           f'<rect width="{W}" height="{H}" fill="#fafafa"/>']
+    if a.merge:                                              # the narrower panel: the conditions on their own line
+        svg += [f'<text x="{ML}" y="26" font-size="17" fill="#111">{head}</text>',
+                f'<text x="{ML}" y="46" font-size="12.5" fill="#444">{conds}</text>',
+                f'<text x="{ML}" y="63" font-size="12.5" fill="#444">{lean}</text>',
+                f'<text x="{ML}" y="80" font-size="12.5" fill="#444">{gaps}</text>']
+    else:
+        svg += [f'<text x="{ML}" y="26" font-size="17" fill="#111">{head} {conds}</text>',
+                f'<text x="{ML}" y="46" font-size="12.5" fill="#444">{lean}</text>',
+                f'<text x="{ML}" y="63" font-size="12.5" fill="#444">{gaps}</text>']
     legend = [("New, object level", COLOUR["N"], 1.6, None), ("New+J, object level", COLOUR["NJ"], 1.6, None),
               ("score (object level)", COLOUR["score"], 2.4, None), ("score, dot level", "#666666", 1.2, "5 3")]
     legend = [lg for k, lg in zip(("N", "NJ", "score", "score"), legend) if k in draw]
-    lx = ML
-    for name, colour, width, dash in legend:
+    if a.merge:
+        legend = [(f"{'single dot' if e == 'dot' else e} {dict(N='New', NJ='New+J', score='score')[r]}", *MERGE_STYLE[(e, r)])
+                  for e in ENTITIES for r in ("N", "NJ", "score") if r in draw]
+    for n_, (name, colour, width, dash) in enumerate(legend):
+        lx, ly = ML + (n_ % 4) * (190 if a.merge else 210), (106 if a.merge else 86) + 20 * (n_ // 4)
         da = f' stroke-dasharray="{dash}"' if dash else ""
-        svg.append(f'<line x1="{lx}" y1="86" x2="{lx + 26}" y2="86" stroke="{colour}" stroke-width="{width}"{da}/>')
-        svg.append(f'<text x="{lx + 32}" y="90" font-size="12" fill="#222">{name}</text>')
-        lx += 210
+        svg.append(f'<line x1="{lx}" y1="{ly}" x2="{lx + 26}" y2="{ly}" stroke="{colour}" stroke-width="{width}"{da}/>')
+        svg.append(f'<text x="{lx + 32}" y="{ly + 4}" font-size="12" fill="#222">{name}</text>')
     rows, checks = [], []
     for ri, (h, d) in enumerate(spots):
         y0 = MT + ri * (PH + RG)
         svg.append(f'<text x="18" y="{y0 + PH / 2}" font-size="12.5" fill="#111" text-anchor="middle" '
                    f'transform="rotate(-90 18 {y0 + PH / 2})">{spot_name(h, d)}</text>')
-        block = []
+        block, merged = [], []
         for ci, ent in enumerate(ENTITIES):
             obj = ent if ent == "dot" else f"{ent}_obj"
             N, NJ = curve(g, obj, "N", h, d, th), curve(g, obj, "NJ", h, d, th)
@@ -169,14 +186,19 @@ def main():
                 c["dot_level"] = cd
             gain = "" if c["argmax"] in (0, None) else f" (+{100 * c['gain0']:.1f} % over 0°)"
             label = "single dot" if ent == "dot" else ent
-            svg += svg_panel(ML + ci * (PW + CG), y0, tilts_draw, [(crop(v), *rest) for v, *rest in curves],
-                             [c["argmax"]] if c["argmax"] is not None and lo <= c["argmax"] <= hi else [],
-                             f"{label}: best {c['argmax']}°{gain}", band=not a.no_band)
+            if a.merge:
+                merged += [(crop(v), *MERGE_STYLE[(ent, k)]) for k, v in (("N", N), ("NJ", NJ), ("score", s)) if k in draw]
+            else:
+                svg += svg_panel(ML + ci * (PW + CG), y0, tilts_draw, [(crop(v), *rest) for v, *rest in curves],
+                                 [c["argmax"]] if c["argmax"] is not None and lo <= c["argmax"] <= hi else [],
+                                 f"{label}: best {c['argmax']}°{gain}", band=not a.no_band)
             checks.append(((h, d), ent, c))
             at = {k: dict(zip(tilts, v)) for k, v in (("New", N), ("New+J", NJ), ("score", s), ("score, dot level", sd))
                   if v is not None}
             for k, row in at.items():
                 block.append(f"| {label} | {k} | " + " | ".join(f(row.get(t)) for t in TABLE_TILTS) + " |")
+        if a.merge:
+            svg += svg_panel(ML, y0, tilts_draw, merged, [], "plate, bowl, cup and one unblocked dot", band=not a.no_band)
         rows.append((h, d, block))
     svg.append(f'<text x="{ML + (4 * PW + 3 * CG) / 2}" y="{H - 22}" font-size="12.5" text-anchor="middle" fill="#333">'
                f'tilt (°)</text></svg>')

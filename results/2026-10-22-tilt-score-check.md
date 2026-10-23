@@ -31,3 +31,6 @@ User's call: the figure title in a formula, not English. The SVG title is now `N
 
 ## Version 29 (2026-10-22, Mac only): the 90° band dropped from the page figure
 User's call: the green 0.08-0.20 band at 90° (the plan's on-edge pass band, a test marker) is gone from the page's sketch. `frigidaire_tilt_check_figure.py --no-band` leaves it out (subtitle and panels); the default keeps it and the full figure is unchanged byte for byte. Page `data/media/dot_rules/page_v29/` (caption clause removed, command updated, footer "24 to 29").
+
+## Version 30 (2026-10-22, Mac only): the four panels merged into one
+User's call: one panel, every curve its own colour and label. `frigidaire_tilt_check_figure.py --merge` draws one 760 x 320 px panel per spot with every (entity, rule) curve from `MERGE_STYLE` (plate blues, bowl oranges, cup greens, dot greys; New+J lighter, score darker, and each score its own dash pattern since the four lie on top of each other); the conditions move to their own header line; no argmax dots. The page's figure is `--spots "14,0" --tilts 0:180 --curves NJ,score --no-band --merge` into `data/media/dot_rules/tilt_check_merged/`, published as `media/tilt_sweep.svg` from `data/media/dot_rules/page_v30/`. The default and the four-panel renders are unchanged byte for byte.
