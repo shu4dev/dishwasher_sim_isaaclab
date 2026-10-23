@@ -44,3 +44,25 @@ def test_r05_00027_rest_model_plate_edges():
     assert dag["cycle"] is None and dag["support"] == []
     pos = {i: n for n, i in enumerate(rec["witness"]["order"])}      # plans/2026-10-22-bowl-plate-edges.md: the bowl-plate
     assert all(pos[a] < pos[b] for a, b in dag["access"])            # edges too, none against the witness order
+
+
+def test_r05_00027_rest_model_bowl_edges():
+    """plans/2026-10-23-side-zone-chain-edges.md: the rest model's lower-rack bowl pairs are the side-zone chain alone
+    (order.chain_edges; the rear row gets none), its upper-rack bowl and cup pairs the path check at the bowl table
+    (order.BOWL_TABLE); on r05_00027 the chain holds the record's side-zone hit, the witness order breaks none of its edges
+    (the witness-consistency count, 0), the upper pairs equal the record's upper hits and the DAG stays acyclic."""
+    if not (order.REST_TABLE.is_file() and order.BOWL_TABLE.is_file()):
+        pytest.skip("the plate or bowl rest table (frigidaire_plate_rest.py) not present")
+    rec = json.loads(RECORD.read_text())
+    entries = rec["entries_chosen"]
+    low = {e["id"] for e in entries if e["kind"] != "plate" and e["slot"].startswith("lower_")}
+    up = {e["id"] for e in entries if e["kind"] != "plate"} - low
+    hits = {(h["a"], h["b"]) for h in rec["access"]["hits"]}
+    pos = {i: n for n, i in enumerate(rec["witness"]["order"])}
+    chain = order.chain_edges(entries)
+    dag = order.dag_order(entries, 0, pose_model="rest")
+    assert chain == [("bowl_03", "bowl_08")] and ("bowl_03", "bowl_08") in hits
+    assert sorted(e for e in dag["access"] if set(e) & low and not set(e) - low) == chain
+    assert sum(pos[a] > pos[b] for a, b in chain) == 0
+    assert sorted(e for e in dag["access"] if set(e) <= up) == sorted(e for e in hits if set(e) <= up)
+    assert dag["cycle"] is None

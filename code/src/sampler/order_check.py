@@ -18,13 +18,22 @@ its DAG (access + support) is acyclic. Models, each a full set of rack-local ent
        side (order.REST_TABLE), bowls and cups packed; the DAG is order.py's rest model (plate pairs and, since
        plans/2026-10-22-bowl-plate-edges.md, bowl or cup against plate both ways; no support), so R's plain hit count
        misses bowl-bowl hits by design: judge it by the plate pairs, its bowl-plate edges by the witness order (none may
-       point against it: bowl_plate_breaks)
+       point against it: bowl_plate_breaks). Since plans/2026-10-22-bowl-rest-pose-dag.md bowls and cups sit at the bowl
+       table (order.BOWL_TABLE) and every pair counts: R also gets each bowl's and cup's pose error against entries_settled
+       (the dish axis angle and the origin distance, within TILT_MAX_DEG and POS_MAX_MM, per kind and tier) and the bowl
+       gate: on a valid record with bowl-bowl hits (bowls and cups, no plate), R's bowl-bowl edges equal them and its DAG
+       has no cycle; the [GATE] line counts the failed loads among r05_00027-like records and the easy tier (GATE_TIERS)
+       against GATE_MAX_FAILED. Since plans/2026-10-23-side-zone-chain-edges.md lower-rack bowls stay packed and their
+       pairs are the side-zone chain (order.chain_edges), so the bowl gate judges the upper-rack pairs only (no lower-rack
+       bowl in the pair), and every valid record gets the chain's witness-consistency count: the chain edges the witness
+       order breaks, and the certified same-zone side-zone hits the chain holds, reverses or leaves out (equal x); the
+       [CHAIN] line sums them.
 Every model but C also gets each plate's pose error against entries_settled (rack-local: tilt = the plate axis from the
 rack's up, position = the pose origin, mode 'tines' when its lowest visual point sits more than TINES_ABOVE_M over the
 plate floor, else 'gap'). Access edges are compared only on valid records (the hits), also restricted to plate pairs.
 Kit-free; needs numpy, fcl and pxr (the container):
     code/util/run_py.sh code/src/sampler/order_check.py --records R1 R2 ... --models P,L,S,M,C --out DIR
-Writes DIR/<load_id>.<model>.json and DIR/table.md."""
+Writes DIR/<tier>__<load_id>.<model>.json and DIR/table.md."""
 import argparse
 import json
 import math
@@ -44,6 +53,13 @@ if __name__ == "__main__":                       # as a script: code/src instead
 from sampler import order  # noqa: E402
 
 PIVOT_MAX_DEG, TINES_ABOVE_M, TILT_MAX_DEG, POS_MAX_MM = 60, .030, 3., 10.     # the plan's 60 deg cap and pass limits
+GATE_TIERS, GATE_MAX_FAILED = ("easy", "r05"), 2                                # plans/2026-10-22-bowl-rest-pose-dag.md
+
+
+def tier(path):
+    """easy | medium | hard of a sampler record (its out dir rest_<tier>, bp_<tier>, br_<tier>), else 'r05' and the like."""
+    return next((d.split("_", 1)[1] for d in Path(path).parts if d.startswith(("rest_", "bp_", "br_"))),
+                Path(path).stem.split("_", 1)[0])
 
 
 def plate_points():
@@ -103,6 +119,25 @@ def plate_errors(entries, settled):
                         "d_mm": [round(float(v), 1) for v in d], "mm": round(float(np.linalg.norm(d)), 1),
                         "low_mm": [round(v * 1e3, 1) for v in low],
                         "mode": ["tines" if v > TINES_ABOVE_M else "gap" for v in low]}
+    return out
+
+
+def bowl_errors(entries, settled):
+    """{bowl or cup id: kind, key, table (the key has a row), tilt [model, settled] deg (the dish axis from the rack's up),
+    tilt_err deg (between the two axes), d_mm (model - settled, rack-local), mm, ok (within the limits)}."""
+    B, _, _, _ = order._mods()
+    rows, out = order.bowl_rest_poses(), {}
+    for e in entries:
+        if e["kind"] == "plate":
+            continue
+        s = settled[e["id"]]
+        R = [B.quat_matrix(x["quaternion_xyzw"]) for x in (e, s)]
+        d = (np.asarray(e["position"], dtype=float) - np.asarray(s["position"], dtype=float)) * 1e3
+        err = round(math.degrees(math.acos(np.clip(R[0][:, 2] @ R[1][:, 2], -1., 1.))), 1)
+        out[e["id"]] = {"kind": e["kind"], "key": order.bowl_key(e), "table": order.bowl_key(e) in rows,
+                        "tilt": [round(math.degrees(math.acos(np.clip(r[2, 2], -1., 1.))), 1) for r in R], "tilt_err": err,
+                        "d_mm": [round(float(v), 1) for v in d], "mm": round(float(np.linalg.norm(d)), 1),
+                        "ok": bool(err <= TILT_MAX_DEG and np.linalg.norm(d) <= POS_MAX_MM)}
     return out
 
 
@@ -168,6 +203,7 @@ def check(job):
                 entries = [plates.get(e["id"], e) for e in entries]
             if model == "R":
                 entries = order.rest_entries(chosen)
+                out["bowls"] = bowl_errors(entries, settled)
             if model == "S" and hits is not None:
                 out["settled_vs_certify_mm"] = round(1e3 * max(math.dist(P.world_from_local(
                     frames[e["rack"]], {"position_m": e["position"], "quaternion_xyzw": e["quaternion_xyzw"]})["position_m"],
@@ -191,6 +227,15 @@ def check(job):
     out["plate_pass"] = not out["plate_missed"] and not out["plate_spurious"] and not out["plate_cycle"]
     bp = [e for e in acc if (kind[e[0]] == "plate") != (kind[e[1]] == "plate")]     # a bowl or cup against a plate
     out.update(bowl_plate=bp, bowl_plate_breaks=[e for e in bp if pos[e[0]] > pos[e[1]]])
+    low = {e["id"] for e in rec["entries_chosen"] if e["kind"] != "plate" and e["slot"].startswith("lower_")}
+    bb = lambda es: sorted((a, b) for a, b in es if "plate" not in (kind[a], kind[b]) and not {a, b} & low)  # noqa: E731
+    out.update(bowl_hits=bb(hits), bowl_edges=bb(acc), bowl_missed=bb(out["missed"]), bowl_spurious=bb(out["spurious"]),
+               bowl_breaks=[e for e in bb(acc) if pos[e[0]] > pos[e[1]]])
+    out["bowl_pass"] = not out["bowl_missed"] and not out["bowl_spurious"] and out["cycle"] is None
+    chain, zone = order.chain_edges(rec["entries_chosen"]), {e["id"]: e["slot"] for e in rec["entries_chosen"]}
+    side = [(a, b) for a, b in hits if zone[a] == zone[b] in order.SIDE_ZONE_CHAIN and "plate" not in (kind[a], kind[b])]
+    out.update(chain=chain, chain_breaks=[(a, b) for a, b in chain if pos[a] > pos[b]], side_hits=side,
+               side_held=[e for e in side if e in chain], side_reversed=[(a, b) for a, b in side if (b, a) in chain])
     return out
 
 
@@ -229,7 +274,69 @@ def table(records, models, rows):
                          f"missed {edges(r['missed'])}; spurious {edges(r['spurious'])}; cycle {r['cycle']}; support "
                          f"{edges(r['support'])}; witness breaks {edges(r['witness_breaks'])}; bowl-plate "
                          f"{edges(r['bowl_plate'])} (witness breaks {edges(r['bowl_plate_breaks'])})"))
-    return "\n".join(lines + plates) + "\n"
+    return "\n".join(lines + plates + bowl_table(records, rows) + chain_table(records, rows)) + "\n"
+
+
+def chain_count(records, rows):
+    """(chain edges, of them against the witness, records with chain edges, of them broken, side-zone hits, held, reversed)
+    over the valid records (model R's rows, else the first model's)."""
+    rs = [r for p in records for r in [rows.get((p, "R")) or next(v for (q, _), v in rows.items() if q == p)]
+          if "chain" in r]
+    return (sum(len(r["chain"]) for r in rs), sum(len(r["chain_breaks"]) for r in rs), sum(bool(r["chain"]) for r in rs),
+            sum(bool(r["chain_breaks"]) for r in rs), sum(len(r["side_hits"]) for r in rs),
+            sum(len(r["side_held"]) for r in rs), sum(len(r["side_reversed"]) for r in rs))
+
+
+def chain_table(records, rows):
+    """The side-zone chain's witness-consistency count per valid record (plans/2026-10-23-side-zone-chain-edges.md)."""
+    rs = [(p, rows.get((p, "R")) or next(v for (q, _), v in rows.items() if q == p)) for p in records]
+    rs = [(p, r) for p, r in rs if "chain" in r]
+    if not rs:
+        return []
+    n, br, loads, bad, side, held, rev = chain_count(records, rows)
+    return ["", f"Side-zone chain (order.SIDE_ZONE_CHAIN {order.SIDE_ZONE_CHAIN}; a>b = a before b): {br} of {n} chain edges "
+                f"against the witness order, in {bad} of {loads} records with chain edges; certified same-zone side-zone hits: "
+                f"{held} held, {rev} reversed, {side - held - rev} at equal x, of {side}."] + [
+        f"- {tier(p)} {short(r['load_id'])}: chain {edges(r['chain'])}; witness breaks {edges(r['chain_breaks'])}; side hits "
+        f"{edges(r['side_hits'])} (reversed {edges(r['side_reversed'])})" for p, r in rs if r["chain"] or r["side_hits"]]
+
+
+def bowl_table(records, rows):
+    """The bowl sections of model R (plans/2026-10-22-bowl-rest-pose-dag.md): the pose check per kind and tier, the bowl
+    gate per valid record with bowl-bowl hits, the worst dishes."""
+    rs = [(p, rows[(p, "R")]) for p in records if (p, "R") in rows and "bowls" in rows[(p, "R")]]
+    if not rs:
+        return []
+    lines = ["", f"Bowls and cups at the bowl table (R) against the settled poses: k of n within {TILT_MAX_DEG:g} deg (axis) "
+                 f"and {POS_MAX_MM:g} mm (origin); 'no row' = keys the table lacks (packed pose kept).",
+             "| tier | kind | k of n | no row | median tilt err deg | median mm |", "|---|---|---|---|---|---|"]
+    for t in dict.fromkeys(tier(p) for p, _ in rs):
+        for kind in ("bowl", "cup"):
+            es = [e for p, r in rs if tier(p) == t for e in r["bowls"].values() if e["kind"] == kind]
+            if es:
+                lines.append(f"| {t} | {kind} | {sum(e['ok'] for e in es)} of {len(es)} | {sum(not e['table'] for e in es)} | "
+                             f"{float(np.median([e['tilt_err'] for e in es])):.1f} | {float(np.median([e['mm'] for e in es])):.1f} |")
+    lines += ["", "Bowl gate (valid records with bowl-bowl hits; a>b = a before b): R's bowl-bowl edges equal the hits and "
+                  "its DAG has no cycle.", "| record | tier | bowl hits | R bowl edges | missed | spurious | cycle | pass |",
+              "|---|---|---|---|---|---|---|---|"]
+    for p, r in rs:
+        if r.get("bowl_hits"):
+            lines.append(f"| {short(r['load_id'])} | {tier(p)} | {edges(r['bowl_hits'])} | {edges(r['bowl_edges'])} | "
+                         f"{edges(r['bowl_missed'])} | {edges(r['bowl_spurious'])} | {'>'.join(r['cycle'] or []) or '-'} | "
+                         f"{'pass' if r['bowl_pass'] else 'FAIL'} |")
+    lines += ["", "Valid records without bowl-bowl hits: " + (", ".join(
+        f"{short(r['load_id'])} ({tier(p)}: R bowl edges {edges(r.get('bowl_edges', []))}, cycle {r.get('cycle')})"
+        for p, r in rs if "bowl_hits" in r and not r["bowl_hits"]) or "none"), "",
+              "Worst dishes (tilt err deg, mm; settled tilt): " + ", ".join(
+        f"{short(r['load_id'])} {i} {e['key']} {e['tilt_err']}/{e['mm']} ({e['tilt'][1]})" for p, r in rs
+        for i, e in sorted(r["bowls"].items(), key=lambda x: -x[1]["mm"])[:2] if not e["ok"])]
+    return lines
+
+
+def gate(records, rows):
+    """(failed, judged) loads of the bowl gate among the GATE_TIERS records with bowl-bowl hits."""
+    rs = [rows[(p, "R")] for p in records if (p, "R") in rows and tier(p) in GATE_TIERS and rows[(p, "R")].get("bowl_hits")]
+    return [r["load_id"] for r in rs if not r["bowl_pass"]], len(rs)
 
 
 def plate_table(records, models, rows):
@@ -307,13 +414,20 @@ def main():
     rows, t0 = {}, time.monotonic()
     with Pool(min(8, os.cpu_count() or 1)) as pool:
         for r in pool.imap_unordered(check, [(p, m) for p in args.records for m in models]):
-            (out / f"{r['load_id']}.{r['model']}.json").write_text(json.dumps(r, indent=1) + "\n")
+            (out / f"{tier(r['record'])}__{r['load_id']}.{r['model']}.json").write_text(json.dumps(r, indent=1) + "\n")
             rows[(r["record"], r["model"])] = r
             print(f"{short(r['load_id'])} {r['model']}: {cell(r)}" + ("" if "error" in r else f" ({r['seconds']} s)"),
                   flush=True)
     (out / "table.md").write_text(table(args.records, models, rows))
     print((out / "table.md").read_text())
     errors = sum("error" in r for r in rows.values())
+    if "R" in models:
+        failed, judged = gate(args.records, rows)
+        print(f"[GATE] {'FAIL' if len(failed) > GATE_MAX_FAILED else 'PASS'} bowl gate failed on {len(failed)} of {judged} "
+              f"loads ({', '.join(map(short, failed)) or 'none'}; stop when more than {GATE_MAX_FAILED})")
+    n, br, loads, bad, side, held, rev = chain_count(args.records, rows)
+    print(f"[CHAIN] {br} of {n} side-zone chain edges against the witness order ({bad} of {loads} records); side-zone hits "
+          f"{held} held, {rev} reversed, {side - held - rev} at equal x, of {side}")
     print(f"[RESULT] {'FAIL' if errors else 'PASS'} {len(rows)} checks, {errors} errors, {time.monotonic() - t0:.0f} s")
 
 
