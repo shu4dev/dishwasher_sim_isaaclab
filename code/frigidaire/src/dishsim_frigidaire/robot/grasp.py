@@ -25,6 +25,20 @@ SIDE_INSET_M, SIDE_DROP_M = .008, .016           # pads 8 mm inside the rim edge
 # values (2026-10-23 limits round). Plate: the TCP 10 mm under the rim top so the fingertips stay ~24 mm above the counter.
 KIND_RIM = {"bowl": (RIM_R, WALL, HEIGHT, RIM_INSERT_M), "cup": (.0711 / 2, .0025, .1049, .025),
             "plate": (.2286 / 2, .0035, .040, .010)}
+# mouth-down foot-ring clamp per kind: (ring radius, ring width); plate = parameters.json foot_diameter_m / foot_width_m
+KIND_FOOT = {"bowl": (FOOT_R, FOOT_W), "plate": (.14 / 2, .006)}
+# cup wall pinch (2026-10-26, the cup's main grasp): the TCP on the cup axis pointing down, the pads straddling the cup
+# OUTSIDE its wall and closing across its diameter. The pads span ~6 mm beyond to ~32 mm behind the TCP (robot.md 2):
+# their centre is PAD_MID_BEHIND_TCP_M behind it. The brief's 35 mm pad depth (TCP 48 mm under the rim) jammed the cup's
+# rim between the inner knuckles (32 N each, jaws stuck at 0 rad, 2026-10-26 run): measured on the open gripper's logged
+# link hulls, the palm reaches 40 mm behind the TCP and the inner knuckles converge to 7 mm off the centreline 20-75 mm
+# behind it. With the TCP 24 mm under the top the pads keep the smaller clearance (9.2 mm vs the knuckles' 11.9 mm, so
+# the pads touch first); 28 mm already reverses it (9.5 vs 6.5). Pad centres 11 mm below the rim: the pads cover the top
+# 30 mm of the wall (outer diameter ~67-71 mm on the linear 56 -> 71.1 mm taper). Mouth down (variant R re-pick) the same
+# pinch goes across the base (56-60 mm).
+PAD_MID_BEHIND_TCP_M = .013
+WALL_PAD_BELOW_TOP_M = BASE_PAD_BELOW_TOP_M = .011
+WALL_JAW_RAD = (.08, .45)                        # jaw window of a pinch across ~58-67 mm (0.8 rad = closed on air)
 UPRIGHT, INVERTED = .7, -.7                      # bowl axis z component thresholds
 AXIS_EPS = 1e-6                                  # a direction shorter than this is degenerate (plan Phase 0.5)
 
@@ -63,7 +77,7 @@ def bowl_grasps(T_obj, n_yaw=12, dish="bowl"):
     o, a = T_obj[:3, 3], T_obj[:3, 2]
     unit(a, "bowl axis")                         # validated only: the values stay bit-identical to the PASS run
     kind = bowl_class(T_obj)
-    if dish != "bowl" and kind != "rim":
+    if dish != "bowl" and kind != "rim" and not (dish == "plate" and kind == "foot"):
         raise ValueError(f"{dish}: only the mouth-up rim pinch exists (got {kind})")
     rim_r, wall, height, insert = KIND_RIM[dish]
     out = []
@@ -80,7 +94,7 @@ def bowl_grasps(T_obj, n_yaw=12, dish="bowl"):
                 top = p[2]
                 p = np.array([p[0], p[1], top - insert])
             else:
-                p = o + (FOOT_R - FOOT_W / 2) * n                     # the ring top is the base plane (mouth down)
+                p = o + (KIND_FOOT[dish][0] - KIND_FOOT[dish][1] / 2) * n   # the ring top is the base plane (mouth down)
                 p = np.array([p[0], p[1], o[2] - FOOT_INSERT_M])
             if np.linalg.norm(n[:2]) < .5:                           # the wall is not vertical enough here
                 continue
@@ -92,6 +106,28 @@ def bowl_grasps(T_obj, n_yaw=12, dish="bowl"):
             p = c + s * (RIM_R - WALL / 2) * side - SIDE_INSET_M * a
             p = np.array([p[0], p[1], p[2] - SIDE_DROP_M])
             out.append({"kind": kind, "T_tcp": tcp_frame(p, s * side), "yaw": float(s)})
+    return out
+
+
+def wall_grasps(T_obj, n_yaw=12, dish="cup", below_top=None):
+    """Cup wall pinch: TCP on the cup axis pointing down, pads outside the wall closing across the diameter, pad
+    centres ``below_top`` under the cup's top (the rim mouth up, the base mouth down); n_yaw closing directions."""
+    T_obj = np.asarray(T_obj, dtype=float)
+    o, a = T_obj[:3, 3], unit(T_obj[:3, 2], "cup axis")
+    up = a[2] > 0
+    if below_top is None:
+        below_top = WALL_PAD_BELOW_TOP_M if up else BASE_PAD_BELOW_TOP_M
+    top = o + KIND_RIM[dish][2] * a if up else o
+    p = top - (below_top + PAD_MID_BEHIND_TCP_M) * (a if up else -a)       # on the axis, down the cup
+    e1 = unit(np.cross(a, [1., 0., 0.]) if abs(a[0]) < .9 else np.cross(a, [0., 1., 0.]), "yaw-sweep start")
+    e2 = np.cross(a, e1)
+    out = []
+    for k in range(n_yaw):
+        phi = 2 * np.pi * k / n_yaw
+        n = np.cos(phi) * e1 + np.sin(phi) * e2
+        if np.linalg.norm(n[:2]) < .5:
+            continue
+        out.append({"kind": "wall" if up else "base", "T_tcp": tcp_frame(p, n), "yaw": float(phi)})
     return out
 
 

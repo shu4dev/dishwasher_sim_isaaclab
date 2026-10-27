@@ -40,6 +40,8 @@ HOVER_M, LIFT_M, RELEASE_ABOVE_M = .10, .15, .006
 BUDGET_S = 3.
 N_YAW = 12
 KIND_ORDER = ("bowl", "cup", "plate")
+SEED_FREE = False                   # --seed-free: IK keeps every 2 pi wrap inside the limits (kin.expand_2pi_wraps)
+GRID_DX, GRID_EDGE_M = .05, .005    # --counter-grid: x step; the dish stays this far inside the slab's front edge
 _W = {}
 
 
@@ -127,9 +129,9 @@ def world_pose(local, frame):
     return {"position_m": [float(v) for v in p], "quaternion_xyzw": [float(v) for v in q]}
 
 
-def counter_obj():
+def counter_obj(xy=COUNTER_XY):
     T = np.eye(4)
-    T[:3, 3] = (COUNTER_XY[0], COUNTER_XY[1], .914 + COUNTER_LIFT_M)
+    T[:3, 3] = (xy[0], xy[1], .914 + COUNTER_LIFT_M)
     return T
 
 
@@ -158,6 +160,14 @@ class World:
         class KinRig(RG.Rig):                        # the rig's IK/line math without a simulator
             def __init__(s, T_wb):
                 s.T_wb, s.T_bw, s.T_w3_tcp = T_wb, np.linalg.inv(T_wb), self.T_w3_tcp
+
+            def ik_all(s, T, seed):
+                if not SEED_FREE:
+                    return RG.Rig.ik_all(s, T, seed)
+                from dishsim_frigidaire.robot import kin   # every analytic branch x every in-limit 2 pi wrap, nearest first
+                sols = kin.ik_wrist3_all(s.T_bw @ np.asarray(T) @ np.linalg.inv(s.T_w3_tcp), q_seed=np.asarray(seed))
+                ok = [q for q in kin.expand_2pi_wraps(sols, margin=.02, max_out=4096) if s.within_limits(q) and s.branch_ok(q)]
+                return sorted(ok, key=lambda q: float(np.abs(q - np.asarray(seed)).max()))
         self.kr = KinRig(self.T_wb)
         self.arms = {}
         for rack in ("LowerRack", "UpperRack"):
@@ -300,10 +310,11 @@ def rodrigues(k, ang):
     return np.eye(3) + np.sin(ang) * K + (1 - np.cos(ang)) * K @ K
 
 
-def measured_M(kind):
-    """TCP -> dish after the lift and the 5 s hold, from the grasp-gate trajectories (the trial with the median pivot)."""
+def measured_M(kind, run=None):
+    """TCP -> dish after the lift and the 5 s hold, from the grasp-gate trajectories (the trial with the median pivot);
+    ``run`` = another gate run's folder (default limits_v1/gate2_<kind>)."""
     from dishsim_frigidaire.robot import rig as RG, ur5e
-    run = OUT / f"gate2_{kind}"
+    run = Path(run) if run else OUT / f"gate2_{kind}"
     rows = [json.loads(l) for l in (run / "trials.jsonl").read_text().splitlines() if l.strip()]
     rows = sorted([r for r in rows if r["g3"] and r.get("traj")], key=lambda r: r["hold"]["settle_rotation_deg"])
     r = rows[len(rows) // 2]
@@ -314,7 +325,8 @@ def measured_M(kind):
     T_w3 = RG.T_of(z["body_pos"][-1, i], (w[1], w[2], w[3], w[0]))
     T_tcp = T_w3 @ RG.T_of(ur5e.T_WRIST3_TCP_POS, ur5e.T_WRIST3_TCP_QUAT_XYZW)
     d = z["dish"][-1]
-    return np.linalg.inv(T_tcp) @ RG.T_of(d[:3], d[3:7]), {"trial": r["trial"], "pivot_deg": r["hold"]["settle_rotation_deg"]}
+    return np.linalg.inv(T_tcp) @ RG.T_of(d[:3], d[3:7]), {"trial": r["trial"], "pivot_deg": r["hold"]["settle_rotation_deg"],
+                                                          "T_tcp": T_tcp.tolist()}
 
 
 def tilt_pose(checker, kind, site, tilt):
@@ -339,14 +351,14 @@ def tilt_pose(checker, kind, site, tilt):
 _C = {}
 
 
-def counter_part(W, arm, kind, k, M):
+def counter_part(W, arm, kind, k, M, xy=COUNTER_XY):
     """G1 + G2 of the counter waypoints for grasp k (cached per worker): the lift line carries the dish as grasped
     (it pivots into M only once it is off the counter), the lifted waypoint carries it at the measured M."""
-    key = (kind, k, id(arm))
+    key = (kind, k, id(arm), tuple(xy))
     if key in _C:
         return _C[key]
     from dishsim_frigidaire.robot import grasp as G
-    T_o = counter_obj()
+    T_o = counter_obj(xy)
     g = G.tilted_grasps(T_o, N_YAW, kind)[k]
     T_g = g["T_tcp"]
     T_pre, T_lift = G.hover_along(T_g, HOVER_M), T_g.copy()
@@ -375,6 +387,73 @@ def counter_part(W, arm, kind, k, M):
                    q_lift=None if qs_l is None else qs_l[-1])
     _C[key] = out
     return out
+
+
+def grid_spots(B, kind):
+    """5 x 5 pick spots around COUNTER_XY: x step GRID_DX, y step so the dish (its visual radius) stays GRID_EDGE_M
+    inside the slab's front edge (y = COUNTER centre - half depth, the robot side) at the outer row."""
+    from dishsim_frigidaire.loading import visual_points
+    r = float(np.linalg.norm(visual_points(B.ASSETS / f"{kind}.usda")[:, :2], axis=1).max())
+    edge = B.COUNTER["center_m"][1] - B.COUNTER["size_m"][1] / 2
+    dy = min(GRID_DX, (COUNTER_XY[1] - (edge + r + GRID_EDGE_M)) / 2)
+    return r, dy, [(i, j, (round(COUNTER_XY[0] + (i - 2) * GRID_DX, 4), round(COUNTER_XY[1] + (j - 2) * dy, 4)))
+                   for i in range(5) for j in range(5)]
+
+
+def grid_job(args):
+    """One (kind, spot, yaw) cell of the counter grid: G1/G2 of the pick (pre-grasp, grasp, lift; approach and lift
+    lines) with the upper rack pushed in (the grasp gate's rack state)."""
+    kind, i, j, xy, k = args
+    if "w" not in _W:
+        _W["w"] = World()
+    W = _W["w"]
+    Ms = _W.setdefault("M", {})
+    if kind not in Ms:
+        Ms[kind] = measured_M(kind)[0]
+    t0 = time.monotonic()
+    out = counter_part(W, W.arms["LowerRack"], kind, k, Ms[kind], xy=xy)
+    return {"kind": kind, "i": i, "j": j, "xy": list(xy), "yaw": k,
+            "gate": "G2" if out.get("ok") else "G1" if "lift" in out else "none", "why": out.get("why"),
+            "seconds": round(time.monotonic() - t0, 2)}
+
+
+def grid_main(a):
+    from dishsim_frigidaire.robot import grasp as G
+    t0 = time.monotonic()
+    B = bench()
+    kinds = [k for k in KIND_ORDER if k in a.kinds.split(",")]
+    meta = {"counter_xy": COUNTER_XY, "dx": GRID_DX, "edge_m": GRID_EDGE_M, "rack_state": "upper rack pushed in",
+            "seed_free": SEED_FREE, "kinds": {}}
+    jobs = []
+    for kind in kinds:
+        r, dy, spots = grid_spots(B, kind)
+        meta["kinds"][kind] = {"radius_m": round(r, 4), "dy": round(dy, 4), "spots": []}
+        n = len(G.tilted_grasps(counter_obj(), N_YAW, kind))
+        jobs += [(kind, i, j, xy, k) for i, j, xy in spots for k in range(n)]
+    print(f"[INFO] counter grid {len(jobs)} jobs, {a.workers} workers", flush=True)
+    rows = []
+    import multiprocessing as mp
+    with open(a.out / "counter_grid.jsonl", "a") as f, mp.get_context("fork").Pool(a.workers) as pool:
+        for r_ in pool.imap(grid_job, jobs, chunksize=1):
+            f.write(json.dumps(r_) + "\n")
+            f.flush()
+            rows.append(r_)
+            if len(rows) % 100 == 0:
+                print(f"[INFO] {len(rows)}/{len(jobs)} jobs, {time.monotonic() - t0:.0f} s", flush=True)
+    rank = {"none": 0, "G1": 1, "G2": 2}
+    for kind in kinds:
+        _, _, spots = grid_spots(B, kind)
+        for i, j, xy in spots:
+            rs = [r_ for r_ in rows if r_["kind"] == kind and r_["i"] == i and r_["j"] == j]
+            best = max((r_["gate"] for r_ in rs), key=rank.get, default="none")
+            meta["kinds"][kind]["spots"].append({"i": i, "j": j, "xy": list(xy), "gate": best,
+                                                 "yaws_g2": [r_["yaw"] for r_ in rs if r_["gate"] == "G2"],
+                                                 "yaws_g1": [r_["yaw"] for r_ in rs if r_["gate"] in ("G1", "G2")],
+                                                 "why_first": next((r_["why"] for r_ in rs if r_["why"]), None)})
+        g = [s_["gate"] for s_ in meta["kinds"][kind]["spots"]]
+        print(f"[INFO] {kind}: G2 {g.count('G2')}/25, G1+ {g.count('G1') + g.count('G2')}/25", flush=True)
+    (a.out / "counter_grid.json").write_text(json.dumps(meta, indent=1) + "\n")
+    print(f"[RESULT] PASS counter grid {len(rows)} jobs in {time.monotonic() - t0:.0f} s -> {a.out.relative_to(ROOT)}", flush=True)
 
 
 def orient_job(args):
@@ -461,7 +540,7 @@ def orient_table(rows, poses, leans):
         c["why"] = max(c["whys"].items(), key=lambda kv: kv[1])[0] if c["whys"] else None
         c["world"] = poses.get((kind, site, tilt))
         c["lean_dir"] = leans.get((kind, site))
-        out[kind].append(c)
+        out.setdefault(kind, []).append(c)
     return out
 
 
@@ -474,7 +553,8 @@ def orient_main(a):
     for rack in ("LowerRack", "UpperRack"):
         checkers[rack] = B.bench_checker()
         checkers[rack].update_components(frames_for(B, rack))
-    jobs, poses, leans, meta = [], {}, {}, {"tilts": TILTS, "measured_M": {}}
+    tilts = tuple(float(x) for x in a.tilts.split(","))
+    jobs, poses, leans, meta = [], {}, {}, {"tilts": tilts, "measured_M": {}}
     from dishsim_frigidaire.robot import grasp as G
     base_xy = np.asarray(reach["mount"]["base"][:2])
     T_o = counter_obj()
@@ -487,7 +567,7 @@ def orient_main(a):
         gs = G.tilted_grasps(T_o, N_YAW, kind)
         yaws = [int(i) for i in np.argsort([-float(np.dot(g["T_tcp"][:2, 3] - T_o[:2, 3], base_xy - T_o[:2, 3])) for g in gs])]
         for s in sites:
-            for tilt in TILTS:
+            for tilt in tilts:
                 pose, lean = tilt_pose(checkers[s["rack"]], kind, s, tilt)
                 poses[(kind, s["site"], tilt)], leans[(kind, s["site"])] = pose, lean
                 jobs += [(kind, s, tilt, k, pose, M) for k in yaws]
@@ -515,6 +595,93 @@ def orient_main(a):
     print(f"[RESULT] PASS orientation sweep {len(rows)} jobs in {time.monotonic() - t0:.0f} s", flush=True)
 
 
+# ------------------------------------------------------------------ window 2: the plate placed from the hand
+HOME_TCP = (.25, -.35, 1.25)        # the episode's home TCP (straight down at flags.z_safe_m above the work area)
+
+def inhand_job(args):
+    """One (plate gap, yaw) cell, the plate already in the hand at the measured in-hand pose M (no counter grasp): the
+    target is the gap's upright family pose turned ``2 pi k / 12`` about the plate's own axis (where the jaws sit on the
+    rim); the start is the home TCP on its first IK branch that is free with the plate held (the measured lift pose and
+    the home branch nearest HOME_Q are both within the 15 mm margin; the episode spawns at this start); G0 an IK at the
+    release; G1 collision-free IK at the pre-place and the release, carried; G2 the RRT start -> pre-place and the
+    insertion line."""
+    site, k, pose, M = args
+    if "w" not in _W:
+        _W["w"] = World()
+    W = _W["w"]
+    from dishsim_frigidaire.robot import grasp as G
+    from dishsim_frigidaire.robot.rig import T_of
+    arm = W.arms[site["rack"]]
+    phi = 2 * np.pi * k / N_YAW
+    row = {"kind": "plate", "site": site["site"], "rack": site["rack"], "target": "family-inhand", "tilt_deg": 0., "yaw": k,
+           "phi_rad": phi, "gate": "none", "why": None, "grasp_family": "in hand"}
+    T_target = T_of(pose["position_m"], pose["quaternion_xyzw"])
+    T_target[:3, :3] = T_target[:3, :3] @ rodrigues([0., 0., 1.], phi)
+    T_rel = T_target @ np.linalg.inv(M)
+    T_rel[2, 3] += RELEASE_ABOVE_M
+    T_pp = G.hover_along(T_rel, HOVER_M)
+    if not W.kr.ik_all(T_rel, W.seed):
+        row["why"] = "G0: no IK at the release pose"
+        return row
+    row["gate"] = "G0"
+    held = {"held": ("plate", M, "dish")}
+    arm.set_dishes({})
+    starts, _ = free_qs(W, arm, G.tcp_frame(np.array(HOME_TCP), [1., 0., 0.]), held)
+    if not starts:
+        row["why"] = "G1: no home IK branch is free with the plate in hand"
+        return row
+    q_home = starts[0]
+    row["q_start"] = q_home.tolist()
+    sol = {}
+    for name, T in (("pre-place", T_pp), ("release", T_rel)):
+        qs, n = free_qs(W, arm, T, held)
+        if not qs:
+            any_q = W.kr.ik_all(T, W.seed)
+            row["why"] = (f"G1: no collision-free IK at the {name} ({n} IK solutions; first hits "
+                          f"{arm.collisions(any_q[0], first=False, **held)[:2] if any_q else None})")
+            return row
+        sol[name] = qs
+    row.update(gate="G1", branch=branch(sol["release"][0]))
+    best = None
+    for q_pp in sol["pre-place"][:2]:
+        qs_i, why = line_ok(W, arm, T_pp, T_rel, q_pp, 40, held)
+        if qs_i is None:
+            best = best or f"G2: insertion line {why}"
+            continue
+        path = W.C.rrt_connect(arm, q_home, [q_pp], time_s=BUDGET_S, collide_kw=held, seed=1 + k)
+        if path is None:
+            best = "G2: budget (RRT-Connect found no path in %.0f s)" % BUDGET_S
+            continue
+        row.update(gate="G2", branch=branch(qs_i[-1]), why=None)
+        break
+    if row["gate"] != "G2":
+        row["why"] = best
+    return row
+
+
+def inhand_main(a):
+    t0 = time.monotonic()
+    reach = json.loads((OUT / "reach.json").read_text())
+    M, src = measured_M("plate")
+    gaps = reach["sites"]["plate"]
+    jobs = [(s, k, s["world"]["family"], M) for s in gaps for k in range(N_YAW)]
+    print(f"[INFO] plate in hand: {len(gaps)} gaps x {N_YAW} yaws = {len(jobs)} jobs, M from gate2_plate {src}", flush=True)
+    rows = []
+    import multiprocessing as mp
+    with open(a.out / "inhand.jsonl", "a") as f, mp.get_context("fork").Pool(a.workers) as pool:
+        for r in pool.imap(inhand_job, jobs, chunksize=1):
+            rows.append(r)
+            f.write(json.dumps(r) + "\n")
+            f.flush()
+    tab = orient_table(rows, {("plate", s["site"], 0.): s["world"]["family"] for s in gaps}, {})
+    q_start = next((r["q_start"] for r in rows if r.get("q_start")), None)
+    (a.out / "inhand.json").write_text(json.dumps({"target": "family-inhand", "home_tcp": HOME_TCP, "q_start": q_start,
+                                                   "measured_M": {"plate": {"M": M.tolist(), **src}}, "cells": tab}) + "\n")
+    g2 = [c["site"] for c in tab["plate"] if c["gate"] == "G2"]
+    print(f"[RESULT] PASS plate in hand {len(rows)} jobs in {time.monotonic() - t0:.0f} s: G2 at {len(g2)}/{len(gaps)} gaps {g2}",
+          flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--workers", type=int, default=2)
@@ -526,11 +693,26 @@ def main():
                          "every plate pinch); the rack side is gated as usual; rows go to reach_waived.jsonl")
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--orient", action="store_true", help="round 3: the orientation sweep (orient.jsonl, orient.json)")
+    ap.add_argument("--tilts", default="0,30,60,90,120,150", help="--orient: the tilts swept (deg)")
+    ap.add_argument("--plate-in-hand", action="store_true",
+                    help="G1/G2 of the plate placed from the hand (measured in-hand pose, no counter grasp) at the plate gaps' "
+                         "upright family pose, 12 yaws (inhand.jsonl, inhand.json)")
+    ap.add_argument("--seed-free", action="store_true",
+                    help="IK: every analytic solution expanded by 2 pi inside the joint limits (kin.expand_2pi_wraps), "
+                         "nearest the HOME_Q seed first, instead of one wrap unwrapped toward the seed")
+    ap.add_argument("--counter-grid", action="store_true",
+                    help="G1/G2 of the pick on a 5 x 5 grid of counter spots per kind (counter_grid.jsonl, counter_grid.json)")
     a = ap.parse_args()
     a.out = a.out if a.out.is_absolute() else ROOT / a.out
     a.out.mkdir(parents=True, exist_ok=True)
+    global SEED_FREE
+    SEED_FREE = a.seed_free
+    if a.counter_grid:
+        return grid_main(a)
     if a.orient:
         return orient_main(a)
+    if a.plate_in_hand:
+        return inhand_main(a)
     t0 = time.monotonic()
     B = bench()
     kinds = [k for k in KIND_ORDER if k in a.kinds.split(",")]
@@ -546,7 +728,8 @@ def main():
             s["world"] = {"family": fam, "level": None if kind == "plate" else level_pose(checkers[s["rack"]], kind, fam)}
     meta = {"mount": json.loads(MOUNT.read_text())["best"], "counter_xy": COUNTER_XY, "hover_m": HOVER_M, "lift_m": LIFT_M,
             "release_above_m": RELEASE_ABOVE_M, "budget_s": BUDGET_S, "n_yaw": N_YAW, "arm_model": str(ARM_MODEL.relative_to(ROOT)),
-            "sites": {k: allsites[k] for k in kinds}, "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+            "sites": {k: allsites[k] for k in kinds}, "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "seed_free": SEED_FREE}
     targets = a.targets.split(",")
     from dishsim_frigidaire.robot import grasp as G
     base_xy = np.asarray(meta["mount"]["base"][:2])

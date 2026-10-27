@@ -131,6 +131,10 @@ def main():
     ap.add_argument("--strip", action="store_true", help="also write a six-frame strip (<out>.png)")
     ap.add_argument("--strip-only", action="store_true")
     ap.add_argument("--wh", default="640x480")
+    ap.add_argument("--every", type=int, default=1, help="mp4: every k-th logged sample (plays k x faster)")
+    ap.add_argument("--release-still", action="store_true",
+                    help="one PNG (two views) of the logged trial at the release step (the last frame with the jaw closed "
+                         "before it opens) instead of the mp4")
     a = ap.parse_args()
     if a.still:
         kind, site, target, yaw = a.still.split(",")
@@ -161,6 +165,11 @@ def main():
     a.out.parent.mkdir(parents=True, exist_ok=True)
     n = len(d["t"])
     picks = set(np.linspace(0, n - 1, 6).round().astype(int).tolist())
+    k_rel = None
+    if a.release_still:                                # the last frame with the jaw closed (a retried pick reopens earlier)
+        jaw = np.asarray(d["jaw"])
+        k_rel = int(np.nonzero(jaw >= .9 * jaw.max())[0][-1])
+        a.strip_only, picks = True, {k_rel}
     writer = None
     if not a.strip_only:
         import imageio
@@ -169,6 +178,8 @@ def main():
     font, small = RD.font(18, True), RD.font(14)
     for k in range(n):
         if a.strip_only and k not in picks:
+            continue
+        if not a.strip_only and k % a.every and k not in picks and k != n - 1:
             continue
         parts, cols = list(static), list(scol)
         for i, tri in body_tris.items():
@@ -180,6 +191,9 @@ def main():
         dish = d["dish"][k]
         parts.append(E.posed(dish_local, dish[:3], dish[3:7]))
         cols.append(COLORS[a.kind])
+        for o in (d["others"][k] if "others" in d.files else ()):   # placing_v1: the dishes already at their goals
+            parts.append(E.posed(dish_local, o[:3], o[3:7]))
+            cols.append(tuple(.55 * c + .45 for c in COLORS[a.kind]))
         face_obj = np.concatenate([np.full(len(p), j, np.int32) for j, p in enumerate(parts)])
         tri = np.concatenate(parts).astype(np.float32)
         cols_a = np.asarray(cols, np.float32)
@@ -194,6 +208,10 @@ def main():
                           f"right: following the dish   Warp replay of the logged Isaac trial (collision hulls)",
                 fill=(190, 207, 222), font=small)
         frame = np.asarray(img)
+        if k_rel is not None:
+            img.save(a.out)
+            print(f"[RESULT] PASS release still {a.out} (frame {k_rel} of {n}, jaw {d['jaw'][k_rel]:.2f})", flush=True)
+            return
         if writer is not None:
             writer.append_data(frame)
         if k in picks:

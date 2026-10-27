@@ -195,6 +195,7 @@ class ContactMonitor:
             row["F"] += force
             row["sep"] = min(row["sep"], sep)
             row["colliders"].update((x[2].rsplit("/", 1)[-1], y[2].rsplit("/", 1)[-1]))
+            row.setdefault("paths", set()).update((x[2], y[2]))      # full collider paths (the knuckle-contact dump)
             for lab in (a, b):
                 if lab[1] == "pad":
                     pads[lab[0]] = pads.get(lab[0], 0.) + normal
@@ -214,6 +215,7 @@ class ContactMonitor:
                 act["colliders"].update(row["colliders"])
         for key in [k for k, v in self.active.items() if tick - v["last"] > CONTACT_GAP_TICKS]:
             ended.append((key, self.active.pop(key)))
+        self.step_rows = seen                                       # this step's touching pairs, full rows
         self.step_pairs = {k: v["N"] for k, v in seen.items()}      # normal force of the step, per touching pair
         self.step_total = {k: v["F"] for k, v in seen.items()}      # |impulse| / dt (normal + friction)
         self.pad_N = pads                                           # normal component on each pad collider
