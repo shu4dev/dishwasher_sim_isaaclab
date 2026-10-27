@@ -131,6 +131,42 @@ def wall_grasps(T_obj, n_yaw=12, dish="cup", below_top=None):
     return out
 
 
+# cup side pinch (2026-10-26, plans/2026-10-26-side-pinch.md): the TCP approach HORIZONTAL (perpendicular to the cup
+# axis), the closing axis horizontal, both pads outside the wall across the diameter, the pad centres ``below_top`` under
+# the rim; TCP x along the cup axis, so a roll about the approach turns the cup mouth down, the gripper beside it. Depth
+# from the open gripper's collider hulls (data/results/robot/arm_model.json, TCP frame): the pad hulls span 20 mm behind to
+# 18 mm beyond the TCP (inner faces 87 mm apart) and move ~9 mm forward while closing on 60-70 mm; the palm face is 40 mm
+# behind the TCP. With the cup axis SIDE_AXIS_BEYOND_TCP_M beyond the TCP the pads stay the closest part (9-14 mm open
+# clearance at the three heights, palm 16-21 mm, inner knuckles 21-26 mm); with the axis at the old 13 mm-behind pad
+# centre the palm would sit 7 mm inside the wall. The wrist: wrist_3's joint axis is TCP x (kin.py DH frame 6 z; the TCP
+# sits 0.13 m along wrist_3's y), so wrist_2 hangs 0.10 m from wrist_3 along -TCP x. The 180 deg roll about the approach
+# (the same pinch: the gripper is symmetric) moves the whole wrist across: ``wrist_side`` "mouth" puts it toward the cup's
+# mouth (above the TCP for an upright cup), "base" toward its base (above the TCP for a mouth-down cup). Measured
+# 2026-10-27: with "base" at the counter wrist_1/2 sit 0.10 m under the TCP, inside the slab, for every IK branch.
+SIDE_BELOW_TOP_M = (.011, .045, .080)            # the swept pad heights under the rim
+SIDE_AXIS_BEYOND_TCP_M = .010
+WRIST_SIDES = ("mouth", "base")
+
+
+def side_grasps(T_obj, n_yaw=12, below_top=SIDE_BELOW_TOP_M[0], dish="cup", wrist_side="mouth"):
+    """Cup side pinch candidates [{"kind": "side", "T_tcp", "yaw", "below_top", "wrist_side"}]: n_yaw approach
+    directions perpendicular to the cup axis (horizontal for an upright cup), pad centres ``below_top`` under the rim."""
+    T_obj = np.asarray(T_obj, dtype=float)
+    o, a = T_obj[:3, 3], unit(T_obj[:3, 2], "cup axis")
+    x = -a if wrist_side == "mouth" else a                                # TCP x; the wrist sits along -x
+    c = o + (KIND_RIM[dish][2] - below_top) * a                           # the axis point at the pad centres' height
+    e1 = unit(np.cross(a, [1., 0., 0.]) if abs(a[0]) < .9 else np.cross(a, [0., 1., 0.]), "yaw-sweep start")
+    e2 = np.cross(a, e1)
+    out = []
+    for k in range(n_yaw):
+        phi = 2 * np.pi * k / n_yaw
+        z = np.cos(phi) * e1 + np.sin(phi) * e2                         # approach: toward the cup axis
+        T = np.eye(4)
+        T[:3, 0], T[:3, 1], T[:3, 2], T[:3, 3] = x, np.cross(z, x), z, c - SIDE_AXIS_BEYOND_TCP_M * z
+        out.append({"kind": "side", "T_tcp": T, "yaw": float(phi), "below_top": float(below_top), "wrist_side": wrist_side})
+    return out
+
+
 def hover(T_tcp, dz=.08):
     H = np.array(T_tcp, dtype=float, copy=True)
     H[2, 3] += dz

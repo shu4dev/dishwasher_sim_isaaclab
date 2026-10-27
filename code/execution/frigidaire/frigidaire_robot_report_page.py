@@ -417,7 +417,7 @@ def verdicts_block(v, round1):
     plate = table(("Kit-free G2 gaps", "Isaac G4", "note"),
                   [f"<tr><td>{txt(ph.get('g2_gaps'))}</td><td>{txt(ph.get('g4'))}</td><td>{txt(ph.get('note'))}</td></tr>"] if ph else [])
     return (f"<section id=verdicts><h2>Verdicts</h2><h3>Knuckle contact</h3>{knuckle}"
-            f"<h3>Robot-free tines test</h3><p class=muted>A level bowl teleported onto the site and settled with no robot "
+            f"<h3>Robot-free tines test</h3><p class=muted>A level bowl set straight onto the site and settled with no robot "
             f"(verdict rack: the rack alone tilts it; robot: the tilt comes with the robot's release).</p>{tines}"
             f"<h3>Seed-free IK reach at level</h3><p class=muted>Sites with a Kit-free G1 / G2 at level when the IK expands "
             f"the 2π wraps, beside round 1's HOME_Q-seeded G2.</p>{reach}{note}"
@@ -477,9 +477,10 @@ def part_a_rows(root):
     return out
 
 
-def grasping_block(trials, grid, measured):
+def grasping_block(trials, grid, measured, man=(), mdir=None, out=None):
     """Part A (plans/2026-10-26-placing-goal.md): the measured grasps at the counter spot, one row per object and grasp
-    (a main grasp first, "not run" until its run lands); the counter grid as a footnote."""
+    (a main grasp first, "not run" until its run lands); the counter grid as a footnote; the cup side-pinch gate clips
+    (videos.json entries of placing_v1/partA_cup_side_*)."""
     by, on = {}, {}
     for r in trials:
         if r.get("mode") != "grasp_gate":
@@ -515,18 +516,28 @@ def grasping_block(trials, grid, measured):
         held = " and ".join(f"{k} {sum(bool(r['g3']) for r in on[k])}/{len(on[k])}" for k in ks)
         foot = (f"<p class=muted>Pick position does not matter: {held} over the "
                 f"{len({i for i, _ in spots})}x{len({j for _, j in spots})} counter grid, {kft}.</p>")
+    clips = [e for e in man if str(e.get("load")).startswith("partA_cup_side") and (mdir / e["file"]).is_file()]
+    figs = "".join(figure_html(use({"src": mdir / e["file"]}, out), e.get("caption") or e["file"]) for e in clips)
     return ("<section id=grasping><h2>Grasping: summary</h2>"
-            + table(("object", "grasp", "held k/n", "median pivot °", "invariant", "source run"), body) + foot + "</section>")
+            + table(("object", "grasp", "held k/n", "median pivot °", "invariant", "source run"), body) + foot
+            + (f"<div class=grid2>{figs}</div>" if figs else "") + "</section>")
 
 
 STEPS = ("R1", "R2", "S1", "S2", "S3", "S4", "S5", "S6")
-VARIANTS = ("W", "R", "R-ideal")              # R-ideal: the flip onto the counter idealized by a teleport, then R
+VARIANTS = ("W", "R", "S")                    # S: the cup side pinch (plans/2026-10-26-side-pinch.md), its column only where run;
+                                              # rows and clips of any other variant (R-ideal) stay on disk, off the page (user,
+                                              # 2026-10-26 22:45 EDT: the experiment assumes the dish stays in hand)
+HOLD_NAME = {"idealized rim hold": "assumed rim hold"}      # the plate's hold (no plate grasp exists), as the page names it
+MOUTH_DOWN = ("The goals are mouth-down by design: the certified loads invert the bowls and cups, because the fair score "
+              "gives 0 to a dish that pools.")
 MAIN_GRASP = {"cup": "wall pinch"}                          # the user's decision, 2026-10-26: the cup's main grasp
 EARLIER = {("cup", "rim pinch"): "rim pinch (earlier; re-test after round 3)"}
 LEGEND = ("Steps, first failure wins: S1 reorient in hand (IK), S2 pre-place reachable, S3 path and insertion, S4 insert "
           "and release, S5 settled within 15 mm / 20 mm / 15°, S6 no earlier dish disturbed; R1 flip and set down "
           "mouth-down, R2 re-pick (foot ring, or the cup's base). W keeps the hold and turns the wrist; R regrasps, run "
-          "where W failed at S1 or S2.")
+          "where W failed at S1 or S2. S (cups) holds the cup by the side pinch, the gripper beside it, at the measured "
+          "in-hand pose of its best candidate (pad height x approach yaw with a collision-free IK at the counter pick and "
+          "at the goal); a cup without one fails at S1 or S2 on the Kit-free check.")
 
 
 def step_cell(r):
@@ -539,8 +550,16 @@ def step_cell(r):
             f"{LP.fmt(e.get('tilt_deg'))}° tilt)")
 
 
+def s_cell(r):
+    """Variant S: an S1 reason with an empty hits list means no IK solution exists at all at +0.10 m."""
+    if r and r.get("failed_at") == "S1" and "commonest hits []" in str(r.get("why")):
+        n = (r.get("candidates") or {}).get("pass_pick")
+        return f"<b>S1</b>: no IK solution at +0.10 m for any of the {n} candidates"
+    return step_cell(r)
+
+
 def later_cell(w, y):
-    """R or R-ideal: "not needed" when W placed the dish; else its first failing step, with the runner's note."""
+    """R: "not needed" when W placed the dish; else its first failing step, with the runner's note."""
     if w and not w.get("failed_at"):
         return "not needed"
     note = f" <span class=muted>({html.escape(str(y['note']))})</span>" if y and y.get("note") else ""
@@ -567,46 +586,50 @@ def placing_block(root, mdir, out):
             parts.append(f"<h3>{html.escape(name)}</h3><p class=muted>not run</p>")
             continue
         V = {v: {r["dish"]: r for r in rows if r.get("variant") == v} for v in VARIANTS}
+        vs = [v for v in VARIANTS if v != "S" or V["S"]]
         W = V["W"]
         hist.update((v, r.get("failed_at") or "placed") for v in VARIANTS for r in V[v].values())
         dishes = sorted(load.get("dishes") or [{"name": r["dish"], "kind": r.get("kind"), "order_index": r.get("order_index")}
                                                for r in W.values()], key=lambda x: (x.get("order_index") is None, x.get("order_index")))
         ok_w = sum(1 for x in dishes if x["name"] in W and not W[x["name"]].get("failed_at"))
         placed = ", ".join(f"{sum(not r.get('failed_at') for r in V[v].values())}/{len(V[v])} with {v}" if V[v] else f"{v} not run"
-                           for v in VARIANTS[1:])
-        holds = sorted({x.get("grasp") for x in (load.get("dishes") or []) + rows if x.get("grasp")})
+                           for v in vs[1:])
+        holds = sorted({HOLD_NAME.get(x["grasp"], x["grasp"]) for x in (load.get("dishes") or []) + rows
+                        if x.get("grasp") and x.get("variant") not in ("S", "R-ideal")})   # load dishes carry packer variants
         by_ = "in hand by " + " / ".join(("an " if h[0] in "aeiou" else "a ") + h for h in holds) + "; " if holds else ""
         ss = summ.get("subset_settle")
         stands = ((("yes" if ss.get("ok") else "no") + f" (max drift {LP.fmt(ss.get('max_drift_mm'))} mm, "
                    f"{LP.fmt(ss.get('max_drift_deg'))}°)") if ss else "not run")
         body = []
         for x in dishes:
-            ys = [V[v].get(x["name"]) for v in VARIANTS]
+            ys = [V[v].get(x["name"]) for v in vs]
             w = ys[0]
             moved = sorted({m for y in ys if y for m in (y.get("disturbed") or [])})
-            later = "".join(f"<td>{later_cell(w, y)}</td>" for y in ys[1:])
+            later = "".join(f"<td>{later_cell(w, y) if v != 'S' else s_cell(y)}</td>" for v, y in zip(vs[1:], ys[1:]))
             body.append(f"<tr><td>{html.escape(str(x['name']))}</td><td>{html.escape(str(x.get('kind')))}</td><td>{step_cell(w)}</td>"
                         f"{later}<td>{html.escape(', '.join(moved)) or 'none'}</td></tr>")
         figs = ""
-        for want in ("pass", "fail"):                       # one pass and one fail per load, an mp4 before a still
-            es = [e for e in man if e.get("load") == name and (mdir / e["file"]).is_file()
-                  and (str(e.get("outcome")).lower() == "pass") == (want == "pass")]
-            e = min(es, key=lambda e: not e["file"].endswith(".mp4"), default=None)
-            if e:
-                cap = e.get("caption") or ""
-                if str(e.get("dish")) not in cap:
-                    cap = " · ".join(str(v) for v in (e.get("dish"), f"variant {e.get('variant')}", e.get("step"),
-                                                         e.get("outcome"), cap) if v)
-                figs += figure_html(use({"src": mdir / e["file"]}, out), cap)
+        for side in (False, True):                          # one pass and one fail per load, an mp4 before a still;
+            for want in ("pass", "fail"):                   # variant S's own pair beside the earlier variants'
+                es = [e for e in man if e.get("load") == name and (mdir / e["file"]).is_file() and e.get("variant") in VARIANTS
+                      and (e.get("variant") == "S") == side and (str(e.get("outcome")).lower() == "pass") == (want == "pass")]
+                e = min(es, key=lambda e: not e["file"].endswith(".mp4"), default=None)
+                if e:
+                    cap = e.get("caption") or ""
+                    if str(e.get("dish")) not in cap:
+                        cap = " · ".join(str(v) for v in (e.get("dish"), f"variant {e.get('variant')}", e.get("step"),
+                                                             e.get("outcome"), cap) if v)
+                    figs += figure_html(use({"src": mdir / e["file"]}, out), cap)
         parts.append(f"<h3>{html.escape(name)}{src}</h3><p class=lead>{html.escape(name)}: {html.escape(by_)}placed {ok_w}/{len(dishes)} with W, "
                      f"{placed}; subset stands: {stands}.</p>"
-                     + table(("dish", "kind", "W: first failing step (or placed, with the errors)", "R", "R-ideal (flip assumed)",
-                              "disturbed"), body)
-                     + (f"<div class=grid2>{figs}</div>" if figs else "<p class=muted>clips: not run</p>"))
-    hist_rows = [f"<tr><td>{st}</td>" + "".join(f"<td>{hist[(v, st)]}</td>" for v in VARIANTS) + "</tr>"
-                 for st in STEPS + ("placed",) if any(hist[(v, st)] for v in VARIANTS)]
-    return (head + f"<p class=muted>{LEGEND}</p>" + "".join(parts) + "<h3>Failing step across the loads</h3>"
-            + table(("step", "W count", "R count", "R-ideal count"), hist_rows) + "</section>")
+                     + table(("dish", "kind", "W: first failing step (or placed, with the errors)", "R")
+                             + (("S: side pinch (first failing step, or placed)",) if "S" in vs else ()) + ("disturbed",), body)
+                     + (f"<div class=grid2>{figs}</div>" if figs else "<p class=muted>clips: none recorded</p>"))
+    hv = [v for v in VARIANTS if v != "S" or any(k[0] == "S" for k in hist)]
+    hist_rows = [f"<tr><td>{st}</td>" + "".join(f"<td>{hist[(v, st)]}</td>" for v in hv) + "</tr>"
+                 for st in STEPS + ("placed",) if any(hist[(v, st)] for v in hv)]
+    return (head + f"<p class=lead>{MOUTH_DOWN}</p><p class=muted>{LEGEND}</p>" + "".join(parts)
+            + "<h3>Failing step across the loads</h3>" + table(("step",) + tuple(f"{v} count" for v in hv), hist_rows) + "</section>")
 
 
 class Srcs(HTMLParser):
@@ -686,6 +709,8 @@ def main():
              if mount.get("base") else "one fixed pedestal mount")
     absent = [d.name for d in a.records if not d.is_dir()]
     proot = a.placing or a.records[0].parent / "placing_v1"          # Part B and the Part A runs beside it
+    pmdir = a.placing_media or (a.media[0].parent / "placing_v1" if a.media else None)
+    pman = json.loads((pmdir / "videos.json").read_text()) if pmdir and (pmdir / "videos.json").is_file() else []
     notes = sorted(LP.ROOT.glob("results/*hardware*.md"))
     win = "".join(html.escape(f" · window {n}: {w.get('start_edt')}–{w.get('stop_edt')} EDT, cut: {w.get('cut')}")
                   for n, w in windows)
@@ -695,8 +720,8 @@ def main():
             f"<p class=lead>UR5e with a Robotiq 2F-85 in the Frigidaire FDPC4221AS twin, simulated headless in Isaac Sim 4.5 "
             f"on the Brev box: {where}, one HOTEC dish at a time picked mouth up from the counter and placed into an empty "
             f"rack. Simulation only, no hardware ran; videos are Warp replays of the logged trials.</p>"
-            f"{grasping_block(trials + part_a_rows(proot), grid, measured)}"
-            f"{placing_block(proot, a.placing_media or (a.media[0].parent / 'placing_v1' if a.media else None), a.out)}"
+            f"{grasping_block(trials + part_a_rows(proot), grid, measured, pman, pmdir, a.out)}"
+            f"{placing_block(proot, pmdir, a.out)}"
             f"{''.join(secs)}"
             f"{verdicts_block(verdicts, round1)}"
             f"<section id=sources><h2>Sources</h2><ul>"

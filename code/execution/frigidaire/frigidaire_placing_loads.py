@@ -62,9 +62,11 @@ def summarize(name):
            "placed_W": sum(r["failed_at"] is None for (_, v), r in rows.items() if v == "W"),
            "placed_R": sum(r["failed_at"] is None for (_, v), r in rows.items() if v == "R"),
            "placed_R_ideal": sum(r["failed_at"] is None for (_, v), r in rows.items() if v == "R-ideal"),
+           "placed_S": sum(r["failed_at"] is None for (_, v), r in rows.items() if v == "S"),
            "rows_W": sum(v == "W" for _, v in rows), "rows_R": sum(v == "R" for _, v in rows),
-           "rows_R_ideal": sum(v == "R-ideal" for _, v in rows),
+           "rows_R_ideal": sum(v == "R-ideal" for _, v in rows), "rows_S": sum(v == "S" for _, v in rows),
            "failed_at_counts": counts("W"), "failed_at_counts_R": counts("R"), "failed_at_counts_R_ideal": counts("R-ideal"),
+           "failed_at_counts_S": counts("S"),
            "subset_settle": None if ss is None else {k: ss[k] for k in ("ok", "max_drift_mm", "max_drift_deg")}}
     (d / "summary.json").write_text(json.dumps(out, indent=1) + "\n")
     print(json.dumps(out))

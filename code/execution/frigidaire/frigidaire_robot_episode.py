@@ -117,9 +117,11 @@ def main():
     parser.add_argument("--plate-in-hand", action="store_true",
                         help="place-slot plate: the plate spawned in the gripper at --orient's measured in-hand pose (the "
                              "jaws close on it), no grasp; targets = --orient's cells (frigidaire_robot_reach.py --plate-in-hand)")
-    parser.add_argument("--grasp-family", choices=("rim", "wall"), default="rim",
+    parser.add_argument("--grasp-family", choices=("rim", "wall", "side"), default="rim",
                         help="grasp gate: wall = the cup wall pinch (robot/grasp.py wall_grasps, 2026-10-26) instead of the "
-                             "mouth-up rim pinch")
+                             "mouth-up rim pinch; side = the horizontal cup side pinch (side_grasps, lifted straight up)")
+    parser.add_argument("--side-below-top", type=float, default=.011,
+                        help="--grasp-family side: the pad centres this far under the rim (m; one height per gate run)")
     parser.add_argument("--place-goal", type=Path, default=None,
                         help="plans/2026-10-26-placing-goal.md Part B: a placing_v1/<load>/load.json; per dish in its order "
                              "the earlier dishes at their goal poses, this dish fixed to the gripper (a fixed joint) at the "
@@ -134,6 +136,11 @@ def main():
     parser.add_argument("--settle-only", action="store_true",
                         help="--place-goal: the subset settle check only (every dish at its goal, 150 ticks)")
     parser.add_argument("--dishes", default="", help="--place-goal: only these dishes (comma list)")
+    parser.add_argument("--variant", choices=("S",), default=None,
+                        help="--place-goal variant S (plans/2026-10-26-side-pinch.md): every cup held by the side pinch at the "
+                             "measured in-hand pose of its best --side-candidates candidate, then S1-S6")
+    parser.add_argument("--side-candidates", type=Path, default=ROOT / "data/results/robot/placing_v1/side/candidates.json",
+                        help="--variant S: frigidaire_robot_reach.py --side-candidates' output")
     parser.add_argument("--attach", choices=("joint", "pin"), default="joint",
                         help="--place-goal: a PhysX fixed joint (default; falls back to pin when it does not hold) or pin "
                              "(the dish written to TCP @ M after every rig step)")
@@ -693,7 +700,9 @@ def episode(args, inst, report, flags, closers=None):
     def pick(oid, att, tries=6, waive=False):
         sync_world()
         T_obj = T_now(oid)
-        cands = (G.wall_grasps(T_obj, dish=kinds[oid]) if args.grasp_family == "wall"
+        cands = (G.wall_grasps(T_obj, dish=kinds[oid]) if args.grasp_family == "wall" else
+                 [g for w in G.WRIST_SIDES for g in G.side_grasps(T_obj, below_top=args.side_below_top, dish=kinds[oid],
+                                                                   wrist_side=w)] if args.grasp_family == "side"
                  else G.tilted_grasps(T_obj, dish=kinds[oid]))
         scored = []
         base_xy = np.asarray(mount["base"][:2])
@@ -708,7 +717,7 @@ def episode(args, inst, report, flags, closers=None):
                     cand_why[-1] += "; line IK jump"
                     continue
                 d = float(np.linalg.norm(g["T_tcp"][:3, 3] - H[:3, 3]))
-                allow_m = ALLOW_STRADDLE_M if g["kind"] in ("wall", "base") else ALLOW_CONTACT_M
+                allow_m = ALLOW_STRADDLE_M if g["kind"] in ("wall", "base") or args.grasp_family == "side" else ALLOW_CONTACT_M
                 kws = [({"ignore": (oid,)} if waive else
                         {"gripper_may_touch": (oid,) if d * (1 - i / 99) < allow_m else ()}) for i in range(len(qs_line))]
                 bad = None if waive else next((i for i, q in enumerate(qs_line) if not arm.free(q, **kws[i])), None)
@@ -762,7 +771,7 @@ def episode(args, inst, report, flags, closers=None):
                 report.setdefault("grasp_stills", []).append(close_still(f"closed_{oid}"))
             tlog.write("note", what="closed", jaw_rad=round(theta, 4), at_close_partners=partners, grasp=g["kind"],
                        tilt_deg=g.get("tilt_deg"))
-            jw = G.WALL_JAW_RAD if g["kind"] in ("wall", "base") else flags.jaw_wall_rad
+            jw = G.WALL_JAW_RAD if g["kind"] in ("wall", "base") or args.grasp_family == "side" else flags.jaw_wall_rad
             if not (jw[0] <= theta < jw[1]):         # the jaws closed on air or on the bowl body
                 why = f"jaws at {theta:.2f} rad: no wall between the pads"
                 tried.append(why)
@@ -773,7 +782,8 @@ def episode(args, inst, report, flags, closers=None):
             z0 = T_now(oid)[2, 3]
             M_close = np.linalg.inv(rig.tcp()) @ T_now(oid)
             tlog.set(phase="lift")
-            H_up = G.hover_along(g["T_tcp"], lift_m) if lift_m else H
+            H_up = ((G.hover(g["T_tcp"], lift_m) if args.grasp_family == "side" else G.hover_along(g["T_tcp"], lift_m))
+                    if lift_m else H)                                  # the side pinch lifts straight up
             qs_up = rig.line_q(rig.tcp(), H_up, 80, rig.q())
             ok_lift = qs_up is not None and rig.follow(qs_up, settle_tol=flags.tol_lift)   # the dish swings on the pinch
             key("lift-off")
@@ -802,7 +812,7 @@ def episode(args, inst, report, flags, closers=None):
             att.setdefault("holds", []).append(gate)
             if held:
                 return {"grasp": g["kind"], "yaw": g["yaw"], "tilt_deg": g.get("tilt_deg"), "theta": theta,
-                        "M": np.linalg.inv(T_t) @ T_o}, None
+                        "below_top_m": g.get("below_top"), "wrist_side": g.get("wrist_side"), "M": np.linalg.inv(T_t) @ T_o}, None
             why = (f"not held after the lift (jaws {theta:.2f}, lift ok {ok_lift}, dish rose {1e3 * (T_o[2, 3] - z0):.0f} mm, "
                    f"{1e3 * np.linalg.norm(T_o[:3, 3] - T_t[:3, 3]):.0f} mm from the TCP; gate {rule})")
             tried.append(why)
@@ -1804,7 +1814,8 @@ def limits_trials(args, report, backend, robot, rig, harness, tlog, hook, inst, 
                if rack == "UpperRack" else "both racks extended", "waive_dish_clearance": bool(args.waive_dish_clearance),
                "tilt_deg": None if args.plate_in_hand else tilt,
                "grasp_family": "in hand" if args.plate_in_hand else "slide" if args.plate_slide else
-               "wall pinch" if args.grasp_family == "wall" else "rim pinch",
+               "wall pinch" if args.grasp_family == "wall" else
+               f"side pinch, pads {args.side_below_top * 1e3:.0f} mm under the rim" if args.grasp_family == "side" else "rim pinch",
                "spot": None if spot is None else {"i": spot["i"], "j": spot["j"], "xy": spot["xy"], "kitfree_gate": spot["gate"]}}
         if yaw_k is not None:
             row.update(yaw_retry=True, yaw=int(yaw_k))
@@ -2294,8 +2305,9 @@ def place_goal_trials(args, report, flags, ns):
     def fail(row, step, why):
         row["steps"][step], row["failed_at"], row["why"] = "fail", step, why
 
-    def place_steps(i, oid, row):
-        step, why, info = plan_place(oid, att["M"], goal[oid])
+    def place_steps(i, oid, row, T_goal=None):
+        T_goal = goal[oid] if T_goal is None else T_goal       # variant S: the goal turned about the cup's own axis
+        step, why, info = plan_place(oid, att["M"], T_goal)
         row["plan"] = {k: v for k, v in info.items() if k != "plan"}
         s13 = ("S1", "S2", "S3")
         for s_ in s13[:s13.index(step) if step else 3]:
@@ -2315,7 +2327,7 @@ def place_goal_trials(args, report, flags, ns):
         tlog.set(phase="settle")
         rig.step(K.SETTLE_TICKS)
         T = T_now(oid)
-        lat, dz, tilt = B.goal_distance(ns.centroids[kinds[oid]], T, goal[oid])
+        lat, dz, tilt = B.goal_distance(ns.centroids[kinds[oid]], T, T_goal)
         row.update(error={"lateral_mm": round(lat * 1e3, 1), "dz_mm": round(dz * 1e3, 1), "tilt_deg": round(tilt, 1)},
                    disturbed=off_goal(names[:i]), final_pose=pose(T))
         e = row["error"]
@@ -2468,7 +2480,8 @@ def place_goal_trials(args, report, flags, ns):
 
     # ---------------------------------------------------------------- the dishes
     rows_path = out / "dishes.jsonl"
-    variant = "R-ideal" if args.regrasp_ideal else "R" if args.regrasp else "W"
+    variant = "S" if args.variant == "S" else "R-ideal" if args.regrasp_ideal else "R" if args.regrasp else "W"
+    side = json.loads(args.side_candidates.read_text())["cups"] if variant == "S" else {}
     todo = list(names)
     if args.regrasp or args.regrasp_ideal:
         w = {}
@@ -2483,10 +2496,30 @@ def place_goal_trials(args, report, flags, ns):
     for oid in todo:
         i = names.index(oid)
         t0, s0, n_viol = time.monotonic(), backend.tick_index, len(harness.violations)
-        M, src = in_hand(kinds[oid])
-        row = {"load": L, "dish": oid, "kind": kinds[oid], "grasp": meta[oid]["grasp"], "order_index": i, "variant": variant,
+        T_goal, cand = None, side.get(oid)
+        if variant == "S":                         # the best Kit-free candidate's measured hold and its turned goal
+            best = cand["best"]
+            M, src = (None, None) if best is None else (np.array(best["M"]), {k: best[k] for k in (
+                "below_top_m", "yaw_k", "wrist_side", "gate_run", "trial", "pivot_deg", "goal_turn_deg")})
+            T_goal = None if best is None else np.array(best["T_goal"])
+        else:
+            M, src = in_hand(kinds[oid])
+        row = {"load": L, "dish": oid, "kind": kinds[oid], "grasp": "side pinch" if variant == "S" else meta[oid]["grasp"],
+               "order_index": i, "variant": variant,
                "attached": True, "steps": {s: "skip" for s in STEPS}, "failed_at": None, "why": None, "error": None,
                "disturbed": [], "clip": None, "in_hand": src, "rack": meta[oid]["rack"], "slot": meta[oid]["slot"]}
+        if cand is not None:
+            row["candidates"] = cand["summary"]
+        if variant == "S" and M is None:           # no candidate passes the counter pick and the goal: no Isaac
+            row.update(attached=False, attach_mode=None, traj=None, invariants=[], sim_s=0., wall_s=0.)
+            row["steps"].update({s_: "pass" for s_ in ("S1",) if cand["failed_at"] == "S2"})
+            fail(row, cand["failed_at"], cand["why"])
+            rows.append(row)
+            with open(rows_path, "a") as f:
+                f.write(json.dumps(row) + "\n")
+            print(f"[INFO] {L} {variant} {oid} ({i + 1}/{len(names)}): fail {row['failed_at']} (Kit-free, no candidate)  "
+                  f"why {str(row['why'])[:220]}", flush=True)
+            continue
         row["reset"] = reset(i, oid, M)
         traj.update(on=True, rows=[], oid=oid, others=names[:i])
         if variant == "R":
@@ -2496,7 +2529,7 @@ def place_goal_trials(args, report, flags, ns):
         if variant != "W" and row["failed_at"] is None:
             repick(oid, row)
         if row["failed_at"] is None:
-            place_steps(i, oid, row)
+            place_steps(i, oid, row, T_goal)
         row["attach_mode"] = row["reset"]["attach"]
         row["traj"] = save_traj(f"{L}_{oid}_{variant}")
         row["invariants"] = sorted({v["name"] for v in harness.violations[n_viol:]})

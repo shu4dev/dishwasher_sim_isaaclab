@@ -682,6 +682,211 @@ def inhand_main(a):
           flush=True)
 
 
+# ------------------------------------------------------------------ the cup side pinch (plans/2026-10-26-side-pinch.md)
+PLACING = ROOT / "data/results/robot/placing_v1"
+YAW_NOTE = ("yaw k = the approach direction 2 pi k / 12 around the cup: at the counter grasp.side_grasps' yaw k; at the goal the "
+            "cup held at its height's hold turned 2 pi k / 12 about its own axis (the symmetric cup and the tilt-only "
+            "tolerance allow any turn), so a height's counter pick and a goal yaw combine freely; the wrist side (the 180 deg "
+            "roll about the approach, grasp.WRIST_SIDES) is fixed in the cup's frame by the hold: both = some counter yaw "
+            "passes at that height and wrist side AND this goal yaw passes; both_same_yaw = the same k passes at both")
+
+
+def rot_z(phi):
+    T = np.eye(4)
+    T[:3, :3] = rodrigues([0., 0., 1.], phi)
+    return T
+
+
+def side_M(M0, k, side):
+    """The hold at yaw k and wrist side ``side`` from the yaw-0 "mouth" hold M0: the cup turned about its own axis (right),
+    the TCP rolled 180 deg about the approach for "base" (left; the gripper is symmetric)."""
+    return (rot_z(np.pi) if side == "base" else np.eye(4)) @ np.asarray(M0) @ rot_z(-2 * np.pi * k / N_YAW)
+
+
+def side_job(args):
+    """One cup: S1 / S2 of every (height, wrist side, yaw) on the arm model, the earlier cups at their goals, the lower
+    rack in; yaw k turns the goal 2 pi k / 12 about the cup's own axis, held at the yaw-0 hold of that wrist side."""
+    d, earlier, holds = args
+    if "w" not in _W:
+        _W["w"] = World()
+    W = _W["w"]
+    from dishsim_frigidaire.robot import grasp as G
+    from dishsim_frigidaire.robot.rig import T_of
+    sys.path.insert(0, str(ROOT / "code/execution/frigidaire"))
+    import frigidaire_robot_episode as EP                 # constants only (stdlib at module level)
+    arm = W.arms[d["rack"]]
+    arm.set_dishes({e["name"]: arm.checker._body("cup", {"position_m": e["goal_pose"]["pos"],
+                                                        "quaternion_xyzw": e["goal_pose"]["quat_xyzw"]}, e["name"]) for e in earlier})
+    T_goal = T_of(d["goal_pose"]["pos"], d["goal_pose"]["quat_xyzw"])
+    q_home = W.kr.ik(G.tcp_frame(np.array(HOME_TCP), [1., 0., 0.]), np.array([0.0, -1.712, 1.712, -1.571, -1.571, 0.0]))
+    out = []
+    for (h, side), hold in holds.items():
+        M = side_M(hold["M"], 0, side)
+        held = {"held": ("cup", M, "dish")}
+        # the episode's start: the home TCP on its first IK branch free with the cup held (reset() in place_goal_trials)
+        seed = q_home if arm.free(q_home, **held) else next(
+            (q for q in W.kr.ik_all(G.tcp_frame(np.array(HOME_TCP), [1., 0., 0.]), q_home) if arm.free(q, **held)), q_home)
+        for k in range(N_YAW):
+            T_g = T_goal @ rot_z(2 * np.pi * k / N_YAW)
+            c = {"below_top_m": float(h), "wrist_side": side, "yaw_k": k, "s1": False, "s2": False, "why": None}
+            for r in EP.RAISES_M:
+                T_d = T_g.copy()
+                T_d[2, 3] += r
+                if free_qs(W, arm, T_d @ np.linalg.inv(M), held, seed=seed)[0]:
+                    c.update(s1=True, s1_raise_m=r)
+                    break
+            if not c["s1"]:
+                T_d = T_g.copy()
+                T_d[2, 3] += EP.RAISES_M[0]
+                qs = W.kr.ik_all(T_d @ np.linalg.inv(M), seed)
+                c["hits"] = sorted({b for _, b in arm.collisions(qs[0], first=False, **held)}) if qs else []
+                c["why"] = (f"S1: no collision-free IK with the cup at its goal orientation 0.10-0.35 m above its goal "
+                            f"(+0.10 m: {len(qs)} IK solutions, first hits {arm.collisions(qs[0], first=False, **held)[:3] if qs else None})")
+                out.append(c)
+                continue
+            T_rel = T_g @ np.linalg.inv(M)
+            T_rel[2, 3] += RELEASE_ABOVE_M
+            T_pp = T_rel.copy()
+            T_pp[2, 3] += HOVER_M
+            q_pp, q_rel = free_qs(W, arm, T_pp, held, seed=seed)[0], free_qs(W, arm, T_rel, held, seed=seed)[0]
+            c.update(n_free_preplace=len(q_pp), n_free_release=len(q_rel), s2=bool(q_pp and q_rel))
+            if not c["s2"]:
+                bad = [(w, T) for w, q_, T in (("pre-place", q_pp, T_pp), ("release", q_rel, T_rel)) if not q_]
+                hits = set()
+                for _, T in bad:
+                    qs = W.kr.ik_all(T, seed)
+                    hits |= {b for _, b in arm.collisions(qs[0], first=False, **held)} if qs else set()
+                c["hits"] = sorted(hits)
+                c["why"] = "S2: " + "; ".join(f"no collision-free IK at the {w}" for w, _ in bad)
+            out.append(c)
+    arm.set_dishes({})
+    return d["name"], out
+
+
+def side_main(a):
+    """Kit-free candidates of the side pinch: the counter pick per (height, yaw) (pre-grasp hover, approach line, lift
+    0.15 m with the cup held; the gate's racks), then per easy_cups cup S1 / S2 per (height, yaw) with each height's hold
+    (the median hold of placing_v1/partA_cup_side_h<mm> when that gate held, else the nominal geometric hold)."""
+    from dishsim_frigidaire.robot import grasp as G
+    sys.path.insert(0, str(ROOT / "code/execution/frigidaire"))
+    import frigidaire_robot_episode as EP
+    t0 = time.monotonic()
+    W = World()
+    arm = W.arms["LowerRack"]                             # the grasp gate's rack state: the upper rack pushed in
+    T_o = counter_obj()
+    dish = arm.checker._body("cup", W.P.pose_dict(T_o), "dish")
+    q_home = W.kr.ik(G.tcp_frame(np.array(HOME_TCP), [1., 0., 0.]), np.array([0.0, -1.712, 1.712, -1.571, -1.571, 0.0]))
+    holds, pick = {}, {}
+    for h in G.SIDE_BELOW_TOP_M:
+        gs = G.side_grasps(T_o, N_YAW, h)
+        run = PLACING / f"partA_cup_side_h{round(h * 1e3):02d}"
+        rows = [json.loads(l) for l in (run / "trials.jsonl").read_text().splitlines() if l.strip()] if (run / "trials.jsonl").is_file() else []
+        if any(r["g3"] and r.get("traj") for r in rows):
+            M0, src = measured_M("cup", run)
+            r = next(r for r in rows if r["trial"] == src["trial"])
+            k0, s0 = int(round(r["grasp"]["yaw"] / (2 * np.pi / N_YAW))) % N_YAW, r["grasp"].get("wrist_side", "mouth")
+            hold = {"measured": True, "gate_run": str(run.relative_to(ROOT)), "trial": src["trial"], "pivot_deg": src["pivot_deg"],
+                    "gate_yaw_k": k0, "gate_wrist_side": s0, "held": f"{sum(bool(x['g3']) for x in rows)}/{len(rows)}"}
+        else:
+            k0, s0, M0 = 0, "mouth", np.linalg.inv(gs[0]["T_tcp"]) @ T_o
+            hold = {"measured": False, "gate_run": str(run.relative_to(ROOT)) if rows else None, "trial": None, "pivot_deg": None,
+                    "gate_yaw_k": None, "gate_wrist_side": None, "held": f"0/{len(rows)}" if rows else "not run"}
+        # the yaw-0 "mouth" hold: undo the gate's roll (left) and turn the cup back to yaw 0 (right)
+        hold["M"] = (rot_z(np.pi) if s0 == "base" else np.eye(4)) @ M0 @ rot_z(2 * np.pi * k0 / N_YAW)
+        holds[h] = hold
+        res = []
+        for k, g in ((k, g) for side in G.WRIST_SIDES for k, g in enumerate(G.side_grasps(T_o, N_YAW, h, wrist_side=side))):
+            T_g, H = g["T_tcp"], G.hover_along(g["T_tcp"], HOVER_M)
+            T_up = G.hover(T_g, LIFT_M)
+            r = {"yaw_k": k, "wrist_side": g["wrist_side"], "ok": False, "why": None}
+            arm.set_dishes({"dish": dish})
+            hov, _ = free_qs(W, arm, H, {}, seed=q_home)
+            r["n_free_hover"] = len(hov)
+            if not hov:
+                qs = W.kr.ik_all(H, q_home)
+                r["why"] = f"no collision-free IK at the pre-grasp hover ({len(qs)} IK, first hits {arm.collisions(qs[0], first=False)[:3] if qs else None})"
+            for q_h in hov[:4]:
+                qs, why = line_ok(W, arm, H, T_g, q_h, 100, {}, allow_last=EP.ALLOW_STRADDLE_M, dish="dish")
+                if qs is None:
+                    r["why"] = f"approach line {why}"
+                    continue
+                arm.set_dishes({})
+                up, why = line_ok(W, arm, T_g, T_up, qs[-1], 40, {"held": ("cup", side_M(hold["M"], k, g["wrist_side"]), "dish")})
+                arm.set_dishes({"dish": dish})
+                if up is None:
+                    r["why"] = f"lift line {why}"
+                    continue
+                r.update(ok=True, why=None)
+                break
+            res.append(r)
+        arm.set_dishes({})
+        pick[h] = res
+        print(f"[INFO] counter pick, pads {h * 1e3:.0f} mm under the rim: {sum(x['ok'] for x in res)}/{len(res)} (yaw, wrist side) "
+              f"{[(x['yaw_k'], x['wrist_side']) for x in res if x['ok']]}; hold {hold['held']} measured {hold['measured']}", flush=True)
+    load = json.loads(a.side_load.read_text())
+    ds = load["dishes"]
+    jobs = [(d, ds[:i], {(h, side): {"M": v["M"].tolist()} for h, v in holds.items() for side in G.WRIST_SIDES})
+            for i, d in enumerate(ds)]
+    import multiprocessing as mp
+    with mp.get_context("fork").Pool(a.workers) as pool:
+        goal = dict(pool.imap(side_job, jobs, chunksize=1))
+    from collections import Counter
+    cups = {}
+    for i, d in enumerate(ds):
+        cs = goal[d["name"]]
+        for c in cs:
+            h, side = c["below_top_m"], c["wrist_side"]
+            c["pick_same_yaw"] = any(x["ok"] for x in pick[h] if x["yaw_k"] == c["yaw_k"] and x["wrist_side"] == side)
+            c["pick"] = any(x["ok"] for x in pick[h] if x["wrist_side"] == side)   # some counter yaw (the cup turns at the goal)
+            c["both"] = c["pick"] and c["s1"] and c["s2"]
+        ok = [c for c in cs if c["both"]]
+        summ = {"tried": len(cs), "pass_pick": sum(c["pick"] for c in cs), "pass_goal": sum(c["s1"] and c["s2"] for c in cs),
+                "pass_both": len(ok), "pass_both_same_yaw": sum(c["both"] and c["pick_same_yaw"] for c in cs),
+                "pass_s1": sum(c["s1"] for c in cs)}
+        best, failed_at, why = None, None, None
+        if ok:
+            c = max(ok, key=lambda c: (holds[c["below_top_m"]]["measured"], c["n_free_release"] + c["n_free_preplace"], -c["yaw_k"]))
+            hold = holds[c["below_top_m"]]
+            phi = 2 * np.pi * c["yaw_k"] / N_YAW
+            from dishsim_frigidaire.robot.rig import T_of
+            best = {"below_top_m": c["below_top_m"], "yaw_k": c["yaw_k"], "wrist_side": c["wrist_side"],
+                    "goal_turn_deg": round(float(np.degrees(phi)), 1), "M": side_M(hold["M"], 0, c["wrist_side"]).tolist(),
+                    "T_goal": (T_of(d["goal_pose"]["pos"], d["goal_pose"]["quat_xyzw"]) @ rot_z(phi)).tolist(),
+                    "gate_run": hold["gate_run"], "trial": hold["trial"], "pivot_deg": hold["pivot_deg"], "measured": hold["measured"],
+                    "s1_raise_m": c["s1_raise_m"], "n_free_preplace": c["n_free_preplace"], "n_free_release": c["n_free_release"]}
+        else:
+            pk = [c for c in cs if c["pick"]]
+            hs = sorted({f"{round(c['below_top_m'] * 1e3)} ({c['wrist_side']})" for c in pk})
+            step = "S1" if not any(c["s1"] for c in pk) else "S2"
+            bad = [c for c in pk if (not c["s1"]) == (step == "S1") and not (c["s1"] and c["s2"])]
+            hits = Counter(b for c in bad for b in c.get("hits", []))
+            waived = [c for c in cs if c["s1"] and c["s2"]]
+            failed_at = step
+            why = ((f"no side-pinch candidate is collision-free at the counter pick ({len(cs)} candidates)" if not pk else
+                    f"none of the {len(pk)} candidates with a collision-free counter pick (pads {', '.join(hs)} mm under "
+                    f"the rim, wrist side, x {N_YAW} yaws) has a collision-free IK " + (
+                        "with the cup at its goal orientation 0.10-0.35 m above its goal" if step == "S1" else
+                        "at the pre-place and the release (S1 passed at " + f"{sum(c['s1'] for c in pk)})"))
+                   + f"; commonest hits {hits.most_common(4)}"
+                   + (f"; with the counter pick waived {len(waived)} candidates pass S1 and S2 (pads "
+                      f"{', '.join(sorted({str(round(c['below_top_m'] * 1e3)) + ' mm ' + c['wrist_side'] for c in waived}))})"
+                      if waived else ""))
+        cups[d["name"]] = {"order_index": i, "slot": d["slot"], "rack": d["rack"], "summary": summ, "best": best,
+                           "failed_at": failed_at, "why": why, "candidates": cs}
+        print(f"[INFO] {d['name']} {d['slot']}: {summ} best {None if best is None else (best['below_top_m'], best['wrist_side'], best['yaw_k'])} "
+              f"{failed_at or ''} {str(why or '')[:160]}", flush=True)
+    res = {"plan": "plans/2026-10-26-side-pinch.md", "load": str(a.side_load.relative_to(ROOT)), "counter_xy": COUNTER_XY,
+           "pick_racks": "upper rack pushed in (the grasp gate's)", "goal_racks": "lower rack pushed in (an upper-rack goal)",
+           "yaw_note": YAW_NOTE, "heights_m": list(G.SIDE_BELOW_TOP_M), "axis_beyond_tcp_m": G.SIDE_AXIS_BEYOND_TCP_M,
+           "holds": {f"{h:.3f}": {**v, "M": v["M"].tolist()} for h, v in holds.items()},
+           "wrist_sides": list(G.WRIST_SIDES), "pick": {f"{h:.3f}": v for h, v in pick.items()}, "cups": cups,
+           "seconds": round(time.monotonic() - t0, 1)}
+    a.side_out.parent.mkdir(parents=True, exist_ok=True)
+    a.side_out.write_text(json.dumps(res, indent=1) + "\n")
+    print(f"[RESULT] PASS side candidates {sum(c['best'] is not None for c in cups.values())}/{len(cups)} cups with a candidate "
+          f"in {res['seconds']} s -> {a.side_out.relative_to(ROOT)}", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--workers", type=int, default=2)
@@ -702,11 +907,18 @@ def main():
                          "nearest the HOME_Q seed first, instead of one wrap unwrapped toward the seed")
     ap.add_argument("--counter-grid", action="store_true",
                     help="G1/G2 of the pick on a 5 x 5 grid of counter spots per kind (counter_grid.jsonl, counter_grid.json)")
+    ap.add_argument("--side-candidates", action="store_true",
+                    help="the cup side pinch's candidates (heights x yaws): counter pick, then S1 / S2 per cup of --side-load")
+    ap.add_argument("--side-load", type=Path, default=PLACING / "easy_cups/load.json")
+    ap.add_argument("--side-out", type=Path, default=PLACING / "side/candidates.json")
     a = ap.parse_args()
     a.out = a.out if a.out.is_absolute() else ROOT / a.out
     a.out.mkdir(parents=True, exist_ok=True)
     global SEED_FREE
     SEED_FREE = a.seed_free
+    if a.side_candidates:
+        a.side_load, a.side_out = (x if x.is_absolute() else ROOT / x for x in (a.side_load, a.side_out))
+        return side_main(a)
     if a.counter_grid:
         return grid_main(a)
     if a.orient:
