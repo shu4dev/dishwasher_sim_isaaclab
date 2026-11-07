@@ -1,0 +1,17 @@
+1a · SCORER   detail of block 1a in docs/repo_map.txt   state 2026-11-07
+
+┌─ 1a · SCORER  (part of the sampler; Frigidaire twin, Kit-free) ──────────────────────────────┐
+│ ┌───────────────────┐   ┌───────────────────┐   ┌───────────────────┐   ┌───────────────────┐│
+│ │ a load's poses    │   │ Warp ray cast     │   │ S, revision 5     │   │ fair score        ││
+│ │ bench, sampler or │   │ spray-arm disc ►  │   │ New+J per dish;   │   │ New+J / ceiling   ││
+│ │ restricted pack   │──►│ dish meshes,      │──►│ pooling gate:     │──►│ C_k,a (kind, arm) ││
+│ │ (the same dishes) │   │ lower + middle arm│   │ interior > 2 mm   │   │ load S = mean     ││
+│ │ JSON in           │   │ Kit-free, GPU     │   │ below rim = 0     │   │ dot_rules grid    ││
+│ └───────────────────┘   └───────────────────┘   └───────────────────┘   └───────────────────┘│
+│                                                                                              │
+│  ceiling C_k,a = the best a dish of the kind reaches alone under arm a (dot_rules grid)      │
+│  ranks arrangements of the same objects; it is not a cleaning measurement                    │
+│  page: Dot Score Rules V30 (4.5, history) ·   writes <load>.relative.json next to each load  │
+│  ✓ ceilings recomputed on 6.2 / Warp 1.17 (ceiling_62); the 4.5 numbers are history          │
+│  ◌ Dependency graphs V18 and Dot Score Rules V30 show 4.5 numbers; no 6.2 rebuild is planned │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘

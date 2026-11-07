@@ -1,0 +1,10 @@
+RETIRED   what left the repo on 2026-11-01 (git history at tag isaac45-final)
+
+┌─ RETIRED 2026-11-01  (git history at tag isaac45-final; hub folders kept as history) ────────┐
+│  Bosch 800 slot pipeline: capacity.plan, gen_instances, instance_views, run_rearrange,       │
+│  compare_algorithms, the compat optimum, tiers cells, placement, rack_gen slots, their tests │
+│  ArtVIP twin and the YCB props (bosch_props): hub folders get a history line, local copies   │
+│  move to data/_trash_20261101/ (delete after 2026-12-01)                                     │
+│  HOTEC bench --start / --finalize and its instances; run, analyze and page move to block 1   │
+│  corallab: Isaac 4.5 + Lab 2.1 at the tag; nothing of HEAD runs there                        │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘

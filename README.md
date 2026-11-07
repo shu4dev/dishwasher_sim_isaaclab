@@ -1,10 +1,10 @@
 <div align="center">
   <h1 align="center"> dishwasher_sim_isaaclab </h1>
-  <h3 align="center"> A physics-validated rearrangement planning benchmark (Isaac Sim) </h3>
+  <h3 align="center"> A physics-validated rearrangement benchmark (Isaac Sim) </h3>
   <p align="center">
-    <img src="https://img.shields.io/badge/Isaac%20Sim-4.5.0-76B900?style=flat&logo=nvidia&logoColor=white" alt="Isaac Sim 4.5.0"/>
-    <img src="https://img.shields.io/badge/Isaac%20Lab-2.1.1-76B900?style=flat&logo=nvidia&logoColor=white" alt="Isaac Lab 2.1.1"/>
-    <img src="https://img.shields.io/badge/Python-3.10-3776AB?style=flat&logo=python&logoColor=white" alt="Python 3.10"/>
+    <img src="https://img.shields.io/badge/Isaac%20Sim-6.2.0-76B900?style=flat&logo=nvidia&logoColor=white" alt="Isaac Sim 6.2.0"/>
+    <img src="https://img.shields.io/badge/Isaac%20Lab-3.0.0-76B900?style=flat&logo=nvidia&logoColor=white" alt="Isaac Lab 3.0.0"/>
+    <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat&logo=python&logoColor=white" alt="Python 3.12"/>
     <img src="https://img.shields.io/badge/License-BSD--3--Clause-blue?style=flat" alt="BSD-3-Clause"/>
   </p>
 </div>
@@ -18,23 +18,22 @@ code/util/tools/bootstrap.sh
 
 The first line downloads the public asset dataset into `data/assets`; `bootstrap.sh`
 builds the `dishsim-isaac` image if absent, starts the container and runs the Kit smoke test.
-Pass = `[RESULT] PASS` at the end. Long-form write-up of everything below:
-[docs/overview.md](docs/overview.md).
+Pass = `[RESULT] PASS` at the end.
 
 ## What this is
 
-An algorithm moves one kitchen object at a time by teleport inside a dishwasher digital twin,
-and physics judges every move. A placement counts only if it is collision-free (Kit-free FCL
-check in milliseconds) and physically stable (Isaac settles it). The Bosch benchmark has no
-robot arm and no arm motion planning; a UR5e + Robotiq arm is being brought up separately in
-the Frigidaire twin ([code/frigidaire/docs/robot.md](code/frigidaire/docs/robot.md), in progress
-2026-09-29). Ground truth: `dishsim/compat.py` computes the provably minimum move count, so
-results are optimality gaps, not rankings.
+An algorithm moves one dish at a time by teleport inside a digital twin of the Frigidaire FDPC4221AS
+dishwasher, loaded with the HOTEC wheat-straw set (plates, bowls, cups), and Isaac settles every move. A
+benchmark sample is a messy start (dishes stacked on the counter and dropped into the racks) and a goal: the
+score-greedy load, each dish in a random order at the free site and tilt with the highest gain of the fair
+exposure score S, built in Isaac one dish at a time and gated. The goal and its S_ref are the ground truth.
+Track A (greedy_offline, rrt_connect) must reach the goal: solved within a 60 s planning budget, raw moves.
+Track B (first_fit, move-level MCTS) builds its own load: S / S_ref. There is no robot arm in the benchmark;
+a UR5e + Robotiq 2F-85 arm was studied separately, a hardware-limits study closed on 2026-10-30
+([code/frigidaire/docs/robot.md](code/frigidaire/docs/robot.md)).
 
-<table align="center"><tr><td align="center">
-<img src="docs/figures/instance_goal_iso.png" width="640" alt="a goal arrangement, physically settled"/><br/>
-a goal arrangement, 15 items, physically settled
-</td></tr></table>
+Rosters come from explicit flags; each sample carries three level labels: kinds 1 / 2 / all, count 1-8 / 9-16 /
+17-24 and counter allowance n+3 / n+2 / n+1, each easy / medium / hard.
 
 ## Run the benchmark
 
@@ -42,90 +41,79 @@ Every Kit command goes through `code/util/run_kit.sh`, every Kit-free one throug
 `code/util/run_py.sh`; both forward into the container. Judge each Kit run by its log line
 `[RESULT] PASS` and the absence of tracebacks. Exit codes lie.
 
-1. Pick a GPU (shared machine): `nvidia-smi`, then `DISHSIM_GPU=<n> docker compose -f code/util/docker/compose.yaml up -d`.
-2. Assets and bring-up: the dataset download and `code/util/tools/bootstrap.sh` above (5 min).
-3. Gates: `code/util/run_py.sh -m pytest code/tests/` (37 tests; the shipped-instance optima check skips until `data/results/instances/bosch800/placement/` exists) and the capacity check in [docs/overview.md](docs/overview.md#3-quickstart--reproduce-the-results) (prints `total 39`).
-4. Generate, picture, solve (Kit, a few minutes each):
+1. Assets and bring-up: the dataset download and `code/util/tools/bootstrap.sh` above (5 min).
+2. Tests: `code/util/run_py.sh -m pytest code/tests/ code/frigidaire/tests/ -q`.
+3. The empty-machine baseline (Kit, 1 min):
+   `code/util/run_kit.sh code/initialization/frigidaire/frigidaire_initial_state_validate.py --headless --out-dir data/results/benchmark/frigidaire_hotec/baseline`.
+4. The fair score's ceilings on this stack: the two grid commands in [CLAUDE.md](CLAUDE.md#commands), then
+   `PYTHONPATH=code/src python3 -m bench.score --write-ceilings`.
+5. One roster, every stage (inside the container; about an hour on one L4 core pair):
    ```bash
-   code/util/run_kit.sh code/initialization/bosch/gen_instances.py --headless --mode perturbed --state placement --n 3 --seed 0
-   code/util/run_kit.sh code/initialization/bosch/instance_views.py --headless --enable_cameras --instance data/results/instances/bosch800/placement/perturbed_s0.json
-   code/util/run_kit.sh code/planner/bosch/run_rearrange.py --headless --enable_cameras --video --instances "data/results/instances/bosch800/placement/*.json" --algorithms greedy
+   code/util/run_py.sh code/planner/bench.py --kinds bowl --count bowl=7 --counter-allowance 3 --seed 0 --to report \
+       --algorithms greedy_offline,rrt_connect,first_fit,mcts --out data/results/bench/v1
    ```
-   Expected: 3 of 3 solved in 9 moves of 45, 0 aborts, 0 infeasible commands.
-
-Difficulty tiers: `gen_instances.py --cell <easy|medium|hard>`, `run_rearrange.py --cells ...`,
-then `code/util/run_py.sh code/planner/bosch/compare_algorithms.py` → `data/results/compare/summary.md`.
+   Samples land in `data/results/bench/v1/` (episodes in its `runs/`), stills, videos and the page (`index.html`) in `data/media/bench/v1/`.
 
 ## Add your algorithm
 
 1. Implement `reset(instance, world)` and `next_move(obs)` in one class (`code/src/dishsim/rearrange.py` shows the greedy baseline).
-2. Register it in `ALGORITHMS` in `code/planner/bosch/run_rearrange.py`. Accept `seed=` if stochastic.
-3. Run step 4 above with `--algorithms <name>`.
-
-The greedy baseline is one-blocker lookahead; swap cycles defeat it.
+2. Add it to `EPISODES` in `code/planner/frigidaire/frigidaire_bench_kit.py` (and to `ALGORITHMS` in `code/src/bench/sample.py`). Accept `seed=` if stochastic.
+3. Rerun the run and report stages on a stored sample: `code/util/run_py.sh code/planner/bench.py --from run --to report --input <sample.json> --algorithms <name>`.
 
 ## Results on record
 
-| Claim | Evidence |
-|---|---|
-| Benchmark runs closed-loop: the 2026-09-04 tier benchmark of record (greedy_offline and rrt_connect on easy / medium / hard = 5 / 10 / 15 items, 10 instances each, no move budget, 60 s planning budget) solved 39 of 60: easy 10/10 for both, medium 8/10 for both, hard 1/10 (greedy_offline) and 2/10 (rrt_connect). Provable optima on the three pinned perturbed instances are 9/9/9 (`code/tests/test_compat.py`; the 2026-08-30 "3/3 in 9 moves" greedy run left no records) | `data/results/rearrange/bosch800/placement/`, `data/results/compare/summary.md`, episode MP4s under `data/media/rearrange/` |
-| A planned Bosch 800 full load settles with 1.1 mm max drift | `docs/figures/bosch800_loaded_reveal.png` |
-| Settle-reliability gates: bowls 59/60 upright; scaled cups 49/82 and tumblers 64/88 wedge in the wire lattice, so drinkware sits out of the certified count | [docs/known_limitations.md](docs/known_limitations.md) |
-
-The Frigidaire FDPC4221AS, an independently authored twin under `code/frigidaire/` ([source README](code/frigidaire/README.md)), no longer has rows in this table. Its v3-era experiments (single-dish random drops, multi-dish randomized states, organized counterparts, the first exposure and planner runs) ran on the 52/72-tine photo-fitted racks, before the 2026-09-22 and 2026-09-28 rebuilds, and were retired on 2026-09-29: the code is in git history (last commit before the retirement: `4455813`) and the result folders are held on the 2 TB drive under `dishsim/_trash_20260929/` until 2026-10-29. Current documents: [geometry](code/frigidaire/docs/geometry.md) (racks re-measured 2026-09-28), the [HOTEC rearrangement benchmark](code/frigidaire/docs/hotec_bench.md) on that twin, the [exposure scorer](code/frigidaire/docs/exposure.md) and the [arm bring-up](code/frigidaire/docs/robot.md) (in progress).
+The first run of the merged benchmark (three rosters, seed 0, Isaac Sim 6.2.0): [results/2026-11-01-merged-benchmark.md](results/2026-11-01-merged-benchmark.md).
+Earlier results (the Bosch 800 slot benchmark, the 4.5 HOTEC bench, the 27 sampler pairs) ran on Isaac Sim 4.5 and are
+history: their notes are under [results/](results/), the code in git history (tag `isaac45-final`).
 
 ## Where things live
 
 | Path | What |
 |---|---|
-| `code/src/dishsim/` | benchmark package (`rearrange.py` core, `compat.py` optima, `collision_world.py` FCL, `config.py`) |
-| `code/{initialization,planner,execution,util}/` | the stages, in order, with the scripts per machine in `bosch/` and `frigidaire/` ([code/README.md](code/README.md)) |
-| `code/frigidaire/` | the Frigidaire twin: loaders, `docs/`, tests (tracked in git; the generator ships in `data/assets/frigidaire_fdpc4221as/source/` since 2026-10-21); its scripts sit in the stage folders |
-| `data/assets/` | gitignored; a copy of the HF dataset `shu4dev/dishsim-assets`: `hf download` to restore, `hf upload` to publish. Six asset folders (machines, dish sets, props), each with its generator in `source/` |
-| `data/build/ data/media/ data/results/ data/logs/ data/outputs/` | gitignored symlinks to the 2 TB drive; root disk gains nothing |
+| `code/planner/bench.py` | the benchmark CLI |
+| `code/src/bench/` | the benchmark's stages (`load` ... `graph`, `run`, `report`) |
+| `code/src/dishsim/` | the episode driver (`rearrange.py`), `rrt.py`, the Kit launcher (`app.py`), media, a cache-based FCL world |
+| `code/{initialization,planner,execution,util}/` | the stages' scripts, in order ([code/README.md](code/README.md)) |
+| `code/frigidaire/` | the Frigidaire twin: loaders, scorer, `docs/`, tests (tracked in git; the generator ships in `data/assets/frigidaire_fdpc4221as/source/`) |
+| `data/assets/` | gitignored; a copy of the HF dataset `shu4dev/dishsim-assets`: `hf download` to restore, `hf upload` to publish |
+| `data/media/ data/results/ data/logs/ data/outputs/` | gitignored |
 | `docs/figures/` | the only tracked media, with provenance in its README |
-| `data/experiments/` | symlink index of every experiment: machine → experiment → trial, one README per entry; nothing lives there |
 
-## Five rules that bite
+## Rules that bite
 
-1. Never change the Isaac Sim 4.5.0 / Isaac Lab 2.1.1 pins; the host driver caps Isaac at 4.5.0.
-2. Never edit the frozen cache anchors in `config.py`; they key every shipped cache. Hashed knobs mean a Kit rebake ([docs/overview.md §4](docs/overview.md#4-notes-for-running-and-extending)).
-3. `config_hash` is not the only cache key: a static-CoACD edit is invisible to the staleness check until a load fails with `missing CoACD pieces`; re-run `data/assets/bosch800/source/decompose_meshes.py` (Kit-free, seconds) and upload the pieces with `hf upload` ([docs/known_limitations.md](docs/known_limitations.md)).
-4. Every Kit script calls `dishsim.media.release_sim_for_close()` before closing, or shutdown spins forever and the `[RESULT]` line is lost.
-5. Files the container writes are root-owned: delete with `docker exec dishsim-isaac rm`, never host sudo.
+1. Never upgrade or downgrade Isaac Sim / Isaac Lab in place; the box image is `dishsim-isaac:6.2.0`.
+2. The baseline must be recorded at the twin's rack travel; a baseline from another travel ends in `baseline_failure`.
+3. The fair score's ceilings come from `data/results/dot_rules/ceiling_62/ceilings.json`; a stage without it fails.
+4. Every Kit script calls `dishsim.media.release_sim_for_close()` before closing, so the `[RESULT]` line is flushed.
+5. Files the container writes are root-owned: move or delete them with `docker exec dishsim-isaac ...`, never host sudo.
 
 ## Reference documentation
 
 | Doc | Contents |
 |---|---|
-| [docs/overview.md](docs/overview.md) | The long-form README: benchmark definition, environment, assets, quickstart gates, results, limitations, licenses |
-| [docs/environment.md](docs/environment.md) | Stack, container recipe, Isaac Lab 2.1 API notes, launcher landmines (canonical) |
+| [docs/environment.md](docs/environment.md) | Stack, container recipe, Isaac Lab 3.0 API notes, launcher landmines (canonical) |
 | [docs/architecture.md](docs/architecture.md) | Code structure, Kit-free vs Kit-side layering |
-| [docs/success_criteria.md](docs/success_criteria.md) | Slot model per placement mode, settle tolerances, capacity |
+| [docs/repo_map.txt](docs/repo_map.txt) | The whole repo on one page: assets, the sampler (scorer, robot), the two branches, the final output |
+| [docs/maps/](docs/maps/) | One detail map per block of the repo map |
 | [docs/known_limitations.md](docs/known_limitations.md) | Negative results and open items, with measurements |
-| [docs/extending.md](docs/extending.md) | Add an object class, placement mode or machine state |
-| [docs/bosch800_source_data.md](docs/bosch800_source_data.md) | Every Bosch 800 number with provenance |
-| [docs/joint_report.md](docs/joint_report.md) | Measured joint and articulation numbers of the ArtVIP baseline dishwasher (`dishwasher_2`), from the retired `inspect_scene.py` |
-| [docs/bosch800_asset.md](docs/bosch800_asset.md) | The standalone Bosch 800 USD asset |
 | [docs/hotec_wheatstraw_asset.md](docs/hotec_wheatstraw_asset.md) | The HOTEC wheat-straw plate/bowl/cup USD assets: parameters, capacities, Frigidaire load render |
-| [code/frigidaire/docs/geometry.md](code/frigidaire/docs/geometry.md) | Current Frigidaire FDPC4221AS rack, basket and appliance geometry (tape re-measured 2026-09-28) |
-| [code/frigidaire/docs/hotec_bench.md](code/frigidaire/docs/hotec_bench.md) | HOTEC rearrangement benchmark in the Frigidaire twin: tiers, tracks, decisions, landmines |
-| [code/frigidaire/docs/robot.md](code/frigidaire/docs/robot.md) | UR5e + Robotiq 2F-85 arm bring-up in the Frigidaire twin (work in progress, 2026-09-29) |
-| [code/frigidaire/docs/exposure.md](code/frigidaire/docs/exposure.md) | Exposure scorer reference for agents ([quickstart](code/frigidaire/docs/exposure_quickstart.md) for humans) |
+| [code/frigidaire/docs/geometry.md](code/frigidaire/docs/geometry.md) | Frigidaire FDPC4221AS rack, basket and appliance geometry (tape re-measured 2026-09-28) |
+| [code/frigidaire/docs/hotec_bench.md](code/frigidaire/docs/hotec_bench.md) | The 2026-09-23 HOTEC bench whose start generator, fault rule and episodes the benchmark keeps |
+| [code/frigidaire/docs/exposure.md](code/frigidaire/docs/exposure.md) | Exposure scorer and fair score reference ([quickstart](code/frigidaire/docs/exposure_quickstart.md) for humans) |
+| [code/frigidaire/docs/dependency.md](code/frigidaire/docs/dependency.md) | The insertion build, certify and the physical-cause graph |
+| [code/frigidaire/docs/robot.md](code/frigidaire/docs/robot.md) | UR5e + Robotiq 2F-85 in the Frigidaire twin: bring-up and the hardware-limits study (closed 2026-10-30) |
 
 ## Assets and licenses
 
-This project builds on the following open-source projects and datasets; visit each URL for its license:
+This project builds on the following open-source projects; visit each URL for its license:
 
-1. https://github.com/isaac-sim/IsaacLab, simulation framework (v2.1.1 API)
+1. https://github.com/isaac-sim/IsaacLab, simulation framework (v3.0.0 API)
 2. https://github.com/isaac-sim/IsaacSim, simulator and PhysX ground truth
-3. https://huggingface.co/datasets/X-Humanoid/ArtVIP, the articulated `dishwasher_2` asset (Apache-2.0)
-4. https://www.ycbbenchmarks.com, YCB Object & Model Set, Calli et al., "The YCB Object and Model Set" (IEEE ICAR 2015): textured `google_16k` scans for plate, bowl, cups, cutlery and spatula, under the YCB dataset terms
-5. https://github.com/BerkeleyAutomation/python-fcl, Pan, Chitta, Manocha, "FCL: A general purpose library for collision and proximity queries" (ICRA 2012)
-6. https://github.com/SarahWeiii/CoACD, Wei et al., "Approximate Convex Decomposition for 3D Meshes with Collision-Aware Concavity and Tree Search" (SIGGRAPH 2022)
-7. https://github.com/mikedh/trimesh, mesh processing throughout the asset and collision pipelines
+3. https://github.com/NVIDIA/warp, the ray casts of the exposure score
+4. https://github.com/BerkeleyAutomation/python-fcl, Pan, Chitta, Manocha, "FCL: A general purpose library for collision and proximity queries" (ICRA 2012)
+5. https://github.com/mikedh/trimesh, mesh processing throughout the asset and collision pipelines
 
-Rack geometry is procedurally generated, styled after publicly documented Whirlpool, Bosch and
-Frigidaire rack designs; no third-party geometry is redistributed. Downloaded and derived
-assets are never committed to this repo; the public asset dataset `shu4dev/dishsim-assets`
-redistributes only what its sources' licenses allow, with attribution.
+The Frigidaire twin and the HOTEC set are self-authored from tape measurements and the products' listings; no
+third-party geometry is redistributed. Downloaded and derived assets are never committed to this repo. The asset
+dataset `shu4dev/dishsim-assets` keeps the retired Bosch 800, ArtVIP and YCB-prop folders as history, under their
+sources' licenses (ArtVIP `dishwasher_2`, Apache-2.0; YCB Object & Model Set, Calli et al., IEEE ICAR 2015).

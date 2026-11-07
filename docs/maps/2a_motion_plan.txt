@@ -1,0 +1,20 @@
+2a · MOTION PLANNING   detail of block 2a in docs/repo_map.txt   state 2026-11-07
+
+┌─ 2a · MOTION PLANNING  (initial state to goal state; code/src/dishsim rearrange.py, rrt.py) ─┐
+│  ┌──────────────┬───────────────────────────────────────────────────────────────┬──────────┐ │
+│  │ algorithm    │ method                                                        │ track    │ │
+│  ╞══════════════╪═══════════════════════════════════════════════════════════════╪══════════╡ │
+│  │ greedy_      │ ✓ greedy rule run to completion on the FCL mirror, replayed   │ A, goal  │ │
+│  │ offline      │ one move per call; replans only when a settle lands off-plan  │          │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ rrt_connect  │ ✓ bidirectional arrangement RRT: state = one pose per dish,   │ A, goal  │ │
+│  │              │ edge = one legal teleport; the goal tree replays backwards    │          │ │
+│  └──────────────┴───────────────────────────────────────────────────────────────┴──────────┘ │
+│                                                                                              │
+│  parameters: --counter-allowance (cap = n on the counter + slack, the algorithms' constraint;│
+│  n+3 / n+2 / n+1 = easy / medium / hard), --algorithms, the 60 s planning budget per episode │
+│  a move teleports one dish to a commanded pose, racks or counter, and Isaac settles it       │
+│  25 refusals or failed settles in a row abort; a nudged goal dish or a bad put-back is fatal │
+│  ✓ v3: rrt_connect solved all three samples (8, 34, 38 moves), greedy_offline easy and hard  │
+│  ◌ samples/ s0 and s10 (rebuilt 2026-11-04): the planners have not run on them yet           │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘

@@ -1,0 +1,22 @@
+0 · ASSETS   detail of block 0 in docs/repo_map.txt   state 2026-11-07
+
+┌─ 0 · ASSETS ─────────────────────────────────────────────────────────────────────────────────┐
+│  HF dataset shu4dev/dishsim-assets  ◄── hf upload ──┐   data/assets/ is a plain copy; the    │
+│                                     ── hf download ─►┘   repo generates no asset any more    │
+│                                                                                              │
+│   ┌─────────────────────────┐   ┌─────────────────────────┐                                  │
+│   │ frigidaire_fdpc4221as   │   │ hotec_wheatstraw        │                                  │
+│   │ twin USD, racks +       │   │ plate / bowl / cup      │                                  │
+│   │ basket tape-measured,   │   │ parametric USDs,        │                                  │
+│   │ flush travel, wheels    │   │ measured masses,        │                                  │
+│   │ visual ✓, hub lags ✗    │   │ bowl v4 (foot ring)     │                                  │
+│   └─────────────────────────┘   └─────────────────────────┘                                  │
+│                 └──────────────┬──────────────┘                                              │
+│                                ▼                                                             │
+│                         blocks 1 to 3                                                        │
+│                                                                                              │
+│  history on the hub: bosch800,   artvip_dishwasher_2, bosch_props, frigidaire_prototypes     │
+│  each folder: what experiments load + source/ (generator, README: command and git SHA)       │
+│  ✗ hub lags the Mac: the wheels-visual twin (5 files) and the history line wait for hf upload│
+│    (last checked 2026-11-02; hf download restores the copy, hf upload publishes it)          │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘

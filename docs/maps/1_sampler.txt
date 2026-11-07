@@ -1,0 +1,49 @@
+1 · SAMPLER   detail of block 1 in docs/repo_map.txt   state 2026-11-07
+
+┌─ 1 · SAMPLER  (code/src/bench, stages load ► stills; the Kit stages one process each) ───────┐
+│  ┌──────────────┬───────────────────────────────────────────────────────────────┬──────────┐ │
+│  │ stage        │ what it does                                                  │ runs on  │ │
+│  ╞══════════════╪═══════════════════════════════════════════════════════════════╪══════════╡ │
+│  │ load         │ ✓ roster from --kinds/--count; level labels; slack: 2a, 2b    │ Kit-free │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ initial      │ ✓ counter stacks (n in [N/4,3N/4]), rack drops, settle, repro │ Kit      │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ gate_initial │ ✓ judges the saved start record vs the flush baseline (2 mm)  │ ledger   │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ fit          │ ✓ CP-SAT fit over the packer's poses, S ascent, DAG order;    │ Kit-free │ │
+│  │              │   --hardware: gate each dish's pick, carry and direct release │          │ │
+│  │              │   by the hand (1b), cut the failing site, re-pack; no ascent  │          │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ build        │ ✓ Isaac build dish by dish in DAG order; a plate lands only   │ Kit      │ │
+│  │              │   within 20 mm dz, 16 deg of its packed pose (rear plates)    │          │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ gate_goal    │ ✓ joint gate: all settle at once, peak < 5 mm, racks retract  │ Kit      │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ certify      │ ✓ witness order rebuilt from empty racks in a fresh process   │ Kit      │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ score        │ ✓ fair score S_ref of the goal load, full rays (1a)           │ GPU      │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ graph        │ ✓ arrows only for a physical cause: support or covered path   │ Kit      │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ stills       │ ✓ initial and goal stills into the media folder (--stills)    │ Kit      │ │
+│  └──────────────┴───────────────────────────────────────────────────────────────┴──────────┘ │
+│                                                                                              │
+│  parameters: --kinds, --count, --seed (n on the counter from the seed, or --on-counter);     │
+│  --hardware <mount.json> (sample id __hw), --hardware-basket in|out (__hwnb), --hardware-    │
+│  max-iter, --start-from <sample> (reuses its metadata and initial), --to fit = Kit-free only │
+│  levels as labels: kinds 1 / 2 / all · count 1-8 / 9-16 / 17-24 (the slack's level: 2a, 2b)  │
+│  a sample file = 4 blocks: metadata (params, ledger, maker, provenance, stills), initial and │
+│  goal ({dish: world pose}, rack joints), dag (certified edges, layers, build order); runs/   │
+│  and index.jsonl beside it; poses stored, not re-derived (plans/2026-11-02-sample-schema.md) │
+│  hardware gate (hwgate.py): a candidate load is gated Kit-free in build order, the earlier   │
+│  dishes in the scene; a failing pose, plate slot, slot pair or bowl site is cut and the fit  │
+│  re-packs (bans.json per family digest and mount); the start side records which dishes the   │
+│  hand can pick (initial.robot); the goal keeps the hand's verdict per dish (goal.robot)      │
+│  ✗ code: --counter-allowance still enters at load (cap in initial.counter, _a<n> in the file │
+│    name); it moves to the run stage and runs/ (plans/2026-11-02-counter-slack.md)            │
+│  ✓ v3 (fit-score-prove): easy s0, medium s3, hard s0 certified; S_ref .397, .234, .398       │
+│  ✗ medium: s0, s1 failed certify, s2 the Isaac build (a bowl outside its landing)            │
+│  ✓ samples/: plate5-bowl5-cup5 s0, s10 rebuilt 2026-11-04 (rear plates seat): S_ref .513/.465│
+│  ✗ samples_hw/: no goal for s0's 15 dishes passes the direct-release gate, basket in or out; │
+│    best 14 of 15 (plate_05 1 mm on plate_01); results/2026-11-05-hardware-aware-sampler.md   │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘

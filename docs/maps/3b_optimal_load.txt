@@ -1,0 +1,22 @@
+3b · OPTIMAL ARRANGEMENT   detail of block 3b in docs/repo_map.txt   state 2026-11-07
+
+┌─ 3b · OPTIMAL ARRANGEMENT  (what 2b hands back; run ► certify ► score ► video ► report)  ────┐
+│  ┌──────────────┬───────────────────────────────────────────────────────────────┬──────────┐ │
+│  │ stage        │ what it does                                                  │ runs on  │ │
+│  ╞══════════════╪═══════════════════════════════════════════════════════════════╪══════════╡ │
+│  │ run          │ ✓ an episode per algorithm: first_fit, mcts                   │ Kit      │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ certify      │ ✗ own load: joint gate, built one dish at a time, resequenced │ Kit      │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ score        │ ✓ S of the certified load at N 262144 over the sample's S_ref │ Kit-free │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ video        │ ✓ stop-motion per record: stored poses, kinematic dishes, RTX │ Kit      │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ report       │ ✓ page row: S / S_ref, faults; stills and the video           │ Kit-free │ │
+│  └──────────────┴───────────────────────────────────────────────────────────────┴──────────┘ │
+│                                                                                              │
+│  the arrangement = the load 2b built from the start alone, as poses in the racks             │
+│  truth = the sample's goal and its S_ref (1a); S / S_ref is the score, faults as in 3a       │
+│  ✗ first_fit and MCTS: own loads fail the joint gate, an upper bowl 2 to 3.8 mm into the rack│
+│  on record (4.5, the old bench): MCTS 6/6, 3/3, 3/3 solved; S / S_ref 1.036, 1.019, 1.008    │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘

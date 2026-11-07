@@ -1,0 +1,22 @@
+2b · ARRANGEMENT OPTIMIZATION   detail of block 2b in docs/repo_map.txt   state 2026-11-07
+
+┌─ 2b · ARRANGEMENT OPTIMIZATION  (start only; frigidaire_bench.py first_fit, mcts.py) ────────┐
+│  ┌──────────────┬───────────────────────────────────────────────────────────────┬──────────┐ │
+│  │ algorithm    │ method                                                        │ track    │ │
+│  ╞══════════════╪═══════════════════════════════════════════════════════════════╪══════════╡ │
+│  │ first_fit    │ ✗ own load: first free catalogue pose per dish (bans, one per │ B, open  │ │
+│  │              │ slot), sequenced on the counter cap, certified gate + build   │          │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ mcts         │ ✗ move-level MCTS on the mirror: place / keep / buffer; leaf  │ B, open  │ │
+│  │              │ = first-fit rollout scored by exposure; certified the same    │          │ │
+│  └──────────────┴───────────────────────────────────────────────────────────────┴──────────┘ │
+│                                                                                              │
+│  parameters: --counter-allowance (cap = n on the counter + slack, the algorithms' constraint;│
+│  n+3 / n+2 / n+1 = easy / medium / hard), --algorithms, the 60 s planning budget per episode │
+│  a move teleports one dish to a commanded pose, racks or counter, and Isaac settles it       │
+│  25 refusals or failed settles in a row abort; a nudged goal dish or a bad put-back is fatal │
+│  the start alone is given (RL style: start plus reward); its arrangement is scored S / S_ref │
+│  against the sample's goal (1a) once it passes gate_goal and certify (1)                     │
+│  ✗ first_fit and MCTS: own loads fail the joint gate, an upper bowl 2 to 3.8 mm into the rack│
+│  on record (4.5, the old bench): MCTS 6/6, 3/3, 3/3 solved; S / S_ref 1.036, 1.019, 1.008    │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘

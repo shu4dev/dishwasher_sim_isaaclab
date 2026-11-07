@@ -1,0 +1,35 @@
+ONE EXPERIMENT ROUND   the workflow around the blocks of docs/repo_map.txt   state 2026-11-07
+
+┌─ ONE EXPERIMENT ROUND  (the workflow around the blocks) ─────────────────────────────────────┐
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐│
+│  │ idea         │   │ grill        │   │ plan         │   │ grill        │   │ runner       ││
+│  │ yours        │   │ pop-ups,     │   │ plans/<date>-│   │ the plan     │   │ Opus: minimal││
+│  │              │──►│ every        │──►│ <slug>.md,   │──►│ as long as   │──►│ code, dry run││
+│  │              │   │ decision     │   │ <= 40 lines  │   │ it takes     │   │ on the Mac   ││
+│  └──────────────┘   └──────────────┘   └──────────────┘   └──────────────┘   └──────────────┘│
+│                                                                           rsync code │       │
+│                                                                            md5 check ▼       │
+│  ┌──────────────────────────────┬───────────────────────────────┬───────────────────────────┐│
+│  │ Mac                          │ box dishsim-l4 (bills)        │ dishsim-isaac:6.2.0 (root)││
+│  ╞──────────────────────────────╪───────────────────────────────╪───────────────────────────╡│
+│  │ brev start, retry if silent  │ self-stop armed at T0         │ run_kit.sh = Kit (6.2)    ││
+│  ├──────────────────────────────┼───────────────────────────────┼───────────────────────────┤│
+│  │ watch the log over ssh       │ kill, stop at the round cap   │ run_py.sh = Kit-free      ││
+│  ├──────────────────────────────┼───────────────────────────────┼───────────────────────────┤│
+│  │ rsync back results + media   │ Kit on j,j+4; alone on 0-7    │ logs: data/logs/<area>/   ││
+│  ├──────────────────────────────┼───────────────────────────────┼───────────────────────────┤│
+│  │ brev stop, confirm STOPPED   │ RTX on 6.2; 1st boot 5 min│     files land root-owned     ││
+│  └──────────────────────────────┴───────────────────────────────┴───────────────────────────┘│
+│           │                                                                                  │
+│           ▼                                                                                  │
+│ ┌───────────────────┐   ┌───────────────────┐   ┌───────────────────┐   ┌───────────────────┐│
+│ │ results/<slug>    │   │ 3-line            │   │ page              │   │ commit            ││
+│ │ .md (runner)      │──►│ verdict           │──►│ Artifact, shown   │──►│ yours, suggested  ││
+│ │                   │   │                   │   │ to you first      │   │ subject given     ││
+│ └───────────────────┘   └───────────────────┘   └───────────────────┘   └───────────────────┘│
+│  ✓ Mac Kit-free pytest 237 passed; 10 of the 11 failures need Warp or PIL, which the box has │
+│  ✗ test_r05_00027_access_edges_and_witness (the packed-model test) fails since 2026-10-23    │
+│  ✗ twin pytest on 6.2: usd_bootstrap wants the 4.5 PhysX schema path; 84 pass with 6.2 paths │
+│  since 2026-11-05 (tokens low): one lean runner, no workflow fan-out, follow-ups by message  │
+│    to the same agent, stop after the deliverable; code reaches the box by rsync + md5, no git│
+└──────────────────────────────────────────────────────────────────────────────────────────────┘

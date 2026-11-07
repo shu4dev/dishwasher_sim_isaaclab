@@ -1,0 +1,20 @@
+3a · PATHS   detail of block 3a in docs/repo_map.txt   state 2026-11-07
+
+┌─ 3a · PATHS  (what 2a hands back; code/src/bench run ► video ► report; bench.py --from run)  ┐
+│  ┌──────────────┬───────────────────────────────────────────────────────────────┬──────────┐ │
+│  │ stage        │ what it does                                                  │ runs on  │ │
+│  ╞══════════════╪═══════════════════════════════════════════════════════════════╪══════════╡ │
+│  │ run          │ ✓ an episode per algorithm: greedy_offline, rrt_connect       │ Kit      │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ video        │ ✓ stop-motion per record: stored poses, kinematic dishes, RTX │ Kit      │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ report       │ ✓ page row: solved within budget, raw moves, faults; stills   │ Kit-free │ │
+│  └──────────────┴───────────────────────────────────────────────────────────────┴──────────┘ │
+│                                                                                              │
+│  the path = the recorded moves, one dish teleported at a time from the start to the goal     │
+│  truth = the sample's goal; solved = every dish at its goal within the 60 s planning budget  │
+│  faults: a nudge is counted; fatal only if that dish was at goal or leaves counter and racks │
+│  ✓ v3: rrt_connect solved all three samples (8, 34, 38 moves), greedy_offline easy and hard  │
+│  ◌ samples/ s0 and s10 (rebuilt 2026-11-04): no episode yet                                  │
+│  ✗ video, minor: a moved dish leaves a faint ghost for about 3 frames (RTX accumulation)     │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘

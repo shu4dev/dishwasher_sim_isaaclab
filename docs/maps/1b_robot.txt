@@ -1,0 +1,49 @@
+1b · ROBOT EXECUTION   detail of block 1b in docs/repo_map.txt   state 2026-11-07
+
+┌─ 1b · ROBOT EXECUTION  (part of the sampler; UR5e + side-mounted 2F-85 at posture_v2) ───────┐
+│  ┌──────────────┬───────────────────────────────────────────────────────────────┬──────────┐ │
+│  │ gate         │ what it checks                                                │ runs on  │ │
+│  ╞══════════════╪═══════════════════════════════════════════════════════════════╪══════════╡ │
+│  │ mount        │ 60 mounts swept Kit-free, posture_v2 the winner: base (0.60,  │ Kit-free │ │
+│  │              │ -0.70, 0.60) m, yaw +7 deg, counter spot (0.35, -0.12)        │          │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ G0 grasp     │ bowl foot ring, axial or side (mouth down); plate wall pinch  │ Kit-free │ │
+│  │              │ 20 mm down the wall off a 58 deg plank; cup side pinch 11 or  │          │ │
+│  │              │ 5 mm below the base; the hand side-mounted (the baseline)     │          │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ G1 IK        │ analytic IK at grasp, lift, pre-place, release; 8 branches    │ Kit-free │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ G2 path      │ FCL hulls, RRT-Connect; 15 mm arm, 5 mm held-dish clearance;  │ Kit-free │ │
+│  │              │ the open hand 2 mm clear at the release                       │          │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ G3 hold      │ 10 trials per hold: lift, settle, hold 5 s, drift <= 5 mm;    │ Kit      │ │
+│  │              │ per-hold drive 22 N bowls, cups, 90 N plates; 10/10 each hold │          │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ order        │ dag-valid order per rack with the arm's access, the earlier   │ Kit-free │ │
+│  │              │ dishes in the scene, seat-at-goal rule (access_order.py)      │          │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ episode      │ approach, grasp, carry, release: direct at the goal, guarded  │ Kit      │ │
+│  │              │ insert to the predicted stop, tine-guided drop, partial open  │          │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ chain        │ one Kit process per dish; placed dishes stay, the other rack  │ Kit      │ │
+│  │              │ in, basket out, failed dishes parked (--fifteen)              │          │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ verdict      │ seated: centroid 2 mm, axis 5 deg, floor wire 2 mm, on the    │ Kit      │ │
+│  │              │ goal's wires (AT_GOAL beside it); plates lateral 18, dz 20 mm │          │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ replay       │ Warp mp4 in the stills' look: BENCH_CAMERA, tints, follow-cam │ Kit-free │ │
+│  │              │ inset (--load --rows --states --video-order), ground 40 m     │          │ │
+│  ├──────────────┼───────────────────────────────────────────────────────────────┼──────────┤ │
+│  │ hw gate      │ the sampler's loop (1): direct release per candidate pose,    │ Kit-free │ │
+│  │              │ cuts, re-pack (bench/hwgate.py; four runs on 2026-11-05)      │          │ │
+│  └──────────────┴───────────────────────────────────────────────────────────────┴──────────┘ │
+│                                                                                              │
+│  ✓ round 3 (2026-11-05, one run): 15 grasped, carried, in the rack; 14 at goal; 12 seated:   │
+│    plates 5/5, cups 4/5, bowls 3/5 (results/2026-11-05-fifteen-r3.md; a continuous replay)   │
+│  ✗ open: bowl_02 (14.1 deg off) and bowl_03 (floor wire 2.95 mm off) slide from the predicted│
+│    stop; cup_05 topples 22.6 deg at any release: the hand cannot hold them at goal and open  │
+│  pads hold bowls and cups at 1.4 to 3.5 N (2 N per pad) vs the real hand's 20 N: measured    │
+│  side study: the dish alone, dropped 20..150 mm onto its goal (frigidaire_drop_curve.py)     │
+│  hardware-limits study 2026-10-23 to 10-30 (closed; page Hardware Limits Report): bowls 3/7, │
+│    plates front 4/4 (assumed hold) and rear 0/4, cups 8/8 mouth down from 100-125 mm         │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
