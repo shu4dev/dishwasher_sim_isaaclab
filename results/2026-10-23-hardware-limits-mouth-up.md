@@ -6,7 +6,7 @@ Plan: plans/2026-10-23-hardware-limits-mouth-up.md. Page: `data/media/robot/limi
 - **Placement (G4, Isaac, level target, n = 3; flags `--place-slot <kind> --target level --legacy-tolerances`).** Bowls 21/46. All 13 upper-slot trials that released (slots 01, 02, 03, 07) pass, and lower rear x −0.12 and −0.07 pass 3/3. Front-right and rear-right sites are 0/12: the bowl tilts 21–35° on the tines. Isaac blocked 3 of the 15 bowl G2 sites. Cups 0/24: they are released and stay in the rack, but drop about 65 mm below the release. Isaac also rejects all 5 Kit-free rejections it was given.
 - **Deviations.**
   - Counter spot (0.20, −0.16).
-  - The approach hover is 0.10 m with a separate 0.15 m lift. With a 0.15 m hover, Isaac found no bowl approach while the Kit-free model found 12/12; this disagreement is unexplained.
+  - The approach hover is 0.10 m with a separate 0.15 m lift in the Kit-free sweep (`reach.json`: `hover_m` 0.1, `lift_m` 0.15) and in the bowl and plate gates (`gate2_bowl`, `gate2_plate`: `flags.hover_m` 0.1). The cup gate `gate2_cup`, the 9/10 above, ran at a 0.15 m hover (`gate2_cup/limits_cup.json` `flags.hover_m` 0.15, also listed in its `deviations_from_headline`), as did the superseded `gate_*` runs. With a 0.15 m hover, Isaac found no bowl approach while the Kit-free model found 12/12; this disagreement is unexplained.
   - The plate runs with an unchecked approach.
   - The box container has no OMPL, so a numpy RRT-Connect (`collide.rrt_connect_np`, shortcuts time-bounded) stands in.
   - Two placement runs stalled at their first upper-rack trial; they were killed and rerun as `place_bowl_upper_*`. Round 2 found the cause: the arm blew up during the trial reset's rack ramp (stale PD targets after the teleport). The RRT was not the cause.
@@ -53,6 +53,8 @@ Plan: plans/2026-10-23-hardware-limits-mouth-up.md. Page: `data/media/robot/limi
   |---|---|---|---|---|---|---|
   | bowls (of 15) | 8 | 10 | 10 | 5 | 0 | 0 |
   | cups (of 8) | 6 | 7 | 5 | 2 | 2 | 0 |
+
+  The 0° column re-runs round 1's level targets (identical poses in `reach.json` and `orient.json`) with another carried pose, round 1 carrying the dish as grasped (`reach.jsonl` `release_tcp_z_axis` (0, 0, −1) in all 372 level rows) and round 3 at the in-hand pose the grasp gate measured (`orient.json` `measured_M`, bowl `pivot_deg` 20.84), so 8 of the 15 bowl sites and 6 of the 8 cup sites that passed in round 1 (15/19, 8/12) keep a path; lower rear x −0.07 and −0.12 and upper slots 01 and 07 lose theirs, although Isaac placed level bowls there 9/9, 9/9, 8/8 and 6/6 (`round2_summary.json` `bowl_air`).
 - **Orientation, Isaac** (`--target tilt --release down --down-orient target --contact-lag 0.15`, n = 5 per tilt):
   - Bowl upper slot 02: 0° 5/5, 30° 3/5, 60° 0/5, 90° 0/5.
   - Bowl rear-right: 0° 0/5, 30° 3/5.

@@ -1,0 +1,26 @@
+# Bowl carry clearance: measure bowl_05's deviation, turn one knob
+Slug: 2026-11-04-bowl-carry-clearance | From: results/2026-11-04-grasp-place-s0.md (bowl_05 dropped in carry), with results/2026-10-29-ring-place.md (D-ring)
+
+## Goal
+bowl_05's wire brush on its last carry leg (5.4 N for 0.14 s, a 5.1 mm shift in the pads, planned path 15 mm clear) is explained from its own log and one knob removes it, so bowl_05 and bowl_01 carry clean in Isaac (no contact pair on the carry legs, drift under 1 mm) and seat as before.
+
+## Decisions (from grilling)
+- Measure first, Kit-free: from runs/s0_bowl_05_b/trials/trial.jsonl and trial_physics.jsonl the executed TCP and bowl path against the planned leg (the straight joint line sampled at 0.02 rad) over the last carry leg: the lateral deviation at the contact tick, the planned clearance there, the in-hand offset from the pick's hold. Written to data/results/robot/samples_v1/<s0>__fixes/carry/carry_deviation.json.
+- Then one knob, named by the number: deviation over 15 mm = the last leg slowed (rig max_step 0.004 rad, 0.25 rad/s) so the arm tracks the plan; deviation under 15 mm with the plan's clearance under 20 mm = the carry legs' scene margin (arm.margin) to 20 mm; an in-hand offset over 2 mm = the carry planned from the measured in-hand pose after the pick. Not widened: CARRY_DROP_M (5 mm), the sensor trip, the 15 mm rule (it stays or tightens). Rejected raising the descent start to 150 mm (a brush there trips the sensor and releases high) and the margin without the measurement.
+- Amended 2026-11-04 after phase 1 (carry_deviation.json): the arm tracked its plan to within 0.65 mm (bowl_05) and 2.1 mm (bowl_01), the in-hand offset stayed under 0.5 mm before the contact, and the planned path itself pushed bowl_05 1.65 mm into UpperRack Wire_01336 on its last RRT edge: the held dish is checked only by the bench checker's pair rule (up to 1 mm penetration passes), RRT edges are checked at 0.03 rad but followed at 0.02 rad, and arm.margin covers the links and gripper only (23 mm clear on both carries). So the knob the rule named (arm.margin 20 mm) changes nothing and is dropped. The fix, a tightening: the held dish must keep 5 mm from the scene on every carry sample and at the descent start (the executed deviation was at most 2.1 mm), RRT edges are checked at the followed 0.02 rad or finer, and the descent start is the candidate between 50 and 150 mm with the largest held-dish clearance among those that pass. A bowl with no descent start that passes the 5 mm rule is a gate reject row, not a loosened rule. Decided by the coordinator in the user's absence.
+- Isaac: bowl_05 then bowl_01 (the two bowls whose goals pass the gate), each its own Kit process, D-ring otherwise unchanged; judged as the s0 round plus the carry's contact pairs per leg.
+- Packaging (the user, 2026-11-04: parallel as much as possible, per-kind test loads first, then the full s0 again): phase 1 runs NOW in parallel with the cups round, as a new standalone Kit-free script that edits no shared file and writes its table and a kitfree.md beside it; phase 2 is one integration runner after the cups hand-back (the episode script has one editor) folding the three plans' winners into the episode script and running the three chains in ONE shared window (cap 2 h: kill T0 + 108, stop T0 + 116) on cores 0/4 (carry), 1/5 (plates), 2/6 (sites), writing the one note results/2026-11-04-three-fixes.md. The per-kind loads from s0's goals stand in for the user's simpler samples; the full s0 rerun with every fix is the follow-up plan.
+
+## Change
+- Phase 1 (new file): code/execution/frigidaire/frigidaire_carry_deviation.py, Kit-free, the executed-vs-planned path, the contact tick and the in-hand offset from bowl_05's and bowl_01's trial logs; writes data/results/robot/samples_v1/<s0>__fixes/carry/carry_deviation.json and kitfree.md naming the knob by the plan's rule.
+- code/execution/frigidaire/frigidaire_robot_episode.py: the chosen knob only (one constant or the leg's step), the carry's contact pairs per leg in the row. Docs: robot.md (a dated line), the README row.
+
+## Run
+Mac pytest before and after. Kit-free: the measurement on bowl_05's logs (and bowl_01's for the baseline). In the shared window, cores 0/4: `code/util/run_kit.sh code/execution/frigidaire/frigidaire_robot_episode.py --headless --no-media --place-goal data/results/robot/samples_v1/<s0>__fixes/carry/load.json --dishes bowl_05 --attach none` then bowl_01 with the state chained; replays and stills beside.
+
+## Works when
+carry_deviation.json holds the deviation, the planned clearance and the in-hand offset for bowl_05 (and bowl_01), rows.jsonl holds the two bowls with gate, picked, carried, seated, at_goal, cause and the contact pairs per carry leg (none), each has a clip and its release and landed stills, and results/2026-11-04-three-fixes.md has the carry section naming the knob and its value.
+
+## Assumed / skipped
+- Assumed: the trial logs hold the per-tick body poses and contact pairs needed (the harness's PhysX contact reports); the pick and the descent are the s0 round's.
+- Skipped this round: the three gate-rejected bowls (plans/2026-11-04-deep-sites-gate.md), s10, a page, new tests.

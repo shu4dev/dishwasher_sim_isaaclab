@@ -1,15 +1,18 @@
 # Environment
 
-Measured on the **corallab workstation** (2026-08-30), where the `plan` branch now runs after
-the Brev launchable was retired. This is the **canonical home of the launcher landmines** —
-the README and `CLAUDE.md` link here rather than restating them.
+Two stacks since 2026-11-01. HEAD (branch `plan`) runs on the **Brev box** `dishsim-l4` with Isaac Sim
+**6.2.0** + Isaac Lab **v3.0.0** (results/2026-11-01-stack-upgrade.md). The **corallab workstation**
+(measured 2026-08-30) stays on Isaac Sim 4.5.0 + Isaac Lab v2.1.1 at the last pre-upgrade commit
+(tag `isaac45-final`); its hardware, storage and shared-machine sections below describe that machine,
+and the 2.1 API notes live in that commit's copy of this file. This is the **canonical home of the
+launcher landmines** — the README and `CLAUDE.md` link here rather than restating them.
 
-> The Bosch benchmark is teleport-only (no robot arm, no arm motion planning); an arm is being
-> brought up separately in the Frigidaire twin
-> ([code/frigidaire/docs/robot.md](../code/frigidaire/docs/robot.md), in progress 2026-09-29). The FCL
-> planning stack is CPU-bound, so the core count below matters more than the GPU.
+> The benchmark (the Frigidaire twin + the HOTEC set, `code/planner/bench.py`) is teleport-only (no robot arm, no arm
+> motion planning); an arm was studied separately in the Frigidaire twin
+> ([code/frigidaire/docs/robot.md](../code/frigidaire/docs/robot.md), closed 2026-10-30). The FCL planning stack and the
+> PhysX settles are CPU-bound; the score-greedy build, the score and the ceiling grids cast rays on the GPU (Warp).
 
-## Hardware (host)
+## Hardware (corallab host, the 4.5 stack)
 
 | Item | Value |
 |---|---|
@@ -19,95 +22,123 @@ the README and `CLAUDE.md` link here rather than restating them.
 | Disk | root NVMe 928 GiB, 80 % used with about 182 GiB free (2026-09-29) — bulk data lives on `/media/corallab-s1/2tbhdd/brianshu/dishsim` |
 | OS | Ubuntu 20.04.6 (glibc 2.31) — too old for any native Isaac install; Docker mandatory |
 
+The Brev box: g6.2xlarge, one L4 (24 GB) on driver 595.91.07 (Isaac Sim 6.2 is tested on 595.58.03),
+AMD EPYC 7R13 with 4 cores / 8 threads, 30 GiB RAM (under 6.2's 32 GB minimum), 117 GB root disk, a
+419 GB ephemeral NVMe for caches (results/2026-10-22-new-box-bringup.md).
+
 This is a **shared machine**: labmates' jobs move between the three GPUs. Pick the
 least-loaded card per shell (`nvidia-smi`, then `DISHSIM_GPU=<n> docker compose ... up -d`),
 and never touch other users' containers, images, or directories.
 
 ## Software stack (all inside the repo-owned container)
 
-The runtime is the image built by `code/util/docker/Dockerfile` and run by `code/util/docker/compose.yaml`
-(container `dishsim-isaac`). The driver-535 host caps Isaac Sim at **4.5.0** (the newest
-release NVIDIA documents for this driver series; 5.x/6.0 want ≥ 570/580).
+The runtime is the image built by `code/util/docker/Dockerfile` (container `dishsim-isaac`). On the
+Brev box the container is created by hand from the saved inspect of its predecessor (no compose):
+`--gpus all`, `--user root`, `--restart unless-stopped`, the repo at `/workspace/dishsim`, Kit/pip/HF
+caches and `/tmp` on `/opt/dlami/nvme/dishsim`, and an entrypoint that editable-installs
+isaaclab, isaaclab_physx and the repo, then sleeps. Docker runs on overlay2 there (the containerd
+image store kept compressed + unpacked layers: 61 GB for the 4.5 image).
 
-| Item | Value |
-|---|---|
-| Isaac Sim | **4.5.0** (`nvcr.io/nvidia/isaac-sim:4.5.0` base, `/isaac-sim`) |
-| Isaac Lab | **v2.1.1** (git checkout at `/workspace/isaaclab`, editable-installed into Kit python) |
-| Python | Kit python **3.10.15** — no venv (the old venv was the sole cause of the `EXP_PATH` landmine) |
-| PyTorch | 2.7.0+cu128 (runs on the 535 driver via CUDA minor-version compat — precompiled sm_86 kernels) |
-| numpy | 1.26.0 (byte-hash digests in tests are pinned per numeric environment — see `test_rack_gen_frozen.py`, in `data/assets/bosch800/source/` since 2026-10-21) |
-| Repo | bind-mounted at `/workspace/dishsim`, `pip install -e` on every container start |
+| Item | Brev box (HEAD) | corallab (tag `isaac45-final`) |
+|---|---|---|
+| Isaac Sim | **6.2.0** (`nvcr.io/nvidia/isaac-sim:6.2.0`, `/isaac-sim`) | **4.5.0** (`nvcr.io/nvidia/isaac-sim:4.5.0`) |
+| Isaac Lab | **v3.0.0** (`/workspace/isaaclab`; isaaclab, isaaclab_physx, isaaclab_newton, isaaclab_ov editable with `--no-deps`) | **v2.1.1** (`./isaaclab.sh --install none` + the core package) |
+| Python | Kit python **3.12** — no venv | Kit python **3.10.15** — no venv |
+| numpy / torch / warp | Kit's numpy 2.3.1; torch 2.11.0+cu130, warp-lang 1.17.0, newton 1.6.1 pip-installed (Isaac Lab's pins) | numpy 1.26.0, torch 2.7.0+cu128 |
+| Image tag | `dishsim-isaac:6.2.0` (26.7 GB on overlay2) | `dishsim-isaac:4.5.0` (39.3 GB) |
+| Repo | bind-mounted at `/workspace/dishsim`, `pip install -e` on every container start | same |
 
-**Local-image caveat**: the built `dishsim-isaac:4.5.0` on this box predates the Dockerfile
-lines that bake the `isaaclab` core package and `pytest` — both installs had been applied by
-hand in the (since-removed) original container's writable layer. The compose entrypoint now
-re-applies them on every container start, so a recreated container self-heals; rebuilding the
-image would also bake them but costs root disk for nothing.
+The old venv was the sole cause of the `EXP_PATH` landmine; neither image has one.
 
-History: the `plan` branch was built and validated (2026-08-28, `placement` green) on an
-NVIDIA Brev launchable (L4, Isaac Sim 6.0.1-rc.7 + Isaac Lab 3.0.0, driver 595, venv
-`env_isaaclab`). This port (2026-08-30) reverses the Kit boundary to the 2.1 API, following
-the recipe the `on-corrallab` branch proved for the robot-era code; the Kit-free planning
-stack and every collision cache are version-independent and carried over unchanged
-(`config_hash` untouched — `code/tests/test_config_hash_frozen.py` passes unedited).
+**Local-image caveat (corallab)**: the built `dishsim-isaac:4.5.0` there predates the Dockerfile
+lines that baked the `isaaclab` core package and `pytest`; that commit's compose entrypoint
+re-applies both on every start.
 
-## Isaac Lab 2.1 API notes (the port, reversed from the 3.0-era code)
+History: the `plan` branch was built and validated (2026-08-28, `placement` green) on an NVIDIA
+Brev launchable (L4, Isaac Sim 6.0.1-rc.7 + Isaac Lab 3.0.0, driver 595, venv `env_isaaclab`),
+ported down to 2.1 for corallab on 2026-08-30, and ported up to 6.2.0 + 3.0.0 for the Brev box on
+2026-11-01 (plans/2026-11-01-stack-upgrade.md). The Kit-free planning stack is version-independent and
+carried over unchanged. The Bosch 800 slot pipeline and its caches left the repo the same day
+(plans/2026-11-01-merged-benchmark.md; git history, tag `isaac45-final`).
 
-- **Quaternions are WXYZ** in every isaaclab surface (`rot=` config tuples, `data.*_quat_w`
-  buffers, 7-D poses for `write_root_pose_to_sim`). The project convention stays **XYZW**
-  internally (configs, caches, instance/episode JSON); `code/src/dishsim/quats.py`
-  (`xyzw_to_wxyz` / `wxyz_to_xyzw`) converts at every boundary crossing and nowhere else.
-  Boundary census on this branch: 7 pose-write sites (scene `_add_object`, machine cfgs,
-  `gen_instances`/`run_rearrange` teleports, `instance_views`
-  tableau writes) and 5 quat-read sites (`scene.assert_frames`, `geometry.body_pose_w`, the
-  three scripts' `measured()`); `default_root_state` round-trips are isaaclab→isaaclab and
-  must NOT convert.
-- **Data buffers are plain `torch.Tensor`** — no `ProxyArray`, no `.torch` accessor.
-- **PhysX is the only backend**: plain `sim_utils.SimulationCfg(...)` (no `physics=` kwarg,
-  no `isaaclab_physx` import).
-- **Kinematic writes lose the `_index` suffix**: `write_root_pose_to_sim(root_pose=...)`,
-  `write_joint_position_to_sim(position=...)`, `set_joint_position_target(target=...)` etc.
-  (same kwarg names, optional `env_ids`/`joint_ids`).
-- **`data.default_root_state`** (13-D) replaces 3.0's split `default_root_pose` /
-  `default_root_vel` — slice `[:, :7]` / `[:, 7:]`.
-- **`pxr` is importable Kit-free** (2026-09-20): `code/util/run_py.sh` exports Kit's USD extension
-  (`/isaac-sim/extscache/omni.usd.libs-*`, its `bin/` on `LD_LIBRARY_PATH`) before starting the
-  interpreter, because the Frigidaire FCL checker reads colliders from USD (`loading.collision_parts`).
-  `/isaac-sim/python.sh` alone has no `pxr`; the loader reads `LD_LIBRARY_PATH` once, so a runtime
-  `sys.path` insert is not enough.
-- **`isaaclab.utils.mesh` does not exist** — `dishsim.geometry` carries its own pxr-based
-  extractor (`extract_prim_mesh`), including the mesh→body relative transform with scale.
-- **2.1's `AppLauncher` pops `enable_cameras` off the args namespace** — scripts that read
-  `args_cli.enable_cameras` after launch save/restore it around `AppLauncher(args_cli)`
-  (`run_rearrange.py`; the retired capacity_fill.py did too).
-- **4.5 solver behavioral delta** (measured): the ArtVIP passive door cannot hold its
-  inverted-pendulum equilibrium at 0 deg (6.0's solver left it asleep there) — it falls open
-  and rests against the as-shipped limit while the velocity readout chatters.
-  the retired inspect_scene.py's stability/door gates were positional (tail-span) for this
-  reason (git history).
-- `effort_limit_sim`/`velocity_limit_sim`, `find_bodies`/`find_joints`, sensors
-  (`ContactSensorCfg`, `FrameTransformerCfg`, `Camera`) and the `InteractiveScene` surface
-  are unchanged vs 3.0 usage.
+## Isaac Lab 3.0 up-port deltas (2026-11-01, from the 2.1 code)
+
+- **Boot**: every entry script calls `dishsim.app.add_args(parser)` and `dishsim.app.launch(args)`
+  (over `isaaclab.app.launch_simulation`, the `AppLauncher` shim is deprecated). 3.0's parser has no
+  `--headless` / `--enable_cameras`; the helper adds both back, sets `enable_cameras` before the
+  launch (3.0 auto-enables cameras only for a config it can scan), passes the launcher's own keys
+  only (a script's `--video` would otherwise make Kit demand MoviePy) and returns the app, whose
+  `close()` unwinds the launch.
+- **Quaternions are XYZW** in 3.0, so `dishsim/quats.py`'s two functions are the identity and stay
+  at every crossing. Hard-coded WXYZ literals were converted (light orientations, robot-era pose
+  writes and mounts). `pxr` `Gf.Quat*` still takes the real part first: never route it through
+  `quats.py`.
+- **ProxyArray**: every `.data.*` read takes `.torch` (camera frames: `data.output["rgb"].torch`).
+- **Writes**: `write_*_to_sim_index(root_pose=..., root_velocity=..., position=..., velocity=...)`,
+  keyword-only; joint targets via `actuators.target_command.set_position_index(value=...)` (and the
+  velocity / effort setters). `default_root_pose` / `default_root_vel` replace `default_root_state`,
+  `root_link_pose_w` + `root_com_vel_w` replace `root_state_w`, `body_mass` replaces `default_mass`,
+  `root_view` replaces `root_physx_view`, `actuators.applied_effort` and
+  `actuators.target_command.position` replace `data.applied_torque` / `data.joint_pos_target`.
+- **Physics config**: `SimulationCfg(physics=PhysxCfg(...))` with `PhysxCfg` from
+  `isaaclab_physx.physics`, always with `enable_external_forces_every_iteration=False`: the 2.x
+  meaning (2.1.1 never authored it, PhysX's default is off; 3.0's default is on). Every other
+  `PhysxCfg` default equals 2.1.1's.
+- **Schema fragments**: `rigid_props=[UsdPhysicsRigidBodyCfg(), PhysxRigidBodyCfg(...)]`,
+  `collision_props=[UsdPhysicsCollisionCfg(), PhysxCollisionCfg()]`, `MassCfg`,
+  `articulation_props=[PhysxArticulationCfg(...)]` with `fix_root_link` on the spawner cfg, and
+  `PhysxRigidBodyMaterialCfg` (PhysX classes from `isaaclab_physx.sim.schemas` / `.sim.spawners.materials`).
+  The Frigidaire twin welds itself (`Joints/base_fixed`, a sibling of the `Cabinet` root), so its
+  spawner passes `fix_root_link=False`: no second world joint, and the weld is not under the root,
+  so nothing is disabled.
+- **Actuators**: `joint_effort_limit` / `joint_velocity_limit` replace `effort_limit_sim` /
+  `velocity_limit_sim`; implicit-actuator gains are articulation-owned (no cache to mirror after
+  `write_joint_stiffness_to_sim_index`).
+- **Cameras**: `CameraCfg(renderer_cfg=IsaacRtxRendererCfg(enable_scene_partitioning=False))`, explicitly:
+  that renderer type sets `/isaaclab/render/rtx_sensors`, which makes `sim.is_rendering` true, and
+  frames are produced when a camera reads (`camera.update`), which pumps Kit once per step. 3.0
+  partitions the RTX scene per env by default; a world-level camera (`/World/Cam_*`, no partition
+  token) then sees only the ground and lights, not `env_0`'s dishwasher and dishes (found on the
+  first 6.2 run: stills of the empty floor while the run printed PASS). The first RTX boot after a box
+  start compiles shaders for about 4-5 min (the NVMe cache is wiped at every stop).
+- **Contacts**: the Frigidaire runtimes' `isaacsim.core.api` `RigidContactView` became the PhysX
+  tensor API's own view (`PhysxManager.get_physics_sim_view().create_rigid_contact_view`, i.e.
+  `omni.physics.tensors.api`) plus contact reports at threshold 0 before reset, as the old class did;
+  `get_contact_data` returns the same six buffers, separations included. ContactSensor force reads
+  use `net_normal_forces_w` / `normal_force_matrix_w` (the 2.x meaning; on PhysX 6.2
+  `net_forces_w` adds friction).
+- **Shutdown**: `media.release_sim_for_close` only flushes stdio (3.0 has no on-stop handle to disarm).
+- **Launchers**: `run_kit.sh` execs `/isaac-sim/python.sh` (isaaclab.sh is deprecated in 3.0);
+  `run_py.sh` finds `omni.usd.libs` in `extscache/` or the 6.x `kit/extscore` / `exts` folders.
+- **Install**: `--no-deps` editable installs (3.0 keeps its third-party pins in the root pyproject and
+  Kit ships numpy/torch/warp); `isaaclab.app.sim_launcher` imports `isaaclab_newton` and `isaaclab_ov`
+  config modules at module scope, so both packages are installed; `lazy_loader`, `rich` and
+  `prettytable` are the light modules the core import path adds; `imageio-ffmpeg` backs
+  `VideoWriter`.
 
 ## Hard-won launcher findings (this project's scripts work around these)
 
-1. **Boot-first requirement.** Every Kit entry script launches `AppLauncher` **first** and
-   imports/resolves everything afterwards (`dishsim`, `isaaclab.*` scene modules, `pxr`).
+1. **Boot-first requirement.** Every Kit entry script boots Kit **first** (`dishsim.app.launch`;
+   `AppLauncher` on the 4.5 commit) and imports/resolves everything afterwards (`isaaclab.*` scene
+   modules, `pxr`, the Kit-only `dishsim` modules; `dishsim.app` itself is Kit-free).
 2. **Package name vs. repo name.** The Python package is `dishsim` (under `code/src/`), never
    `dishwasher_sim_isaaclab`: Kit's extension scan turns a directory whose name matches an
    importable package into a shadowing namespace package (`unknown location` ImportErrors).
    Keep module-scope `pxr`/`omni` imports out of the package (lazy in-function imports, see
    `code/src/dishsim/media.py`).
-3. **`./isaaclab.sh -p` exits 0 even when the wrapped script crashes** — verify success from
-   log content (`[RESULT] PASS`, absence of tracebacks / `free(): invalid pointer`), never
-   from the exit code. `code/util/run_kit.sh` inherits this property.
+3. **The exit code is not a verdict.** `./isaaclab.sh -p` (4.5) exits 0 even when the wrapped
+   script crashes, and Kit's close can end the process with 0 on 6.2 too — verify success from log
+   content (`[RESULT] PASS`, absence of tracebacks / `free(): invalid pointer`), never from the exit
+   code. `code/util/run_kit.sh` inherits this property.
 4. **The standalone `SimulationContext(sim_utils.SimulationCfg(...))` pattern** (see
-   `code/initialization/bosch/gen_instances.py`) is the reliable construction for this project's scenes.
+   `code/frigidaire/src/dishsim_frigidaire/initial_state_runtime.py`) is the reliable construction for this project's
+   scenes.
 
 ## Launchers (docker era)
 
 - `code/util/run_kit.sh <script> ...` — on the host, forwards itself into `dishsim-isaac` via
-  `docker exec` at the mapped cwd; inside, execs `/workspace/isaaclab/isaaclab.sh -p`.
+  `docker exec` at the mapped cwd; inside, execs `/isaac-sim/python.sh` (the 4.5 commit:
+  `/workspace/isaaclab/isaaclab.sh -p`).
 - `code/util/run_py.sh ...` — same forwarding, but execs Kit's python directly (pytest,
   planners, tools; no Kit boot). `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is baked in: hydra's
   auto-registered pytest plugin breaks collection outside Kit.
@@ -121,8 +152,8 @@ stack and every collision cache are version-independent and carried over unchang
 
 ## Asset root
 
-Resolved by the 4.5 Kit apps (stock scenery only — the Bosch twin, ArtVIP dishwasher and
-every prop are local files):
+Resolved by the Kit apps (stock scenery only — the Frigidaire twin and the HOTEC set are local files);
+the 4.5 apps used:
 
 ```
 https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/4.5
@@ -131,15 +162,16 @@ https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/4.5
 ## Planning stack
 
 CPU planning deps are baked into the image from `requirements-planning.txt` — installed into
-Kit's python, no venv:
+Kit's python, no venv (the same pins on 3.10 and 3.12; all ship cp312 or abi3 wheels):
 
 | Item | Value |
 |---|---|
 | python-fcl | 0.7.0.11 |
 | coacd | 1.0.11 |
 | trimesh | 4.12.2 |
-| matplotlib | 3.10.9 (3.11.x needs python ≥ 3.11) |
-| imageio | 2.37.4 |
+| matplotlib | 3.10.9 |
+| imageio | 2.37.4 (+ imageio-ffmpeg 0.6.0 on the 6.2 image, the libx264 backend of `VideoWriter`) |
+| ortools | 9.15.6755, `--no-deps` (CP-SAT for the bench's fit, 2026-11-02; Kit's numpy 2.3.1 and protobuf stay; `ortools.sat` imports pandas, installed 3.1.0 `--no-deps` only where Kit's python lacks it). The Mac's `.venv-kitfree` has the same ortools pin (`uv pip install`). |
 | pytest | 9.1.1 (entrypoint-installed — see the local-image caveat above) |
 
 ## Storage map
@@ -161,11 +193,6 @@ out, and the folder stays empty.
 The 2tbhdd mount appears at the identical path inside the container so the symlinks resolve
 on both sides. The container runs as root, so files it writes on the drive/repo are
 root-owned — clean them via `docker exec rm`, not host sudo.
-
-Cache-anchor note: the shipped bosch800 caches were baked at base placement `side_winner` —
-tools that recompute `config_hash` (`decompose_meshes.py`, `extract_geometry.py`, both in
-`data/assets/bosch800/source/`) need the matching
-`--machine bosch800 --placement side_winner`, or they will mis-report the cache as stale.
 
 ## Pausing & releasing the machine (shared box)
 

@@ -90,10 +90,11 @@ D4 `counted` field and `SIDE_ZONE_CHAIN = -1` were checked against the records o
 ### Fix before Tuesday (notes disagree)
 - Chain direction: the plan and the memory say smaller-x first; the code, the correction and the rerun say larger-x first.
   The chain-check table body still reads backwards. The hit counts (24/26 vs 11/13 unique) do not reconcile.
+  (fixed 2026-10-31, see results/2026-10-23-lower-bowl-chain-check.md; the plan and the memory were not edited)
 - `exposure.md` and CLAUDE.md quote the superseded ceilings 0.8718 / 0.5481 / 0.2134 and "the middle arm uses the same
-  constants"; the code computes per-arm ceilings. `dependency.md` describes the 24-dish sampler and S 0.3551 (now 0.3545).
-- CLAUDE.md names the old box (isaac-launchable-2dd875, 14 workers); everything since 2026-10-22 ran on dishsim-l4.
-- Dot Score Rules: CLAUDE.md says Version 23; Version 30 is live (hand patches; a rebuild gives 23).
+  constants"; the code computes per-arm ceilings. `dependency.md` describes the 24-dish sampler and S 0.3551 (now 0.3545). (fixed 2026-10-31: exposure.md, CLAUDE.md and dependency.md carry the per-arm ceilings, the tiers' rosters and S 0.3545, each with its source)
+- CLAUDE.md names the old box (isaac-launchable-2dd875, 14 workers); everything since 2026-10-22 ran on dishsim-l4. (fixed 2026-10-31 in CLAUDE.md; the Mac's `brev` git remote still points at the old box, the user's to change)
+- Dot Score Rules: CLAUDE.md says Version 23; Version 30 is live (hand patches; a rebuild gives 23). (fixed 2026-10-31)
 
 ### Do not quote
 The 2026-10-15/16 sampler rounds (old box, old validity definition), every S under the outward-only or "anywhere" ceilings,
@@ -170,13 +171,15 @@ counter spot (0.20, -0.16), one dish in an empty rack. No trial ran on a real ro
 12. The 2F-85 grips wet ceramic hard enough (the literature's 39 N is another gripper). Report the logged pad forces.
 
 ### Fix before Tuesday (notes disagree)
-- The counting rule vs the headline numbers (above).
-- The cup grasp record (gate2_cup) ran at hover 0.15 m; the note's deviation says 0.10 m.
+- The counting rule vs the headline numbers (above). (open: not changed this round; the mouth-up gate numbers are superseded by the foot-ring and side-pinch gates on the page)
+- The cup grasp record (gate2_cup) ran at hover 0.15 m; the note's deviation says 0.10 m. (fixed 2026-10-31, see
+  results/2026-10-23-hardware-limits-mouth-up.md)
 - Round 1 and round 3 give different Kit-free level counts (15/19 and 8/12 vs 8/15 and 6/8): round 1 carried the dish at
   its unpivoted grasp pose, round 3 at the measured 21 deg pivot; round 3 rejects rear x -0.07 at G1 where Isaac placed 9/9.
-- The mount search: the README says arm collisions are not checked, the code and robot.md say they are.
-- `robot.md` and the execution README predate the rounds (OMPL, bowl-only grasp, none of the reach, replay and page scripts).
-- The memory note overclaims the front glass slots at 120-150 deg (the table: 2/8 at 120 deg, 0/8 at 150 deg).
+  (fixed 2026-10-31, see results/2026-10-23-hardware-limits-mouth-up.md)
+- The mount search: the README says arm collisions are not checked, the code and robot.md say they are. (fixed 2026-10-31: the README row and the script's docstring say they are checked, free_reach via collide.ArmWorld.free)
+- `robot.md` and the execution README predate the rounds (OMPL, bowl-only grasp, none of the reach, replay and page scripts). (fixed 2026-10-31: robot.md has the study section and the seven scripts, the README their rows)
+- The memory note overclaims the front glass slots at 120-150 deg (the table: 2/8 at 120 deg, 0/8 at 150 deg). (fixed 2026-10-31 in the session memory: two cup slots at 120 deg, none at 150 deg)
 - The Robot Hardware Limits page is published (Version 5, 2026-10-23), private.
 
 ### Do not quote

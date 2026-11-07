@@ -1,3 +1,5 @@
+> Moved from the repo root on 2026-10-31 (plans/2026-10-31-caveat-fixes.md). Generated 2026-09-30 by the Phase 0 report script; the paths inside are the pre-2026-10-21 layout (frigidaire/scripts/... is now code/execution/frigidaire/...). Kept as the record of plans/2026-09-29-easy-s0.md Phase 0; nothing here is current.
+
 # REPORT: plans/2026-09-29-easy-s0.md -- Phase 0 (audit and harness)
 
 Generated 2026-09-30T14:11:45+00:00 by `frigidaire/scripts/evaluation/frigidaire_robot_report.py` from the trial logs, run records and the conventions record; nothing in the measured tables is typed by hand. Companion audit with path:line evidence: `plans/2026-09-29-easy-s0-map.md`.

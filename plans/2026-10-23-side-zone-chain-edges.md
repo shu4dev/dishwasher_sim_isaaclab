@@ -43,3 +43,5 @@ exceeds 1, or the note says which failed and why; the box is STOPPED.
 ## Assumed / skipped
 Assumed: the side-zone direction (+x = away from the bank) is the same in every packing of those zones. Skipped: the
 rear row's order test, support edges, the packer's "no free pose" seeds, pages and clips for the new valid pairs.
+
+- Correction (2026-10-31, plans/2026-10-31-caveat-fixes.md): this plan reads a certify hit as "a needs b first" and so says the smaller packed x goes first; the kit's access_hits means "a goes in before b", so in the side zones the bowl with the LARGER packed x is the prerequisite (34 of 44 hits, 21 of 28 unique pairs; results/2026-10-23-lower-bowl-chain-check.md as rewritten). The chain code this plan added was deleted on 2026-10-31 at the user's request.

@@ -1,0 +1,48 @@
+# Bowl foot ring: the measured ring in the shipped bowl, the foot grasp gate, the Kit-free goal check: run note, 2026-10-29
+Plan: plans/2026-10-29-foot-ring-grasp.md. **Works-when: met.** The shipped parameters.json carries the measured foot, both gate rows exist, the goal table exists (7 bowls x 2 holds x 2 targets, each as recorded and lifted), and Version 24 is built (not published). **Headline: F-out holds 10/10 and F-in 0/10 (slip).** With the measured F-out hold, the Kit-free check passes 3/7 goal poses (bowl_07, 04, 03) and 4/7 sampler release poses (06, 07, 04, 03); the lifted goals give the same verdicts.
+- **Asset (v3).** Coordinator decision B2: hotec_gen.py now builds the bowl's foot as a VERTICAL ring, because the generator had no outer ring face (the wall flared at 52° from vertical). The rebuild used the briefed `--set` flags; the plate and cup profiles are unchanged.
+  - Mesh check, visual and colliders: vertices at r 29.70 and 32.86 mm at z 0 and at z 5.57; every vertex below z 5.57 lies within r 29.70-32.86; the ceiling sits at 5.57, the floor top at 9.57, the height is 73.12 mm.
+  - 9 bands / 216 pieces (v2 192); cavity intrusion 0.96 mm (limit 1.0). Brimful 684 mL against 764 before and 769 advertised. This follows from the measured height and ring and was not tuned. Wall, floor and side bulge are still estimates.
+  - Plate and cup differ from v2 only in 3 stamp lines (decision A1: shipped restamped). pytest: 19 passed and 1 skipped on the Mac; 20 passed in the box container.
+  - Upload U1: HF commit 436db6e9 "Bowl foot ring from the user's callipers", the 9 changed hotec files, all verified on the hub. Never published: the Mac-only frigidaire_fdpc4221as/machine.json and hotec_wheatstraw/{plate,bowl,cup}.json. bowl.json was regenerated locally by its writer.
+  - The old files are in data/_trash_20261029/hotec_bowl_v2_estimated/ (MANIFEST.txt). On the box, the 9 files' md5 matched the Mac.
+- **Kit-free sweep.** Bowl mouth down at (0.20, -0.12), posture_v1 mount, upper rack in.
+  - F-out passes yaws 4 and 8. Best is 8: it passes at all 10 of the gate's ±5 mm spots, has 3 free hover IK solutions, 113 mm arm clearance and 78 mm hand-to-counter.
+  - F-in passes yaws 4 and 5 (checked with the closed jaws' hulls). Best is 4 (10/10 spots; yaw 5 passes 5/10).
+  - Both transits are straight joint moves. The other yaws fail on approach-line IK jumps, the upper arm against the cabinet, or the lift line.
+- **F-out gate: 10/10 hold.**
+  - Jaw 0.2259-0.2263 rad (planned contact 0.236). Rise 149.5 mm; pivot at most 0.12°; drift at most 0.015 mm over 5 s.
+  - Pads only: no knuckle contact, no invariant. The pads touch the ring's outer face and its end-face corner, 86-115 N at peak and 2.8 N at the end of the hold.
+  - In hand (median-pivot trial 9): bowl origin (0.0, 0.0, 21.28) mm from the TCP on its axis (planned 21.24); the axis is 0.04° off.
+- **F-in gate: 0/10, slip.**
+  - The open command stops at 0.43-0.44 rad (planned contact 0.70).
+  - The pads touch the ring's inner face and end face for 0.4-0.85 s (7.8-54 N peaks), then lose them. The bowl stays on the counter (0 mm rise). No knuckle contact.
+  - Per the plan, there is no deeper-engagement retry.
+- **Goal table** (data/results/robot/kitfree_v1/foot_goal/foot_goal.{json,md}). Criteria: elbow-up IK within ±190°, the hand 15 mm / the held bowl 2 mm, the last 50 mm down clear, the TCP above the centroid; 12 spins per cell.
+  - F-out fails: bowl_06 at its goal (gripper 10 mm from the lower rack); bowl_02 (forearm and wrists against the cabinet at every spin); bowl_05 (forearm against the upper rack); bowl_01 (gripper against the rack and bowl_07).
+  - F-in rows use the planned hold, because it never held: goal 3/7 (06, 04, 03), release 4/7.
+  - At the v2 goals the v3 bowl sits 5.2 / 1.8 / 1.3 / 2.2 mm inside the racks (bowls 06, 02, 07, 04). This is a note, and the "lifted" rows lift the bowl out of it.
+- **Deviations.**
+  - The pads stop 1 mm above the ring's base plane, so they engage 4.57 of its 5.57 mm (a margin for the pad-arc model, which comes from the gate logs).
+  - Each family ran as 2 processes x 5 trials; `--trial-offset` keeps the seed-0 draws of a single run. merge_gate.py joins them.
+  - The candidates are ranked by the gate's 10 perturbed spots.
+  - The F-in jaw window was widened from 0.45-0.78 to 0.30-0.78, and F-in was relaunched. The first launch's 4 "miss" trials at 0.43 rad are kept in placing_v1/foot/first_launch_jaw045/.
+  - The goal check has two rows per cell, and penetration is a note (coordinator).
+  - The asset was built on the Mac with --no-figures in a uv env (Py 3.10, numpy 1.26.0, scipy 1.14.1, usd-core 24.5); a control rebuild of v2 there was byte-identical for plate, cup and README.
+  - Box asset step: hotec-only staged `hf download`, then `docker exec cp -a` as root.
+- **Commands.**
+  - Mac: `uv run --no-project --python 3.10 --with numpy==1.26.0 --with scipy==1.14.1 --with usd-core==24.5 python data/assets/hotec_wheatstraw/source/hotec_gen.py --out <scratch> --no-figures --set ...` (7 `--set` flags, source/README.md); `hf upload shu4dev/dishsim-assets data/assets/hotec_wheatstraw hotec_wheatstraw --repo-type dataset --exclude {plate,cup,bowl}.json --commit-message "Bowl foot ring from the user's callipers"`; `.venv-kitfree/bin/python code/execution/frigidaire/frigidaire_robot_reach.py --foot-candidates`; dry runs with `data/results/robot/kitfree_v1/dryrun/fakekit_gate.py`.
+  - Box: `bash data/logs/robot/r16_asset.sh`, then `SKIP_ASSET=1 N=5 WALL=540 bash data/logs/robot/r16_chain.sh` and `data/logs/robot/r16_chain_in.sh`. Each slot runs `code/util/run_kit.sh code/execution/frigidaire/frigidaire_robot_episode.py --headless --no-media --grasp-gate bowl --grasp-family foot-out|foot-in --n 5 --trial-offset 0|5 --mount data/results/robot/mount/posture_v1.json --out-root /workspace/dishsim/data/results/robot/placing_v1 --run-id partA_bowl_foot_<side>_t<k>[b] --max-wall-seconds 9000`, plus `frigidaire_robot_replay.py --traj ... --kind bowl` for the clips.
+  - Mac afterwards: `placing_v1/foot/merge_gate.py`, `kitfree_v1/foot_goal/foot_goal.py`, and the page command of the round-13 note.
+- **Files.**
+  - Changed: robot/grasp.py (foot_grasps, the pad-arc model, FOOT_JAW_RAD); frigidaire_robot_episode.py (`--grasp-family foot-out|foot-in`, `--foot-candidates`, `--trial-offset`, the mouth-down counter pose, dish contacts with bowl parts); frigidaire_robot_reach.py (`--foot-candidates`); frigidaire_robot_report_page.py (Version 24); docs/hotec_wheatstraw_asset.md; kitfree_v1/README.md.
+  - Dataset: source/hotec_gen.py, source/README.md, the folder README.md, the v3 build files.
+  - Records: placing_v1/partA_bowl_foot_{out,in}/ (with inhand.json), placing_v1/foot/ (candidates.json, merge_gate.py, gate_halves/).
+  - Media: placing_v1/partA_bowl_foot_out_pass_t00.mp4 (on the page) and partA_bowl_foot_in_fail_slip_t00.mp4.
+  - Page: data/media/robot/report_v1 (Version 24, 22 media files, 68.7 MB, `[RESULT] PASS`); V23's index.html is in data/media/robot/report_v23_backup/. Logs: data/logs/robot/r16_*, box_r16/.
+- **Box windows (dishsim-l4; cap raised 30 -> 35 -> 45 -> 50 by the user).**
+  - W1: 8 silent start failures 20:03-20:27Z (unbilled); STARTING 20:28:46-20:29:03Z; the hf download hit a root-owned artvip cache file, and my end driver's "ALL DONE" grep also matched the FAIL line, so it stopped the box at 20:31:51Z; STOPPED 20:39:16Z. At most 10.5 min.
+  - W2: STARTING 20:39:33-20:39:50Z; data/assets/hotec_wheatstraw/usd/ is root-owned; stop 20:41:57Z; STOPPED 20:53:30Z. At most 14.0 min.
+  - W3: STARTING 21:06:04-21:06:21Z; asset MD5_OK 21:07:36Z; ALL DONE 21:17:31Z; stop 21:17:57Z; STOPPED by 21:25:11Z. At most 19.1 min.
+  - Total at most 43.6 of 50. `brev ls`: `dishsim-l4  STOPPED  COMPLETED  NOT READY  i0z5jl21z  g6.2xlarge  L4`.
+- **Suggested commit subject:** Add the bowl foot ring grasp gate and the v3 measured bowl
