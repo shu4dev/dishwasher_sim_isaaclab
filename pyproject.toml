@@ -20,6 +20,7 @@ dependencies = []
 
 [tool.setuptools.packages.find]
 where = ["code", "code/util"]
+namespaces = false
 
 [tool.setuptools.package-data]
 asset = ["*.json"]
