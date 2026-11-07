@@ -1,0 +1,181 @@
+old	new	note
+code/README.md	(see note)	rewrite: the six blocks + util, one table row per block
+code/execution/README.md	(see note)	retire: fold into code/sampler/robot/README.md
+code/execution/frigidaire/README.md	(see note)	retire: fold into code/sampler/robot/README.md
+code/execution/frigidaire/frigidaire_access_order.py	code/sampler/robot/scripts/frigidaire_access_order.py	
+code/execution/frigidaire/frigidaire_arm_model.py	code/sampler/robot/scripts/frigidaire_arm_model.py	
+code/execution/frigidaire/frigidaire_carry_deviation.py	code/sampler/robot/scripts/frigidaire_carry_deviation.py	
+code/execution/frigidaire/frigidaire_drop_curve.py	code/sampler/robot/scripts/frigidaire_drop_curve.py	
+code/execution/frigidaire/frigidaire_grasp_test.py	code/sampler/robot/scripts/frigidaire_grasp_test.py	
+code/execution/frigidaire/frigidaire_grip_colliders.py	code/sampler/robot/scripts/frigidaire_grip_colliders.py	
+code/execution/frigidaire/frigidaire_grip_probe.py	code/sampler/robot/scripts/frigidaire_grip_probe.py	
+code/execution/frigidaire/frigidaire_mount_sweep.py	code/sampler/robot/scripts/frigidaire_mount_sweep.py	
+code/execution/frigidaire/frigidaire_placing_loads.py	code/sampler/robot/scripts/frigidaire_placing_loads.py	
+code/execution/frigidaire/frigidaire_plate_goal_lean.py	code/sampler/robot/scripts/frigidaire_plate_goal_lean.py	
+code/execution/frigidaire/frigidaire_plate_goal_plank.py	code/sampler/robot/scripts/frigidaire_plate_goal_plank.py	
+code/execution/frigidaire/frigidaire_plate_presentations.py	code/sampler/robot/scripts/frigidaire_plate_presentations.py	
+code/execution/frigidaire/frigidaire_plate_wall_pinch.py	code/sampler/robot/scripts/frigidaire_plate_wall_pinch.py	
+code/execution/frigidaire/frigidaire_robot_conventions.py	code/sampler/robot/scripts/frigidaire_robot_conventions.py	
+code/execution/frigidaire/frigidaire_robot_conventions_fixture.py	code/sampler/robot/scripts/frigidaire_robot_conventions_fixture.py	
+code/execution/frigidaire/frigidaire_robot_episode.py	code/sampler/robot/scripts/frigidaire_robot_episode.py	
+code/execution/frigidaire/frigidaire_robot_limits_page.py	code/sampler/robot/scripts/frigidaire_robot_limits_page.py	
+code/execution/frigidaire/frigidaire_robot_mount.py	code/sampler/robot/scripts/frigidaire_robot_mount.py	
+code/execution/frigidaire/frigidaire_robot_reach.py	code/sampler/robot/scripts/frigidaire_robot_reach.py	
+code/execution/frigidaire/frigidaire_robot_replay.py	code/sampler/robot/scripts/frigidaire_robot_replay.py	
+code/execution/frigidaire/frigidaire_robot_report.py	code/sampler/robot/scripts/frigidaire_robot_report.py	
+code/execution/frigidaire/frigidaire_robot_report_page.py	code/sampler/robot/scripts/frigidaire_robot_report_page.py	
+code/execution/frigidaire/frigidaire_robot_smoke.py	code/sampler/robot/scripts/frigidaire_robot_smoke.py	
+code/execution/frigidaire/frigidaire_run_video.py	code/sampler/robot/scripts/frigidaire_run_video.py	
+code/execution/frigidaire/frigidaire_site_sweep.py	code/sampler/robot/scripts/frigidaire_site_sweep.py	
+code/execution/frigidaire/frigidaire_tines_test.py	code/sampler/robot/scripts/frigidaire_tines_test.py	
+code/execution/frigidaire/mirror_robot_usd.sh	code/sampler/robot/scripts/mirror_robot_usd.sh	
+code/execution/frigidaire/robot_asset_manifest.py	code/sampler/robot/scripts/robot_asset_manifest.py	
+code/frigidaire/README.md	(see note)	retire: fold into code/asset/README.md and code/sampler/README.md
+code/frigidaire/docs/dependency.md	code/sampler/docs/dependency.md	
+code/frigidaire/docs/exposure.md	code/sampler/scorer/docs/exposure.md	
+code/frigidaire/docs/exposure_quickstart.md	code/sampler/scorer/docs/exposure_quickstart.md	
+code/frigidaire/docs/geometry.md	code/asset/docs/geometry.md	
+code/frigidaire/docs/history/development_notes.md	code/sampler/docs/history/development_notes.md	
+code/frigidaire/docs/hotec_bench.md	code/sampler/docs/hotec_bench.md	
+code/frigidaire/docs/planner.md	code/motion_planning/docs/planner.md	
+code/frigidaire/docs/robot.md	code/sampler/robot/docs/robot.md	
+code/frigidaire/src/dishsim_frigidaire/__init__.py	code/asset/__init__.py	its re-exports go to the package that now holds each module
+code/frigidaire/src/dishsim_frigidaire/asset.py	code/asset/twin.py	renamed: asset.asset would read badly
+code/frigidaire/src/dishsim_frigidaire/cutlery_candidates.json	code/asset/cutlery_candidates.json	
+code/frigidaire/src/dishsim_frigidaire/dot_rules.py	code/sampler/scorer/dot_rules.py	
+code/frigidaire/src/dishsim_frigidaire/exposure.py	code/sampler/scorer/exposure.py	
+code/frigidaire/src/dishsim_frigidaire/geometry.py	code/asset/geometry.py	
+code/frigidaire/src/dishsim_frigidaire/initial_state_candidates.py	code/sampler/initial_state_candidates.py	
+code/frigidaire/src/dishsim_frigidaire/initial_state_runtime.py	code/sampler/initial_state_runtime.py	
+code/frigidaire/src/dishsim_frigidaire/load_validation.py	code/asset/load_validation.py	
+code/frigidaire/src/dishsim_frigidaire/loading.py	code/asset/loading.py	
+code/frigidaire/src/dishsim_frigidaire/mcts.py	code/arrangement_optimization/mcts.py	
+code/frigidaire/src/dishsim_frigidaire/organization.py	code/asset/organization.py	
+code/frigidaire/src/dishsim_frigidaire/paths.py	code/asset/paths.py	
+code/frigidaire/src/dishsim_frigidaire/planner.py	code/motion_planning/planner.py	FCL mirror, support graph, greedy sequencer
+code/frigidaire/src/dishsim_frigidaire/random_pose_experiment.py	code/sampler/random_pose_experiment.py	
+code/frigidaire/src/dishsim_frigidaire/random_pose_runtime.py	code/sampler/random_pose_runtime.py	
+code/frigidaire/src/dishsim_frigidaire/random_poses.py	code/sampler/random_poses.py	
+code/frigidaire/src/dishsim_frigidaire/robot/__init__.py	code/sampler/robot/__init__.py	
+code/frigidaire/src/dishsim_frigidaire/robot/collide.py	code/sampler/robot/collide.py	
+code/frigidaire/src/dishsim_frigidaire/robot/flags.py	code/sampler/robot/flags.py	
+code/frigidaire/src/dishsim_frigidaire/robot/grasp.py	code/sampler/robot/grasp.py	
+code/frigidaire/src/dishsim_frigidaire/robot/harness.py	code/sampler/robot/harness.py	
+code/frigidaire/src/dishsim_frigidaire/robot/kin.py	code/sampler/robot/kin.py	
+code/frigidaire/src/dishsim_frigidaire/robot/rig.py	code/sampler/robot/rig.py	
+code/frigidaire/src/dishsim_frigidaire/robot/triallog.py	code/sampler/robot/triallog.py	
+code/frigidaire/src/dishsim_frigidaire/robot/ur5e.py	code/sampler/robot/ur5e.py	
+code/frigidaire/src/dishsim_frigidaire/tableware.py	code/asset/tableware.py	
+code/frigidaire/tests/fixtures/robot/README.txt	code/sampler/robot/tests/fixtures/robot/README.txt	
+code/frigidaire/tests/fixtures/robot/conventions.json	code/sampler/robot/tests/fixtures/robot/conventions.json	
+code/frigidaire/tests/fixtures/settled_states/README.txt	code/sampler/scorer/tests/fixtures/settled_states/README.txt	
+code/frigidaire/tests/fixtures/settled_states/organized_random_06.json	code/sampler/scorer/tests/fixtures/settled_states/organized_random_06.json	
+code/frigidaire/tests/fixtures/settled_states/packing_random_06.json	code/sampler/scorer/tests/fixtures/settled_states/packing_random_06.json	
+code/frigidaire/tests/test_exposure.py	code/sampler/scorer/tests/test_exposure.py	
+code/frigidaire/tests/test_frigidaire_bench.py	code/arrangement_optimization/tests/test_frigidaire_bench.py	
+code/frigidaire/tests/test_frigidaire_loading.py	code/asset/tests/test_frigidaire_loading.py	
+code/frigidaire/tests/test_frigidaire_lower_loading.py	code/asset/tests/test_frigidaire_lower_loading.py	
+code/frigidaire/tests/test_frigidaire_random_poses.py	code/sampler/tests/test_frigidaire_random_poses.py	
+code/frigidaire/tests/test_frigidaire_tableware.py	code/asset/tests/test_frigidaire_tableware.py	
+code/frigidaire/tests/test_frigidaire_upper_loading.py	code/asset/tests/test_frigidaire_upper_loading.py	
+code/frigidaire/tests/test_hotec_top5.py	code/sampler/scorer/tests/test_hotec_top5.py	
+code/frigidaire/tests/test_initial_state_candidates.py	code/sampler/tests/test_initial_state_candidates.py	
+code/frigidaire/tests/test_initial_state_render.py	code/sampler/tests/test_initial_state_render.py	
+code/frigidaire/tests/test_initial_state_runtime.py	code/sampler/tests/test_initial_state_runtime.py	
+code/frigidaire/tests/test_mcts.py	code/arrangement_optimization/tests/test_mcts.py	
+code/frigidaire/tests/test_organization.py	code/asset/tests/test_organization.py	
+code/frigidaire/tests/test_planner.py	code/motion_planning/tests/test_planner.py	
+code/frigidaire/tests/test_random_pose_assets.py	code/asset/tests/test_random_pose_assets.py	
+code/frigidaire/tests/test_random_pose_execution.py	code/sampler/tests/test_random_pose_execution.py	
+code/frigidaire/tests/test_random_pose_holds.py	code/sampler/tests/test_random_pose_holds.py	
+code/frigidaire/tests/test_random_pose_runtime_outcomes.py	code/sampler/tests/test_random_pose_runtime_outcomes.py	
+code/frigidaire/tests/test_robot_conventions.py	code/sampler/robot/tests/test_robot_conventions.py	
+code/frigidaire/tests/test_robot_flags.py	code/sampler/robot/tests/test_robot_flags.py	
+code/frigidaire/tests/test_robot_harness.py	code/sampler/robot/tests/test_robot_harness.py	
+code/frigidaire/tests/test_robot_kin.py	code/sampler/robot/tests/test_robot_kin.py	
+code/initialization/README.md	(see note)	retire: fold into code/sampler/README.md
+code/initialization/frigidaire/README.md	(see note)	retire: fold into code/sampler/README.md
+code/initialization/frigidaire/frigidaire_demo.py	code/asset/scripts/frigidaire_demo.py	
+code/initialization/frigidaire/frigidaire_initial_state_validate.py	code/sampler/scripts/frigidaire_initial_state_validate.py	
+code/initialization/frigidaire/frigidaire_random_load_farm.py	code/sampler/scripts/frigidaire_random_load_farm.py	
+code/initialization/frigidaire/frigidaire_random_load_kit.py	code/sampler/scripts/frigidaire_random_load_kit.py	
+code/initialization/frigidaire/frigidaire_retract_check.py	code/sampler/scripts/frigidaire_retract_check.py	
+code/planner/README.md	(see note)	retire: fold into code/sampler/README.md and code/paths/README.md
+code/planner/bench.py	code/sampler/scripts/bench.py	the one CLI; imports paths and optimal_arrangement for its last stages
+code/planner/frigidaire/README.md	(see note)	retire: fold into the block READMEs of its scripts
+code/planner/frigidaire/frigidaire_bench.py	code/arrangement_optimization/frigidaire_bench.py	first_fit + instance_of_sample; importers use arrangement_optimization.frigidaire_bench
+code/planner/frigidaire/frigidaire_bench_kit.py	code/sampler/scripts/frigidaire_bench_kit.py	
+code/planner/frigidaire/frigidaire_bench_page.py	code/paths/scripts/frigidaire_bench_page.py	
+code/planner/frigidaire/frigidaire_dependency_clips.py	code/sampler/scripts/frigidaire_dependency_clips.py	
+code/planner/frigidaire/frigidaire_dependency_kit.py	code/sampler/scripts/frigidaire_dependency_kit.py	
+code/planner/frigidaire/frigidaire_dependency_page.py	code/sampler/scripts/frigidaire_dependency_page.py	
+code/planner/frigidaire/frigidaire_dependency_score.py	code/sampler/scorer/scripts/frigidaire_dependency_score.py	
+code/planner/frigidaire/frigidaire_dot_rules_figures.py	code/sampler/scorer/scripts/frigidaire_dot_rules_figures.py	
+code/planner/frigidaire/frigidaire_dot_rules_grid.py	code/sampler/scorer/scripts/frigidaire_dot_rules_grid.py	
+code/planner/frigidaire/frigidaire_dot_rules_page.py	code/sampler/scorer/scripts/frigidaire_dot_rules_page.py	
+code/planner/frigidaire/frigidaire_dot_rules_relative.py	code/sampler/scorer/scripts/frigidaire_dot_rules_relative.py	
+code/planner/frigidaire/frigidaire_dot_rules_render.py	code/sampler/scorer/scripts/frigidaire_dot_rules_render.py	
+code/planner/frigidaire/frigidaire_dot_rules_restricted.py	code/sampler/scorer/scripts/frigidaire_dot_rules_restricted.py	
+code/planner/frigidaire/frigidaire_hotec_exposure_figure.py	code/sampler/scorer/scripts/frigidaire_hotec_exposure_figure.py	
+code/planner/frigidaire/frigidaire_hotec_exposure_search.py	code/sampler/scorer/scripts/frigidaire_hotec_exposure_search.py	
+code/planner/frigidaire/frigidaire_hotec_load.py	code/asset/scripts/frigidaire_hotec_load.py	
+code/planner/frigidaire/frigidaire_hotec_top5.py	code/sampler/scorer/scripts/frigidaire_hotec_top5.py	
+code/planner/frigidaire/frigidaire_mcts_figure.py	code/arrangement_optimization/scripts/frigidaire_mcts_figure.py	
+code/planner/frigidaire/frigidaire_mcts_sweep.py	code/arrangement_optimization/scripts/frigidaire_mcts_sweep.py	
+code/planner/frigidaire/frigidaire_planner_video.py	code/paths/scripts/frigidaire_planner_video.py	
+code/planner/frigidaire/frigidaire_plate_rest.py	code/sampler/scripts/frigidaire_plate_rest.py	
+code/planner/frigidaire/frigidaire_tilt_check_figure.py	code/sampler/scorer/scripts/frigidaire_tilt_check_figure.py	
+code/src/bench/__init__.py	code/sampler/__init__.py	
+code/src/bench/build.py	code/sampler/build.py	
+code/src/bench/convert.py	code/sampler/convert.py	
+code/src/bench/difficulty.py	code/sampler/difficulty.py	
+code/src/bench/episodes.py	code/paths/episodes.py	own_gate, own_load, final_score -> code/optimal_arrangement/certify.py
+code/src/bench/gate.py	code/sampler/gate.py	
+code/src/bench/goal.py	code/sampler/goal.py	
+code/src/bench/graph.py	code/sampler/graph.py	
+code/src/bench/hwgate.py	code/sampler/hwgate.py	
+code/src/bench/initial.py	code/sampler/initial.py	
+code/src/bench/loader.py	code/sampler/loader.py	
+code/src/bench/order.py	code/sampler/order.py	
+code/src/bench/order_check.py	code/sampler/order_check.py	
+code/src/bench/pick.py	code/sampler/pick.py	
+code/src/bench/report.py	code/paths/report.py	
+code/src/bench/sample.py	code/sampler/sample.py	
+code/src/bench/schema/dish.json	code/sampler/schema/dish.json	
+code/src/bench/schema/machine.json	code/sampler/schema/machine.json	
+code/src/bench/schema/run.json	code/sampler/schema/run.json	
+code/src/bench/schema/sample.json	code/sampler/schema/sample.json	
+code/src/bench/score.py	code/sampler/scorer/score.py	
+code/src/bench/slots.py	code/sampler/slots.py	
+code/src/bench/stills.py	code/sampler/stills.py	
+code/src/bench/video.py	code/paths/video.py	
+code/src/bench/writers/frigidaire_fdpc4221as.py	code/sampler/writers/frigidaire_fdpc4221as.py	
+code/src/bench/writers/hotec_wheatstraw.py	code/sampler/writers/hotec_wheatstraw.py	
+code/src/dishsim/__init__.py	code/util/dishsim/__init__.py	Kit core keeps the dishsim name
+code/src/dishsim/app.py	code/util/dishsim/app.py	Kit core keeps the dishsim name
+code/src/dishsim/checks.py	code/util/dishsim/checks.py	Kit core keeps the dishsim name
+code/src/dishsim/collision_world.py	code/util/dishsim/collision_world.py	Kit core keeps the dishsim name
+code/src/dishsim/config.py	code/util/dishsim/config.py	Kit core keeps the dishsim name
+code/src/dishsim/geometry.py	code/util/dishsim/geometry.py	Kit core keeps the dishsim name
+code/src/dishsim/media.py	code/util/dishsim/media.py	Kit core keeps the dishsim name
+code/src/dishsim/quats.py	code/util/dishsim/quats.py	Kit core keeps the dishsim name
+code/src/dishsim/rearrange.py	code/motion_planning/rearrange.py	
+code/src/dishsim/rrt.py	code/motion_planning/rrt.py	
+code/src/dishsim/transforms.py	code/util/dishsim/transforms.py	Kit core keeps the dishsim name
+code/tests/test_bench.py	code/sampler/tests/test_bench.py	
+code/tests/test_bench_order.py	code/sampler/tests/test_bench_order.py	
+code/tests/test_bench_slots.py	code/sampler/tests/test_bench_slots.py	
+code/tests/test_rearrange.py	code/motion_planning/tests/test_rearrange.py	
+code/tests/test_rrt.py	code/motion_planning/tests/test_rrt.py	
+code/util/README.md	code/util/README.md	unchanged
+code/util/docker/Dockerfile	code/util/docker/Dockerfile	unchanged
+code/util/docker/README.md	code/util/docker/README.md	unchanged
+code/util/docker/compose.yaml	code/util/docker/compose.yaml	unchanged
+code/util/frigidaire/README.md	(see note)	retire: fold into code/sampler/README.md
+code/util/frigidaire/frigidaire_initial_state_render.py	code/sampler/scripts/frigidaire_initial_state_render.py	render helper imported by scripts
+code/util/frigidaire/frigidaire_initial_state_report.py	code/sampler/scripts/frigidaire_initial_state_report.py	render helper imported by scripts
+code/util/run_kit.sh	code/util/run_kit.sh	unchanged
+code/util/run_py.sh	code/util/run_py.sh	unchanged
+code/util/tools/README.md	code/util/tools/README.md	unchanged
+code/util/tools/bootstrap.sh	code/util/tools/bootstrap.sh	unchanged
+code/util/tools/kit_smoke.py	code/util/tools/kit_smoke.py	unchanged
