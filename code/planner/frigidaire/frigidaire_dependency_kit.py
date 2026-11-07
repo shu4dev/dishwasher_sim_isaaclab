@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, dishsim project.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Isaac dependency graph of one 24-dish load by physical cause (boot-first; one load per Kit process).
+"""Isaac dependency graph of one load, every dish of its roster, by physical cause (boot-first; one load per Kit process).
 
 The method (plans/2026-10-16-physical-cause-graph.md; the overlap rule, plans/2026-10-16-labelled-views-overlap-rule.md;
 reference code/frigidaire/docs/dependency.md; the study's rounds 1-6, ordered-pair tests, swap tests, the order library
 and the learning loop, are in git history before 2026-10-22): a valid sample is (1) built poses that pass the bench's
-joint gate, (2) a witness order that rebuilds all 24 in a fresh Kit process and (3) a graph whose every edge is a
+joint gate, (2) a witness order that rebuilds every dish of the load in a fresh Kit process and (3) a graph whose every edge is a
 physical cause in the finished load. Per load, one Kit process each:
 
 The sampler (the default run; the packing <restricted-dir>/<load_id>.json of frigidaire_dot_rules_restricted.py): the
 packing is built one dish at a time from empty extended racks (the benchmark baseline) by the insertion move,
 frigidaire_bench.insertion_release toward the dish's MOVE POSE (a plate upright in its slot, 3 mm toward its packed
-lean's side; a bowl or cup at its packed pose): it starts with its lowest collision point 20 mm above its rack's rim wire
+lean's side in the front bank and toward the other side in the rear bank, frigidaire_bench.move_side; a bowl or cup at its
+packed pose): it starts with its lowest collision point 20 mm above its rack's rim wire
 centre (its highest collision point under the tub ceiling), descends along the rack's up axis in 5 mm steps, each checked
 with the bench checker's 1 mm allowance against every placed dish and the appliance; a placed dish in the way or a blocked
 start blocks the move (no release), the appliance alone stops the descent, and the dish is released at rest 20 mm above
@@ -20,7 +21,8 @@ the lowest clear step, then settles 150 + 60 ticks. The descent is geometric (no
 recorded trajectory. The order is a seeded random permutation whose plate positions are refilled per bank in chain order,
 the slot furthest on the lean side first (an upright plate settles leaning ~30 deg toward its lean side and overhangs the
 next 3-4 slots there; frigidaire_bench_kit.chain_order); bowls and cups stay where the permutation put them. A dish goes
-in when it lands within DEV_MAX_M of its target with contact under 2 mm, disturbs no placed dish and leaves no pair, among
+in when it lands within DEV_MAX_M of its target (a plate also within AT_GOAL's dz and tilt of it, since 2026-11-03) with
+contact under 2 mm, disturbs no placed dish and leaves no pair, among
 the placed dishes and against the appliance, over the joint gate's 1 mm preflight; one that does not is undone and
 tried at up to REPOSE_TRIES other free poses of its kind with a clear descent (Reposer; a plate along its chain only, its
 bank's slots past its own, nearest first), else it is deferred (a plate after the plates still queued, any other dish to
@@ -29,7 +31,9 @@ the back of the order); the load fails only when no dish left goes in. Writes <o
 and moves_world (the pose and move each dish went in with), the witness {order, status, support, steps, traj, plate_order,
 chains: plate -> bank, index, slot, placed_index, placed_slot} and its tick poses _kit/<load_id>/traj/witness.json, the
 built poses as entries_settled; or status 'resettle_failed' when the packing did not build.
-With --order FILE (plans/2026-10-22-dag-build-order.md; code/src/sampler/order.py's DAG order of the packing, JSON
+With --order FILE whose plate_order is "lean-side" (the merged benchmark's score-greedy goal, code/src/bench/build.py),
+the build follows the file's order with each bank's plates refilled in chain order, re-posing and deferral as without
+--order. With any other --order FILE (plans/2026-10-22-dag-build-order.md; code/src/bench/order.py's DAG order of the packing, JSON
 {order: [ids], pose_model, strict}) the build follows that order (no chain order), re-posing to free poses whose descent
 is clear and which add no cycle (dag_accept, at the file's pose_model). strict (the default): no deferral (the build fails
 at the first dish that does not go in), a re-pose only on a physical miss (a clear descent that settles more than
@@ -40,7 +44,7 @@ writes the container's absolute tableware paths): the joint-gate manifest of the
 frigidaire_initial_state_validate.py gates them (--peak-penetration-m 0.005, lower first once on closure_failure).
 
 --certify --gate DIR (one fresh Kit process): rebuilds the witness order from empty racks (build_sequence, fixed order, the
-at-goal tolerance of the built pose: certified = 24 of 24 land), then: SUPPORT from the rebuild's resting contacts (the net
+at-goal tolerance of the built pose: certified = every dish lands), then: SUPPORT from the rebuild's resting contacts (the net
 contact normal force on b from a, sign calibrated on the dish-rack contacts, pointing up by more than FORCE_MIN_N; the
 higher-centre rule when the calibration fails), one candidate set per supported dish; ACCESS (geometric, Kit-free in
 itself): b before a when a's final pose meets b's own insertion path (insertion_release against a alone and the
@@ -160,12 +164,14 @@ def goal_delta(B, P, entries, centroids, built, targets):
 
 
 def release_info(B):
-    """The record's release: the insertion move (2026-10-15 b)."""
-    return {"mode": "insertion", "version": "2026-10-15b", "step_mm": round(B.INSERT_STEP_M * 1e3, 3),
+    """The record's release: the insertion move (2026-10-15 b; the rear bank's side since 2026-11-03)."""
+    return {"mode": "insertion", "version": "2026-11-03", "step_mm": round(B.INSERT_STEP_M * 1e3, 3),
             "above_rim_mm": round(B.INSERT_ABOVE_RIM_M * 1e3, 3), "gap_mm": round(B.INSERT_GAP_M * 1e3, 3),
             "lean_bias_mm": round(B.INSERT_LEAN_BIAS_M * 1e3, 3),
-            "move_pose": "a plate upright in its slot (lean 0, the gap's mid x) moved 3 mm toward its packed lean's side; "
-                         "a bowl or cup at its packed pose",
+            "move_pose": "a plate upright in its slot (lean 0, the gap's mid x) moved 3 mm along the rack x, toward its "
+                         "packed lean's side in the front bank and toward the other side in the rear bank (-x for every "
+                         "rear plate of the packer's families: from +x a rear plate perches on the tine tips); a bowl or "
+                         "cup at its packed pose",
             "start": "the move pose raised until its lowest collision point is 20 mm above the rack's rim wire centre, "
                      "its highest collision point capped under the tub ceiling (geometry.py TubCeiling), never below "
                      "the move pose",
@@ -186,7 +192,9 @@ def landing_tail(rinfo, contact_m=None):
     """LANDING_TAIL with the record's insertion move (and, given, its contact-depth limit)."""
     tail = LANDING_TAIL if contact_m is None else LANDING_TAIL.replace("< 2 mm", f"< {contact_m * 1e3:g} mm")
     return tail.replace("released at the lowest clear hover", (
-        f"lowered from {rinfo['above_rim_mm']:g} mm above the rim in {rinfo['step_mm']:g} mm steps (plates upright) "
+        f"lowered from {rinfo['above_rim_mm']:g} mm above the rim in {rinfo['step_mm']:g} mm steps (plates upright"
+        + (", moved 3 mm toward the lean's side in the front bank and away from it in the rear bank"
+           if rinfo.get("version", "") >= "2026-11-03" else "") + ") "
         f"until the appliance stops it, a placed dish in the way blocking it, released {rinfo['gap_mm']:g} mm above that"))
 
 
@@ -340,10 +348,10 @@ class Reposer:
 
 def dag_accept(order, by_id, frames, pose_model="packed", cap=2 * REPOSE_TRIES):
     """The Reposer's ``accept`` under --order (plans/2026-10-22-dag-build-order.md): a re-pose adds no cycle when no dish
-    still to go in gets an access or support edge into it (sampler/order.py at ``pose_model``, ``frames`` = the
+    still to go in gets an access or support edge into it (bench/order.py at ``pose_model``, ``frames`` = the
     baseline's five component poses); in the rest model a bowl or cup takes edges from plates too
     (plans/2026-10-22-bowl-plate-edges.md), so every kind is checked."""
-    from sampler.order import access_edges, support_edges
+    from bench.order import access_edges, support_edges
     calls = []
 
     def accept(dish, entry, placed):
@@ -376,20 +384,28 @@ def sampler(args, source, entries, out_path, kit_dir, report, started):
         raise Refused("the extended baseline did not hold")
     rec = Recorder(backend, ids, kit_dir / "traj")                 # the last build's ticks kept: the witness clip
     rec.begin(empty_resets=True)
+    plate_dz, plate_tilt = B.AT_GOAL["plate"][1:]               # a plate must stand in its gap (2026-11-03)
     own = (f"own load: settle deviation <= {K.DEV_MAX_M * 1e3:.0f} mm of the commanded pose (the target, not the "
-           f"release pose), {landing_tail(rinfo)}")
+           f"release pose), a plate also within {plate_dz * 1e3:g} mm dz and {plate_tilt:g} deg tilt of it (a perch on "
+           f"the tine tips is a failed landing), {landing_tail(rinfo)}")
     print(f"resettle {args.load} (restricted, targets commanded): {len(entries)} dishes one at a time; landing = {own}",
           flush=True)
     t_resettle = time.monotonic()
     seed = seed_of("reposing", args.load)
     strict = False
+    plate_order = "lean-side"
     if args.order:                                              # the packing's DAG order (module docstring)
         spec = json.loads(Path(args.order).read_text())
         order0, chains, strict = list(spec["order"]), {}, spec.get("strict", True)
         if sorted(order0) != sorted(ids):
             raise Refused(f"--order {rel(args.order)} does not list this load's dishes")
-        reposer = Reposer(B, P, frames, seed + 1,
-                          accept=dag_accept(order0, by_id, snapshot["poses"], spec.get("pose_model", "packed")))
+        plate_order = spec.get("plate_order", "dag")
+        if plate_order == "lean-side":                          # the score-greedy goal (code/src/bench/build.py): its own
+            order0, chains = K.chain_order(order0, by_id, B.lean_side)    # order, each bank's plates in chain order
+            reposer = Reposer(B, P, frames, seed + 1, chain=lambda e: K.plate_bank(e, B.lean_side))
+        else:
+            reposer = Reposer(B, P, frames, seed + 1,
+                              accept=dag_accept(order0, by_id, snapshot["poses"], spec.get("pose_model", "packed")))
     else:
         order0 = list(ids)
         random.Random(seed).shuffle(order0)
@@ -398,10 +414,11 @@ def sampler(args, source, entries, out_path, kit_dir, report, started):
     moves = {i: P.world_from_local(frames[by_id[i]["rack"]], B.move_local(by_id[i])) for i in ids}
     links = ", ".join(f"{i} {c['bank']} {c['index']}" for i, c in chains.items())
     print(f"re-posing sampler: candidates ready ({time.monotonic() - t_resettle:.0f} s); "
-          f"{'dag' if args.order else 'lean-side'} order {' '.join(order0)}" + (f"; chains {links}" if chains else ""),
-          flush=True)
+          f"{plate_order} order {' '.join(order0)}" + (f"; chains {links}" if chains else ""), flush=True)
     built, record, _ = K.build_sequence(backend, B, P, by_id, targets, centroids,
-                                        lambda kind, dist, dev: dev <= K.DEV_MAX_M, release="insertion",
+                                        lambda kind, dist, dev: dev <= K.DEV_MAX_M and (
+                                            kind != "plate" or (dist[1] <= plate_dz and dist[2] <= plate_tilt)),
+                                        release="insertion",
                                         on_path=rec.descent, moves=moves, order=order0, repose=reposer, trace=rec,
                                         chains=chains, strict=strict)
     for a in record["attempts"]:
@@ -414,7 +431,7 @@ def sampler(args, source, entries, out_path, kit_dir, report, started):
                                   + (f" overlap {s['overlap']}" if s.get("overlap") else "")),
               flush=True)
     moves, chosen = record["moves"], [record["entries"][i] for i in ids]
-    sampled = {"seed": seed, "order": order0, "plate_order": "dag" if args.order else "lean-side",
+    sampled = {"seed": seed, "order": order0, "plate_order": plate_order,
                "attempts": record["attempts"],
                "reposed": record["reposed"], "repose_calls": reposer.calls, "entries_chosen": chosen}
     if chains:                    # per plate: its bank, chain index, slot planned, slot and place in its bank built
@@ -591,7 +608,7 @@ def access_hits(B, checker, kinds, racks, moves, poses, ids):
     return hits, paths
 
 
-def physical_graph(*a, **k): from sampler.graph import physical_graph as f; return f(*a, **k)   # noqa: E704  moved: code/src/sampler/graph.py (lazy: code/src joins sys.path after AppLauncher)
+def physical_graph(*a, **k): from bench.graph import physical_graph as f; return f(*a, **k)   # noqa: E704  moved: code/src/bench/graph.py (lazy: code/src joins sys.path at Kit boot)
 
 
 def physical_gate(gate_dir, dep):
@@ -814,7 +831,7 @@ def physical_certify(args, source, entries, out_path, kit_dir, report, started):
     dep.update(contacts={"pairs": contacts, "calibration": cal, "supports": supports}, access={"hits": hits, "paths": paths},
                confirmations=confirmations, graph=graph, valid=True,
                verdict={"stage": "valid", "reason": (
-                   f"joint gate accepted ({ginfo['order']}), witness rebuilt 24 of 24 in a fresh Kit process; "
+                   f"joint gate accepted ({ginfo['order']}), witness rebuilt {cert['placed']} of {len(ids)} in a fresh Kit process; "
                    f"{n['support']} hard support and {n['access']} access edge(s) drawn; {len(confirmations)} support "
                    f"candidate(s): " + ", ".join(f"{k} {sum(c['outcome'] == k for c in confirmations)}" for k in
                                                  ("hard", "disjunctive", "free", "blocked", "control_failed")))})
@@ -1120,7 +1137,7 @@ def main():
     parser.add_argument("--load", "--loads", dest="load", metavar="ID", help="one load id per Kit process (required but with --sample)")
     parser.add_argument("--restricted-dir", type=Path, default=ROOT / "data/results/dot_rules/restricted/loads")
     parser.add_argument("--order", type=Path, metavar="FILE",
-                        help="the sampler: build in this order (code/src/sampler/order.py's DAG order, JSON {order: [ids], "
+                        help="the sampler: build in this order (code/src/bench/order.py's DAG order, JSON {order: [ids], "
                              "pose_model, strict}); strict (default): no deferral, a re-pose only on a physical miss")
     parser.add_argument("--baseline", type=Path, default=ROOT / "data/results/benchmark/frigidaire_hotec/baseline/result.json")
     parser.add_argument("--usd", type=Path, default=ROOT / "data/assets/frigidaire_fdpc4221as/usd/fdpc4221as.usdc")
@@ -1150,8 +1167,9 @@ def main():
         return physical_loop(args)
     if not args.load:
         parser.error("--load is required")
-    from isaaclab.app import AppLauncher
-    AppLauncher.add_app_launcher_args(parser)
+    sys.path[:0] = [str(ROOT / "code/src")]
+    from dishsim.app import add_args, launch   # Kit-free; boots Kit in the try below
+    add_args(parser)
     parser.set_defaults(device="cpu", headless=True)
     args = parser.parse_args()
     out_path = args.out_dir / f"{args.load}.json"
@@ -1167,7 +1185,7 @@ def main():
     try:
         source, entries = read_load(args)
         report["source"] = rel(source)
-        app = AppLauncher(args).app
+        app = launch(args)
         args.app = app
         sys.path[:0] = [str(ROOT / "code/src"), str(ROOT / "code/frigidaire/src"), str(ROOT / "code/planner/frigidaire")]
         (physical_certify if args.certify else sampler)(args, source, entries, out_path, kit_dir, report, started)

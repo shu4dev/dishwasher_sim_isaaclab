@@ -3,42 +3,31 @@
 Where each dish goes and in what order. Every plan is checked in Isaac by one teleport per move and a settle
 (an episode aborts on the first fatal fault); scoring, tables, figures and the results page belong here.
 
-- Input: the instances from `initialization/` (Bosch: `data/results/instances/`; HOTEC:
-  `data/results/benchmark/frigidaire_hotec/instances/`), the twins and caches they were certified against.
-- Output: episode records under `data/results/rearrange/` (Bosch) and `data/results/benchmark/frigidaire_hotec/`
-  (HOTEC: plans, episodes, `compare/summary.{md,json}`), media under `data/media/rearrange/` and
-  `data/media/benchmark/frigidaire_hotec/`.
-- HOTEC instances are generated here too (`frigidaire_bench.py --generate`, see `initialization/`).
+- `bench.py`: the benchmark CLI (plans/2026-11-01-merged-benchmark.md). One sample per (roster, seed): a messy start,
+  the score-greedy goal and its S_ref, then the four algorithms' episodes and the report page. Stages in
+  `code/src/bench/` (`load` ... `graph`, `stills`, `run`, `report`).
+- `frigidaire/`: the Kit and Kit-free scripts the stages call (the start generator and episodes in
+  `frigidaire_bench_kit.py`, own-load plans in `frigidaire_bench.py`, the build in `frigidaire_dependency_kit.py`, the
+  scorer and its ceiling grids), plus the exposure, top-5 and MCTS studies.
+- Output: samples and `index.jsonl` under `data/results/bench/v1/`, the episodes in its `runs/` (stage work in
+  `_work/<sample>/`), media and the page under
+  `data/media/bench/v1/`. The 4.5 bench's records under `data/results/benchmark/frigidaire_hotec/` are history.
 
-Folders: [bosch/](bosch/README.md), [frigidaire/](frigidaire/README.md).
+Folder: [frigidaire/](frigidaire/README.md).
 
-## Commands, in order
-
-Bosch:
-
-```bash
-code/util/run_kit.sh code/planner/bosch/run_rearrange.py --headless --enable_cameras --video --instances "data/results/instances/bosch800/placement/*.json" --algorithms greedy
-code/util/run_kit.sh code/planner/bosch/run_rearrange.py --headless --cells easy,medium,hard --algorithms greedy
-code/util/run_py.sh code/planner/bosch/compare_algorithms.py
-```
-
-HOTEC (the orchestrator runs on the host with `python3` because it needs docker; every stage runs in
-`dishsim-isaac`):
+## Commands
 
 ```bash
-python3 code/planner/frigidaire/frigidaire_bench.py --plan-all --tiers easy medium hard --seeds 0 --kit-jobs 3 --py-jobs 2
-python3 code/planner/frigidaire/frigidaire_bench.py --run-all --tiers easy medium hard --seeds 0 --kit-jobs 3 --cameras
-python3 code/planner/frigidaire/frigidaire_bench.py --analyze-all --tiers easy medium hard --py-jobs 2
-python3 code/planner/frigidaire/frigidaire_bench.py --videos --tiers easy medium hard --kit-jobs 3
-python3 code/planner/frigidaire/frigidaire_bench.py --collect
-code/util/run_py.sh code/planner/frigidaire/frigidaire_bench_page.py
+code/util/run_py.sh code/planner/bench.py --kinds bowl --count bowl=7 --counter-allowance 3 --seed 0 --to report \
+    --algorithms greedy_offline,rrt_connect,first_fit,mcts --out data/results/bench/v1
+code/util/run_py.sh code/planner/bench.py --from run --to report --input data/results/bench/v1/<sample>.json
 ```
-
-`--full` runs generation, plans, episodes and analysis through one scheduler, then `--collect`.
 
 ## Package modules
 
 First needed here; a later stage that imports a module is named beside it.
 
-- `dishsim`: `rearrange` (execution), `rrt`, `compat`.
-- `dishsim_frigidaire`: `planner` (execution), `mcts`, `exposure`, `organization`.
+- `bench`: every stage of the pipeline (`loader`, `slots`, `difficulty`, `initial`, `gate`, `build`, `goal`, `score`,
+  `graph`, `episodes`, `report`, `order`).
+- `dishsim`: `rearrange` (the episode driver), `rrt`.
+- `dishsim_frigidaire`: `planner` (execution), `mcts`, `exposure`, `dot_rules`, `organization`.

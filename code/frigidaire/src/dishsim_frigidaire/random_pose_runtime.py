@@ -1,6 +1,6 @@
 """Isaac backend for independent random dish drops and measured rack retraction.
 
-Kit imports occur only when constructing the backend, after AppLauncher. No
+Kit imports occur only when constructing the backend, after dishsim.app.launch. No
 teleports occur between releasing a candidate and measuring its final outcome.
 """
 from __future__ import annotations
@@ -23,7 +23,13 @@ from .random_poses import (KINDS, LIMITS, compose_pose, motion_is_settled,
 COMPONENTS = ("Cabinet", "Door", "LowerRack", "UpperRack", "SilverwareBasket")
 JOINTS = ("door_hinge", "lower_slide", "upper_slide")
 RACK_JOINT = {"LowerRack": "lower_slide", "UpperRack": "upper_slide"}
-EXTENSION = {"LowerRack": -.49, "UpperRack": -.44}
+# The racks' "out" joint values = the twin's slide limits (data/assets/frigidaire_fdpc4221as/parameters.json joint_limits_usd,
+# computed by its source/asset.py: each rack's rear wall flush with the tub's front face; plans/2026-10-29-racks-out.md). A
+# literal because code/src/bench/writers/frigidaire_fdpc4221as.py parses it; the check below keeps it equal to the asset.
+EXTENSION = {"LowerRack": -.5425, "UpperRack": -.5195}
+from .asset import JOINT_LIMITS as _JOINT_LIMITS  # noqa: E402
+assert all(abs(EXTENSION[r] - _JOINT_LIMITS[j][0]) < 1e-9 for r, j in RACK_JOINT.items()), \
+    f"EXTENSION {EXTENSION} != the twin's slide limits {_JOINT_LIMITS} (parameters.json joint_limits_usd)"
 CONTACT_CAPACITY = 262144
 CONTACT_PERSISTENCE_M = 1e-6
 
@@ -89,6 +95,20 @@ class ContactTracker:
                 "peak_m": max((item["depth_m"] for item in self.retained.values()), default=0.)}
 
 
+def prepare_contact_reports(stage, paths):
+    """Report every contact of these bodies (PhysxContactReportAPI, threshold 0); call before ``sim.reset()``.
+
+    What isaacsim.core.api's RigidContactView did on construction (Isaac Sim 6.2 source); the view itself
+    is then ``PhysxManager.get_physics_sim_view().create_rigid_contact_view(...)`` after the reset.
+    """
+    from pxr import PhysxSchema
+    for path in paths:
+        prim = stage.GetPrimAtPath(path)
+        api = PhysxSchema.PhysxContactReportAPI(prim) if prim.HasAPI(PhysxSchema.PhysxContactReportAPI) \
+            else PhysxSchema.PhysxContactReportAPI.Apply(prim)
+        api.CreateThresholdAttr().Set(0)
+
+
 def supported(pairs, kind, rack):
     edge = lambda a, b: tuple(sorted((a, b))) in pairs
     return edge(kind, rack) or (rack == "LowerRack" and edge(kind, "SilverwareBasket")
@@ -104,7 +124,8 @@ class IsaacPoseBackend:
         import isaaclab.sim as sim_utils
         from isaaclab.assets import RigidObject, RigidObjectCfg
         from isaaclab.sim import SimulationContext
-        from isaacsim.core.api.sensors import RigidContactView
+        from isaaclab_physx.physics import PhysxCfg, PhysxManager
+        from isaaclab_physx.sim.schemas import PhysxCollisionCfg
         from .asset import spawn, apply_mode
         from .loading import visual_points
         from .paths import PROTOTYPES_DIR
@@ -125,9 +146,9 @@ class IsaacPoseBackend:
         check_deadline(deadline)
         self.sim = SimulationContext(sim_utils.SimulationCfg(
             dt=self.dt, device=device, use_fabric=True,
-            physx=sim_utils.PhysxCfg(enable_ccd=True)))
+            physics=PhysxCfg(enable_ccd=True, enable_external_forces_every_iteration=False)))
         ground = sim_utils.CuboidCfg(size=(30., 30., .05),
-                                    collision_props=sim_utils.CollisionPropertiesCfg())
+                                    collision_props=[sim_utils.UsdPhysicsCollisionCfg(), PhysxCollisionCfg()])
         ground.func("/World/Ground", ground, translation=(0., 0., -.025))
         self.prim = "/World/RandomPoseDishwasher"
         self.dishwasher, self.basket = spawn(self.prim, mode="scripted", usd_path=str(usd_path))
@@ -148,18 +169,16 @@ class IsaacPoseBackend:
         carb.settings.get_settings().set_bool("/physics/disableContactProcessing", False)
         paths = [self.prim+"/"+name for name in COMPONENTS]
         paths += [self.objects[kind].cfg.prim_path for kind in KINDS]
-        self.contacts = RigidContactView(
-            prim_paths_expr=paths, filter_paths_expr=[paths.copy() for _ in paths],
-            name="random_pose_contacts", max_contact_count=CONTACT_CAPACITY,
-            disable_stablization=False)
+        prepare_contact_reports(stage, paths)   # every body against every body (tensor-API view below)
         self.sim.reset()
         apply_mode(self.dishwasher, "scripted")
-        self.contacts.initialize()
+        self.contacts = PhysxManager.get_physics_sim_view().create_rigid_contact_view(
+            paths, filter_patterns=[paths.copy() for _ in paths], max_contact_data_count=CONTACT_CAPACITY)
         if set(self.dishwasher.joint_names) != set(JOINTS):
             raise RuntimeError("Appliance joint names do not match the experiment")
         self.indices = {name: self.dishwasher.joint_names.index(name) for name in JOINTS}
         self.body_indices = {name: self.dishwasher.body_names.index(name) for name in COMPONENTS[:-1]}
-        self.target = self.dishwasher.data.default_joint_pos.clone()
+        self.target = self.dishwasher.data.default_joint_pos.torch.clone()
         geometry = dict(self.points)
         filenames = {"Cabinet": "cabinet", "Door": "door", "LowerRack": "lower_rack",
                      "UpperRack": "upper_rack", "SilverwareBasket": "silverware_basket"}
@@ -178,8 +197,8 @@ class IsaacPoseBackend:
             "contact_capacity": CONTACT_CAPACITY, "contact_persistence_m": CONTACT_PERSISTENCE_M,
             "trace_hz": 10,
             "drive_settings": {name: {
-                "stiffness": float(self.dishwasher.data.joint_stiffness[0, index]),
-                "damping": float(self.dishwasher.data.joint_damping[0, index])}
+                "stiffness": float(self.dishwasher.data.joint_stiffness.torch[0, index]),
+                "damping": float(self.dishwasher.data.joint_damping.torch[0, index])}
                 for name, index in self.indices.items()}}
 
     @staticmethod
@@ -191,16 +210,17 @@ class IsaacPoseBackend:
         return {"position_m": position.tolist(), "quaternion_xyzw": quaternion.tolist()}
 
     def poses(self):
-        result = {name: self._pose(self.dishwasher.data.body_pos_w[0, index],
-                                   self.dishwasher.data.body_quat_w[0, index])
+        result = {name: self._pose(self.dishwasher.data.body_pos_w.torch[0, index],
+                                   self.dishwasher.data.body_quat_w.torch[0, index])
                   for name, index in self.body_indices.items()}
-        result["SilverwareBasket"] = self._pose(self.basket.data.root_pos_w[0], self.basket.data.root_quat_w[0])
+        result["SilverwareBasket"] = self._pose(self.basket.data.root_pos_w.torch[0],
+                                                self.basket.data.root_quat_w.torch[0])
         for kind, obj in self.objects.items():
-            result[kind] = self._pose(obj.data.root_pos_w[0], obj.data.root_quat_w[0])
+            result[kind] = self._pose(obj.data.root_pos_w.torch[0], obj.data.root_quat_w.torch[0])
         return result
 
     def joints(self):
-        values = self.dishwasher.data.joint_pos[0].detach().cpu().numpy()
+        values = self.dishwasher.data.joint_pos.torch[0].detach().cpu().numpy()
         if not np.isfinite(values).all():
             raise RuntimeError("Nonfinite joint positions")
         return {name: float(values[index]) for name, index in self.indices.items()}
@@ -211,8 +231,8 @@ class IsaacPoseBackend:
     def set_rigid_pose(self, obj, pose):
         values = [*pose["position_m"], *xyzw_to_wxyz(pose["quaternion_xyzw"])]
         tensor = self.torch.tensor([values], dtype=self.torch.float32, device=self.sim.device)
-        obj.write_root_pose_to_sim(tensor)
-        obj.write_root_velocity_to_sim(self.torch.zeros((1, 6), device=self.sim.device))
+        obj.write_root_pose_to_sim_index(root_pose=tensor)
+        obj.write_root_velocity_to_sim_index(root_velocity=self.torch.zeros((1, 6), device=self.sim.device))
         obj.reset()
 
     def restore(self, snapshot):
@@ -223,10 +243,12 @@ class IsaacPoseBackend:
                                                     "quaternion_xyzw": [0., 0., 0., 1.]})
         for name, value in snapshot["joints"].items():
             self.target[0, self.indices[name]] = value
-        self.dishwasher.write_joint_state_to_sim(self.target, self.torch.zeros_like(self.target))
-        self.dishwasher.write_root_velocity_to_sim(self.torch.zeros((1, 6), device=self.sim.device))
+        self.dishwasher.write_joint_state_to_sim_index(position=self.target,
+                                                       velocity=self.torch.zeros_like(self.target))
+        self.dishwasher.write_root_velocity_to_sim_index(
+            root_velocity=self.torch.zeros((1, 6), device=self.sim.device))
         self.dishwasher.reset()
-        self.dishwasher.set_joint_position_target(self.target)
+        self.dishwasher.actuators.target_command.set_position_index(value=self.target)
         self.set_rigid_pose(self.basket, snapshot["poses"]["SilverwareBasket"])
         self.tracker.clear()
         self.maximum_penetration_m = 0.
@@ -235,7 +257,7 @@ class IsaacPoseBackend:
         check_deadline(self.deadline)
         if not self.app.is_running():
             raise RuntimeError("Isaac application stopped during the experiment")
-        self.dishwasher.set_joint_position_target(self.target)
+        self.dishwasher.actuators.target_command.set_position_index(value=self.target)
         self.dishwasher.write_data_to_sim()
         self.sim.step(render=False)
         self.dishwasher.update(self.dt)
@@ -245,8 +267,9 @@ class IsaacPoseBackend:
         frames = self.poses()
         joints = self.joints()
         # The tracker consumes these arrays immediately and retains no buffer
-        # references. Avoid copying full-capacity contact buffers every step.
-        self.latest_contact = self.tracker.update(self.contacts.get_contact_force_data(dt=self.dt, clone=False), frames)
+        # references; on the CPU device numpy() views the warp buffers without a copy.
+        self.latest_contact = self.tracker.update(
+            tuple(buffer.numpy() for buffer in self.contacts.get_contact_data(self.dt)), frames)
         self.maximum_penetration_m = max(self.maximum_penetration_m, self.latest_contact["peak_m"])
         self.tick_index += 1
         if self.trace is not None and self.tick_index % max(1, self.hz//10) == 0:
@@ -298,7 +321,7 @@ class IsaacPoseBackend:
                 continue
             metrics = {name: pose_motion_metrics(
                 [row[0][name]["position_m"] for row in window],
-                [xyzw_to_wxyz(row[0][name]["quaternion_xyzw"]) for row in window],
+                [[q[3], q[0], q[1], q[2]] for q in (row[0][name]["quaternion_xyzw"] for row in window)],
                 self.motion_points[name], self.dt) for name in names}
             peaks = [row[2]["peak_m"] for row in window]
             result = {

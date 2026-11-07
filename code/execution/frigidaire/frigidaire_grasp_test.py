@@ -29,11 +29,12 @@ def main():
     parser.add_argument("--tag", default=None)
     parser.add_argument("--candidate", type=int, default=None, help="use this grasp candidate index")
     parser.add_argument("--insert-mm", type=float, default=None, help="override the foot/rim insertion depth")
-    from isaaclab.app import AppLauncher
-    AppLauncher.add_app_launcher_args(parser)
+    sys.path[:0] = [str(ROOT / "code/src")]
+    from dishsim.app import add_args, launch   # Kit-free; boots Kit below
+    add_args(parser)
     args = parser.parse_args()
     cameras = bool(getattr(args, "enable_cameras", False))
-    app = AppLauncher(args).app
+    app = launch(args)
     tag = args.tag or args.pose
     res = {"result": "FAIL", "pose": args.pose}
     try:
@@ -41,21 +42,25 @@ def main():
         import numpy as np
         import torch
         import isaaclab.sim as sim_utils
+        from isaaclab_physx.sim.schemas import PhysxCollisionCfg, PhysxRigidBodyCfg
+        from isaaclab_physx.sim.spawners.materials import PhysxRigidBodyMaterialCfg
+        from isaaclab_physx.renderers import IsaacRtxRendererCfg
+        from isaaclab_physx.physics import PhysxCfg
         from isaaclab.assets import Articulation, RigidObject, RigidObjectCfg
         import omni.usd
         from dishsim_frigidaire.robot import grasp as G, ur5e
         from dishsim_frigidaire.robot.rig import Rig, T_of
-        sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=1 / 120, device="cpu"))
+        sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=1 / 120, device="cpu", physics=PhysxCfg(enable_external_forces_every_iteration=False)))
         sim_utils.GroundPlaneCfg().func("/World/Ground", sim_utils.GroundPlaneCfg())
         sim_utils.DomeLightCfg(intensity=2000.).func("/World/Light", sim_utils.DomeLightCfg(intensity=2000.))
         robot = Articulation(ur5e.robot_cfg(gripper_effort=8., gripper_stiffness=400.))
         bowl = RigidObject(RigidObjectCfg(prim_path="/World/Bowl", spawn=sim_utils.UsdFileCfg(
-            usd_path=str(BOWL_USD), rigid_props=sim_utils.RigidBodyPropertiesCfg(sleep_threshold=0.0)),
+            usd_path=str(BOWL_USD), rigid_props=[sim_utils.UsdPhysicsRigidBodyCfg(), PhysxRigidBodyCfg(sleep_threshold=0.0)]),
             init_state=RigidObjectCfg.InitialStateCfg(pos=(1.5, 1.5, .1))))
         table = RigidObject(RigidObjectCfg(prim_path="/World/Table", spawn=sim_utils.CuboidCfg(
-            size=(.4, .4, .1), rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
-            collision_props=sim_utils.CollisionPropertiesCfg(),
-            physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=.6, dynamic_friction=.5),
+            size=(.4, .4, .1), rigid_props=[sim_utils.UsdPhysicsRigidBodyCfg(kinematic_enabled=True), PhysxRigidBodyCfg()],
+            collision_props=[sim_utils.UsdPhysicsCollisionCfg(), PhysxCollisionCfg()],
+            physics_material=PhysxRigidBodyMaterialCfg(static_friction=.6, dynamic_friction=.5),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(.5, .5, .55))),
             init_state=RigidObjectCfg.InitialStateCfg(pos=(.5, 0., TABLE_TOP - .05))))
         stage = omni.usd.get_context().get_stage()
@@ -64,7 +69,7 @@ def main():
         cam = None
         if cameras:
             from isaaclab.sensors import Camera, CameraCfg
-            cam = Camera(CameraCfg(prim_path="/World/Cam", height=480, width=640, data_types=["rgb"],
+            cam = Camera(CameraCfg(prim_path="/World/Cam", height=480, width=640, data_types=["rgb"], renderer_cfg=IsaacRtxRendererCfg(),
                                    spawn=sim_utils.PinholeCameraCfg(focal_length=18.)))
         sim.reset()
         rig = Rig(sim, robot, np.eye(4), on_step=lambda: (bowl.update(sim.get_physics_dt()), table.update(sim.get_physics_dt())))
@@ -73,16 +78,16 @@ def main():
         rig.teleport_arm(q_park)
         # the bowl in its pose class, dropped 5 mm onto the table
         if args.pose == "upright":
-            pos, rot = (.5, 0., TABLE_TOP + .005), (1., 0., 0., 0.)
+            pos, rot = (.5, 0., TABLE_TOP + .005), (0., 0., 0., 1.)          # XYZW (Isaac Lab 3.0)
         elif args.pose == "inverted":
-            pos, rot = (.5, 0., TABLE_TOP + G.HEIGHT + .005), (0., 1., 0., 0.)
+            pos, rot = (.5, 0., TABLE_TOP + G.HEIGHT + .005), (1., 0., 0., 0.)
         else:                                               # mouth toward +x, axis horizontal, rim resting on the table
-            pos, rot = (.46, 0., TABLE_TOP + G.RIM_R + .005), (math.cos(math.pi / 4), 0., math.sin(math.pi / 4), 0.)
-        bowl.write_root_pose_to_sim(torch.tensor([[*pos, *rot]], dtype=torch.float32))
-        bowl.write_root_velocity_to_sim(torch.zeros(1, 6))
+            pos, rot = (.46, 0., TABLE_TOP + G.RIM_R + .005), (0., math.sin(math.pi / 4), 0., math.cos(math.pi / 4))
+        bowl.write_root_pose_to_sim_index(root_pose=torch.tensor([[*pos, *rot]], dtype=torch.float32))
+        bowl.write_root_velocity_to_sim_index(root_velocity=torch.zeros(1, 6))
         rig.step(240)
-        p, q = bowl.data.root_pos_w[0].cpu().numpy(), bowl.data.root_quat_w[0].cpu().numpy()
-        T_obj = T_of(p, (q[1], q[2], q[3], q[0]))
+        p, q = bowl.data.root_pos_w.torch[0].cpu().numpy(), bowl.data.root_quat_w.torch[0].cpu().numpy()
+        T_obj = T_of(p, q)                              # XYZW (Isaac Lab 3.0)
         res["bowl_class"] = G.bowl_class(T_obj)
         res["bowl_axis"] = np.round(T_obj[:3, 2], 3).tolist()
         if args.insert_mm is not None:
@@ -116,17 +121,17 @@ def main():
                     sim.render()
                 cam.update(sim.get_physics_dt())
                 OUT.mkdir(parents=True, exist_ok=True)
-                Image.fromarray(cam.data.output["rgb"][0, ..., :3].cpu().numpy()).save(OUT / f"{tag}_{label}_{name}.png")
+                Image.fromarray(cam.data.output["rgb"].torch[0, ..., :3].cpu().numpy()).save(OUT / f"{tag}_{label}_{name}.png")
         shot("preclose")
         res["theta"] = rig.gripper(True)
         shot("closed")
-        z0 = float(bowl.data.root_pos_w[0, 2])
+        z0 = float(bowl.data.root_pos_w.torch[0, 2])
         H = G.hover_along(g["T_tcp"], .1)
         res["lift_ok"] = bool(rig.move_line(H, n=60))
         rig.step(60)
-        b0 = bowl.data.root_pos_w[0].cpu().numpy().copy()
+        b0 = bowl.data.root_pos_w.torch[0].cpu().numpy().copy()
         rig.step(360)
-        b1 = bowl.data.root_pos_w[0].cpu().numpy()
+        b1 = bowl.data.root_pos_w.torch[0].cpu().numpy()
         res["lifted_m"] = round(float(b0[2]) - z0, 4)
         res["drift_3s_m"] = round(float(np.linalg.norm(b1 - b0)), 5)
         res["in_hand_mm"] = np.round((np.linalg.inv(rig.tcp()) @ np.r_[b1, 1.])[:3] * 1e3, 1).tolist()
@@ -139,7 +144,7 @@ def main():
                 sim.render()
             cam.update(sim.get_physics_dt())
             OUT.mkdir(parents=True, exist_ok=True)
-            Image.fromarray(cam.data.output["rgb"][0, ..., :3].cpu().numpy()).save(OUT / f"{tag}_held.png")
+            Image.fromarray(cam.data.output["rgb"].torch[0, ..., :3].cpu().numpy()).save(OUT / f"{tag}_held.png")
         res["result"] = "PASS" if res["lifted_m"] > .05 and res["drift_3s_m"] < .005 else "FAIL"
     except Exception:
         res["error"] = traceback.format_exc()

@@ -14,7 +14,9 @@ import math
 from pathlib import Path
 import sys
 
-from isaaclab.app import AppLauncher
+sys.path.insert(0,str(Path(__file__).resolve().parents[3]/"code/src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "code/frigidaire/src"))
+from dishsim.app import add_args, launch   # Kit-free; boots Kit below
 
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--mode",choices=["scripted","passive"],default="scripted")
@@ -22,33 +24,34 @@ parser.add_argument("--usd", type=Path, default=None, help="Appliance USD; defau
 parser.add_argument("--x",type=float,default=0.)
 parser.add_argument("--y",type=float,default=0.)
 parser.add_argument("--yaw",type=float,default=0.,help="Spawn yaw in degrees")
-AppLauncher.add_app_launcher_args(parser)
+add_args(parser)
 args=parser.parse_args()
-app=AppLauncher(args).app
-sys.path.insert(0,str(Path(__file__).resolve().parents[3]/"code/src"))
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "code/frigidaire/src"))
+app=launch(args)
 
 import torch
 import isaaclab.sim as sim_utils
 from isaaclab.sim import SimulationContext
-from dishsim_frigidaire.asset import spawn,step_passive
+from isaaclab_physx.physics import PhysxCfg
+from dishsim_frigidaire.asset import JOINT_LIMITS,spawn,step_passive
 from dishsim.media import release_sim_for_close
 
 
 def main():
-    sim=SimulationContext(sim_utils.SimulationCfg(dt=1/120,device=args.device))
+    sim=SimulationContext(sim_utils.SimulationCfg(dt=1/120,device=args.device,
+        physics=PhysxCfg(enable_external_forces_every_iteration=False)))
     sim_utils.GroundPlaneCfg().func("/World/Floor",sim_utils.GroundPlaneCfg())
     sim_utils.DomeLightCfg(intensity=1800).func("/World/Light",sim_utils.DomeLightCfg(intensity=1800))
     appliance,basket=spawn("/World/Dishwasher",position=(args.x,args.y,0),yaw=math.radians(args.yaw),mode=args.mode,usd_path=args.usd)
     sim.reset()
     indices={name:appliance.joint_names.index(name) for name in appliance.joint_names}
-    target=appliance.data.default_joint_pos.clone()
+    target=appliance.data.default_joint_pos.torch.clone()
     dt=sim.get_physics_dt()
 
     def check_state(label, expected=None):
-        actual={name:float(appliance.data.joint_pos[0,j]) for name,j in indices.items()}
+        actual={name:float(appliance.data.joint_pos.torch[0,j]) for name,j in indices.items()}
         if not all(math.isfinite(value) for value in actual.values()) or not bool(
-                torch.isfinite(basket.data.root_state_w).all()):
+                torch.isfinite(basket.data.root_link_pose_w.torch).all()
+                and torch.isfinite(basket.data.root_com_vel_w.torch).all()):
             raise RuntimeError(f"{label}: nonfinite articulation or basket state")
         if expected is not None:
             errors={name:actual[name]-value for name,value in expected.items()}
@@ -61,7 +64,7 @@ def main():
         if args.mode=="passive":
             step_passive(appliance)
         else:
-            appliance.set_joint_position_target(target)
+            appliance.actuators.target_command.set_position_index(value=target)
         appliance.write_data_to_sim()
         sim.step()
         appliance.update(dt)
@@ -69,7 +72,8 @@ def main():
 
     if args.mode=="scripted":
         for label,state,seconds in [("door open",{"door_hinge":math.pi/2},4.),
-                              ("racks extended",{"lower_slide":-.49,"upper_slide":-.44},5.),
+                              ("racks extended",{"lower_slide":JOINT_LIMITS["lower_slide"][0],   # the twin's flush-out
+                                                 "upper_slide":JOINT_LIMITS["upper_slide"][0]},5.),
                               ("extended hold",{},2.),
                               ("racks retracted",{"lower_slide":0.,"upper_slide":0.},5.),
                               ("door closed",{"door_hinge":0.},4.)]:
@@ -90,11 +94,11 @@ def main():
         # The caller's robot may instead apply contact forces to the same bodies.
         for i in range(12*120):
             effort=step_passive(appliance).clone()
-            if appliance.data.joint_pos[0,indices["door_hinge"]] < math.radians(88):
+            if appliance.data.joint_pos.torch[0,indices["door_hinge"]] < math.radians(88):
                 effort[:,indices["door_hinge"]]+=5.
             elif i>5*120:
                 effort[:,indices["lower_slide"]]-=12.
-            appliance.set_joint_effort_target(effort)
+            appliance.actuators.target_command.set_effort_index(value=effort)
             appliance.write_data_to_sim()
             sim.step()
             appliance.update(dt)
@@ -103,7 +107,7 @@ def main():
         if actual["door_hinge"] < math.radians(85) or actual["lower_slide"] > -.02:
             raise RuntimeError(f"Passive handle forces did not open the door and extend the lower rack: {actual}")
         print("[RESULT] PASS: passive handle forces opened the door and extended the lower rack",flush=True)
-    print({n:float(appliance.data.joint_pos[0,j]) for n,j in indices.items()},flush=True)
+    print({n:float(appliance.data.joint_pos.torch[0,j]) for n,j in indices.items()},flush=True)
 
 
 try:

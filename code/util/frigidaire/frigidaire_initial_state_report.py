@@ -24,6 +24,9 @@ OBJECT_KINDS = KINDS + ("fork", "knife", "tablespoon", "teaspoon")   # accepted 
 OBJECT_RACKS = RACKS + ("SilverwareBasket",)
 COMPONENTS = ("Cabinet", "Door", "LowerRack", "UpperRack", "SilverwareBasket")
 CLASSIFIED_FAILURES = {"initial_collision", "settle_failure", "penetration_failure", "closure_failure", "outside_dishwasher"}
+# the racks' "out" joint values: the twin's slide limits (parameters.json joint_limits_usd; plans/2026-10-29-racks-out.md)
+SLIDE_OUT = {j: v[0] for j, v in json.loads((Path(__file__).resolve().parents[3] / "data/assets/frigidaire_fdpc4221as/"
+                                             "parameters.json").read_text())["joint_limits_usd"].items() if j.endswith("_slide")}
 
 
 def digest(path):
@@ -109,7 +112,8 @@ def validate_state(state):
             raise ValueError(f"Object pose and measured initial snapshot differ: {identity}")
     joints = state.get("initial_snapshot", {}).get("joints", {})
     for name, expected, tolerance in (("door_hinge", math.pi/2, math.radians(.5)),
-                                       ("lower_slide", -.49, .005), ("upper_slide", -.44, .005)):
+                                       ("lower_slide", SLIDE_OUT["lower_slide"], .005),
+                                       ("upper_slide", SLIDE_OUT["upper_slide"], .005)):
         if not finite(joints.get(name)) or abs(joints[name]-expected) > tolerance:
             raise ValueError(f"Measured initial state is not door-open/both-racks-extended: {name}")
     if validation.get("object_count") != counts["total"] or validation.get("initial_snapshot") != state["initial_snapshot"]:

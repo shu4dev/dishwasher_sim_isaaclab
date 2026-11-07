@@ -429,6 +429,12 @@ def lower_bowl_variants(points, y_bank, slot, x_start=.060):
     return out
 
 
+UPPER_BOWL_TILTS = tuple(range(100, 151, 5))                        # mouth down, every 5 deg (2026-11-02 resample)
+UPPER_BOWL_OFFSETS = tuple(round(k * .0025, 4) for k in range(-10, 11))   # y offset every 2.5 mm, +-25 mm
+UPPER_BOWL_XS = (-.010, 0., .010)
+UPPER_BOWL_FALLBACK = (82, 70)                                       # mouth-up fallback, the old offsets, x 0
+
+
 def upper_bowl_variants(gap, y, points):
     """Bowl in one centre gap (index of its front tine, or "wide" for the gap at the absent
     centre positions), mouth facing down and forward, tines inside the cavity.
@@ -436,10 +442,20 @@ def upper_bowl_variants(gap, y, points):
     Rotation about X past 90 deg turns the mouth toward the front and the floor; the rim
     rests on the centre floor rib and the base leans on the tine row behind. Mouth-up
     poses (tilt < 90) cannot clear the inner tine columns and are kept only as a fallback.
+    The mouth-down grid was 5 tilts x 5 offsets at x 0 until 2026-11-02: one pose per slot fit
+    the October bowl, and the v4 bowl lost slots 03, 10 and 11 against the rack's own tines
+    (plans/2026-11-02-fit-score-prove.md, Revision); it is now UPPER_BOWL_TILTS x
+    UPPER_BOWL_OFFSETS x UPPER_BOWL_XS.
     """
     out = []
     slot = f"upper_bowl_{gap:02d}" if isinstance(gap, int) else f"upper_bowl_{gap}"
-    for tilt in (120, 135, 110, 150, 100, 82, 70):
+    for tilt in UPPER_BOWL_TILTS:
+        orient = rotation("X", math.radians(tilt))
+        for offset in UPPER_BOWL_OFFSETS:
+            for x in UPPER_BOWL_XS:
+                out.append(_tilted("bowl", "UpperRack", slot, x, y + offset, orient, points, UPPER_CENTRE_FLOOR,
+                                   f"tilt{tilt}_offset{offset:.4f}_x{x:.3f}"))
+    for tilt in UPPER_BOWL_FALLBACK:
         orient = rotation("X", math.radians(tilt))
         for offset in (0., .010, -.010, .020, -.020):
             out.append(_tilted("bowl", "UpperRack", slot, 0., y + offset, orient,

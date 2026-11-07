@@ -81,8 +81,15 @@ def scene(entries, hide_upper=False):
     return np.concatenate(parts).astype(np.float32), face_obj, np.asarray(cols, np.float32)
 
 
-def render(tri, face_obj, cols, eye, target, W=960, H=720, fov_deg=34., ss=2):
+def render(tri, face_obj, cols, eye, target, W=960, H=720, fov_deg=34., ss=2, bg=(.965, .97, .975), light=(-.35, -.55, 1.),
+           ground=None):
+    """``bg`` the background, ``light`` the light direction; ``ground`` (a colour) adds a 40 x 40 m ground at z = 0 (the top
+    of a 0.05 m slab, all a camera above it sees; a 200 m one made the mesh queries 6x slower; plans/2026-11-05-replay-like-stills.md)."""
     eye, target = np.asarray(eye, float), np.asarray(target, float)
+    if ground is not None:
+        g = np.array([[-20., -20, 0], [20, -20, 0], [20, 20, 0], [-20, 20, 0]])[[0, 1, 2, 0, 2, 3]].reshape(2, 3, 3)
+        tri, face_obj = np.concatenate([tri, g]).astype(np.float32), np.r_[face_obj, [len(cols)] * 2].astype(np.int32)
+        cols = np.vstack([cols, ground]).astype(np.float32)
     fwd = target - eye
     fwd /= np.linalg.norm(fwd)
     right = np.cross(fwd, [0, 0, 1.])
@@ -92,10 +99,10 @@ def render(tri, face_obj, cols, eye, target, W=960, H=720, fov_deg=34., ss=2):
                    indices=wp.array(np.arange(tri.size // 3, dtype=np.int32), dtype=wp.int32))
     Ws, Hs = W * ss, H * ss
     out = wp.zeros(Ws * Hs, dtype=wp.vec3)
-    light = np.array([-.35, -.55, 1.]) / np.linalg.norm([-.35, -.55, 1.])
+    light = np.asarray(light, float) / np.linalg.norm(light)
     wp.launch(shade, dim=(Hs, Ws), inputs=[mesh.id, wp.vec3(*eye), wp.vec3(*fwd), wp.vec3(*right), wp.vec3(*up),
                                           float(np.tan(np.radians(fov_deg) / 2)), Ws, Hs, wp.array(face_obj, dtype=wp.int32),
-                                          wp.array(cols, dtype=wp.vec3), wp.vec3(*light), wp.vec3(.965, .97, .975), out])
+                                          wp.array(cols, dtype=wp.vec3), wp.vec3(*light), wp.vec3(*bg), out])
     img = out.numpy().reshape(Hs, Ws, 3).reshape(H, ss, W, ss, 3).mean(axis=(1, 3))
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 

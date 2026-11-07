@@ -5,9 +5,8 @@ The demo and the Isaac start-state gate of the Frigidaire FDPC4221AS twin, plus 
 `frigidaire_random_load_farm.py`, its host-side launcher and harvester; usage in their docstrings). The 18 scripts
 that built and certified the twin (build, stage, inspect, package, assembly evidence, rack previews, clearance, dimensions, tape check,
 cutlery search, load planning, claims, full-load evidence and renders, render settings, loaded-scene smoke) moved on
-2026-10-21 to the asset dataset's `data/assets/frigidaire_fdpc4221as/source/`, the
-Bosch lower-rack polish pair (`polish_lower_rack.py`, `lower_rack_polish_evidence.py`) to
-`data/assets/bosch800/source/`; each folder's README gives the exact commands. Defaults are defined in the script
+2026-10-21 to the asset dataset's `data/assets/frigidaire_fdpc4221as/source/` (the Bosch lower-rack polish pair
+left with the Bosch asset folder, history on the hub since 2026-11-01); each folder's README gives the exact commands. Defaults are defined in the script
 itself unless another file is named. Two defaults come from `code/frigidaire/src/dishsim_frigidaire/paths.py`:
 `ASSET_DIR` = `data/assets/frigidaire_fdpc4221as/usd`, `IMAGE_DIR` = `data/media/frigidaire_fdpc4221as/images`.
 Kit = run through `code/util/run_kit.sh ... --headless`; Kit-free = `code/util/run_py.sh` (or host `python3`

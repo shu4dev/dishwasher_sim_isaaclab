@@ -18,7 +18,7 @@ passing drop is also checked Kit-free (tub wall, closed-rack containment, retrac
         --run-dir data/results/random_loads/<run> --worker 0 --gen 0 --seed 20261009 --headless --device cpu
 
 Outputs (repo-relative run dir): loads/<id>/result.json, index/wJJ_gG.jsonl, workers/wJJ_gG.status.json.
-The worker's exit reason is in its status file and the '[RESULT] EXIT <code> <reason>' line (isaaclab.sh -p
+The worker's exit reason is in its status file and the '[RESULT] EXIT <code> <reason>' line (Kit
 swallows exit codes): 0 stopped (STOP file, start cutoff, hard stop), 3 recycle (--max-loads reached), 4 needs a
 fresh Kit (reset sanity, baseline failure or simulation error).
 """
@@ -238,16 +238,17 @@ class Worker:
                 self.previous_frames = None
 
             def capture(self):
-                return {"joint_pos": self.dishwasher.data.joint_pos.clone(), "target": self.target.clone(),
+                return {"joint_pos": self.dishwasher.data.joint_pos.torch.clone(), "target": self.target.clone(),
                         "poses": self.poses(), "tick": self.tick_index}
 
             def restore_state(self, cap):
                 torch = self.torch
                 self.target.copy_(cap["target"])
-                self.dishwasher.write_joint_state_to_sim(cap["joint_pos"], torch.zeros_like(cap["joint_pos"]))
-                self.dishwasher.write_root_velocity_to_sim(torch.zeros((1, 6), device=self.sim.device))
+                self.dishwasher.write_joint_state_to_sim_index(position=cap["joint_pos"],
+                                                               velocity=torch.zeros_like(cap["joint_pos"]))
+                self.dishwasher.write_root_velocity_to_sim_index(root_velocity=torch.zeros((1, 6), device=self.sim.device))
                 self.dishwasher.reset()
-                self.dishwasher.set_joint_position_target(self.target)
+                self.dishwasher.actuators.target_command.set_position_index(value=self.target)
                 self.set_rigid_pose(self.basket, cap["poses"]["SilverwareBasket"])
                 for name, obj in self.objects.items():
                     self.set_rigid_pose(obj, cap["poses"][name])
@@ -839,8 +840,9 @@ class Worker:
 
 def main():
     parser = build_parser()
-    from isaaclab.app import AppLauncher
-    AppLauncher.add_app_launcher_args(parser)
+    sys.path[:0] = [str(ROOT / "code/src")]
+    from dishsim.app import add_args, launch   # Kit-free; boots Kit in the try below
+    add_args(parser)
     parser.set_defaults(device="cpu", headless=True)
     args = parser.parse_args()
     if args.device != "cpu":
@@ -852,7 +854,7 @@ def main():
         if early:
             code, reason = EXIT_STOPPED, early
         else:
-            app = AppLauncher(args).app
+            app = launch(args)
             worker.app = app
             worker.boot()
             worker.backend.app = app

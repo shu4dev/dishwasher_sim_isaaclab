@@ -254,10 +254,12 @@ def initial_image(pair, out):
     c, v = ini["counter"], ini["settle"]
     title = (f"Initial configuration: {c['start_count']} on the counter in {len(c['pile']['stacks'])} stacks, "
              f"{len(poses) - c['start_count']} dropped into the racks")
+    gi = next((x for x in reversed(pair.get("stages") or []) if x["stage"] == "gate_initial"), None)   # the ledger's last
     Image.fromarray(captioned(stage.views(poses, {i: stage.tint(i) for i in stage.kind}, INITIAL_PANELS), title,
                               f"Isaac settle {v['start']['outcome']}, reproduction {v['reproduction']['max_pos_mm']} mm / "
-                              f"{v['reproduction']['max_rot_deg']} deg; counter cap {c['cap']}; not gated (gate_initial "
-                              f"SKIP)")).save(out / "initial.png")
+                              f"{v['reproduction']['max_rot_deg']} deg; counter cap {c['cap']}; "
+                              + (f"gate_initial {gi['result']}, {gi['note']}" if gi and gi["result"] != "SKIP"
+                                 else "not gated (gate_initial SKIP)"))).save(out / "initial.png")
     return title
 
 

@@ -57,20 +57,23 @@ def spawn(prim_path, position=(0.,0.,0.), yaw=0., mode="passive", usd_path=None)
     requested_world.SetTranslateOnly(Gf.Vec3d(*map(float, position)))
     local = requested_world * parent_world.GetInverse()
     local_q = local.ExtractRotationQuat()
-    sim_utils.UsdFileCfg(usd_path=asset).func(prim_path,sim_utils.UsdFileCfg(usd_path=asset),
+    # fix_root_link=False: the asset welds itself (Joints/base_fixed, a sibling of the Cabinet root),
+    # and Isaac Lab 3.0 must not author a second world joint (the spawn orientation is XYZW in 3.0)
+    usd_cfg = sim_utils.UsdFileCfg(usd_path=asset, fix_root_link=False)
+    usd_cfg.func(prim_path, usd_cfg,
         translation=tuple(local.ExtractTranslation()),
-        orientation=(local_q.GetReal(), *local_q.GetImaginary()))
+        orientation=(*local_q.GetImaginary(), local_q.GetReal()))
     fixed = UsdPhysics.FixedJoint.Get(stage,prim_path+"/Joints/base_fixed")
     fixed.CreateLocalPos0Attr(Gf.Vec3f(*map(float,position)))
     fixed.CreateLocalRot0Attr(Gf.Quatf(q[0],Gf.Vec3f(*q[1:])))
     cfg = ArticulationCfg(prim_path=prim_path,spawn=None,
-        init_state=ArticulationCfg.InitialStateCfg(pos=position,rot=q,joint_pos={".*":0.}),
+        init_state=ArticulationCfg.InitialStateCfg(pos=position,rot=(*q[1:],q[0]),joint_pos={".*":0.}),
         actuators={"door":ImplicitActuatorCfg(joint_names_expr=["door_hinge"],
                     stiffness=300. if mode=="scripted" else 0., damping=45. if mode=="scripted" else .8,
-                    effort_limit_sim=30.,velocity_limit_sim=.65),
+                    joint_effort_limit=30.,joint_velocity_limit=.65),
                    "racks":ImplicitActuatorCfg(joint_names_expr=[".*_slide"],
                     stiffness=1600. if mode=="scripted" else 0., damping=180. if mode=="scripted" else 8.,
-                    effort_limit_sim=60.,velocity_limit_sim=.15)})
+                    joint_effort_limit=60.,joint_velocity_limit=.15)})
     appliance = Articulation(cfg)
     door_mass=UsdPhysics.MassAPI(stage.GetPrimAtPath(prim_path+"/Door"))
     appliance._frigidaire_door_mass=float(door_mass.GetMassAttr().Get())
@@ -80,7 +83,7 @@ def spawn(prim_path, position=(0.,0.,0.), yaw=0., mode="passive", usd_path=None)
     basket_q = basket_world.ExtractRotationQuat()
     basket = RigidObject(RigidObjectCfg(prim_path=prim_path+"/SilverwareBasket",spawn=None,
         init_state=RigidObjectCfg.InitialStateCfg(pos=tuple(basket_world.ExtractTranslation()),
-            rot=(basket_q.GetReal(), *basket_q.GetImaginary()))))
+            rot=(*basket_q.GetImaginary(), basket_q.GetReal()))))
     appliance._frigidaire_mode = mode
     return appliance,basket
 
@@ -97,13 +100,10 @@ def apply_mode(appliance, mode):
         damping.append((45. if door else 180.) if mode=="scripted" else (.8 if door else 8.))
     k=torch.tensor([stiffness],device=appliance.device)
     d=torch.tensor([damping],device=appliance.device)
-    appliance.write_joint_stiffness_to_sim(k)
-    appliance.write_joint_damping_to_sim(d)
-    # ImplicitActuator mirrors the gains for effort estimation; update that cache too.
-    for actuator in appliance.actuators.values():
-        actuator.stiffness[:]=k[:,actuator.joint_indices]
-        actuator.damping[:]=d[:,actuator.joint_indices]
-    appliance.set_joint_effort_target(torch.zeros_like(appliance.data.joint_pos))
+    # Isaac Lab 3.0: the implicit actuators read these articulation-owned gains, no cache to mirror
+    appliance.write_joint_stiffness_to_sim_index(stiffness=k)
+    appliance.write_joint_damping_to_sim_index(damping=d)
+    appliance.actuators.target_command.set_effort_index(value=torch.zeros_like(appliance.data.joint_pos.torch))
     appliance._frigidaire_mode=mode
 
 
@@ -117,15 +117,15 @@ def step_passive(appliance):
     import torch
     if getattr(appliance,"_frigidaire_mode",None)!="passive":
         return
-    effort=torch.zeros_like(appliance.data.joint_pos)
+    effort=torch.zeros_like(appliance.data.joint_pos.torch)
     for i,name in enumerate(appliance.joint_names):
-        q=appliance.data.joint_pos[:,i]
-        velocity=appliance.data.joint_vel[:,i]
+        q=appliance.data.joint_pos.torch[:,i]
+        velocity=appliance.data.joint_vel.torch[:,i]
         if name=="door_hinge":
             mass=appliance._frigidaire_door_mass
             _,cy,cz=appliance._frigidaire_door_com
             effort[:,i]=-mass*9.81*(cz*torch.sin(q)-cy*torch.cos(q)) - .30*torch.tanh(velocity/.015)
         else:
             effort[:,i]=-1.2*torch.tanh(velocity/.008)
-    appliance.set_joint_effort_target(effort)
+    appliance.actuators.target_command.set_effort_index(value=effort)
     return effort

@@ -18,18 +18,20 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    from isaaclab.app import AppLauncher
-    AppLauncher.add_app_launcher_args(parser)
+    sys.path[:0] = [str(ROOT / "code/src")]
+    from dishsim.app import add_args, launch   # Kit-free; boots Kit below
+    add_args(parser)
     args = parser.parse_args()
-    app = AppLauncher(args).app
+    app = launch(args)
     out = {"result": "FAIL"}
     try:
         sys.path[:0] = [str(ROOT / "code/src"), str(ROOT / "code/frigidaire/src")]
         import isaaclab.sim as sim_utils
+        from isaaclab_physx.physics import PhysxCfg
         from isaaclab.assets import Articulation
         from pxr import Usd, UsdPhysics, PhysxSchema
         from dishsim_frigidaire.robot import ur5e
-        sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=1 / 120, device="cpu"))
+        sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=1 / 120, device="cpu", physics=PhysxCfg(enable_external_forces_every_iteration=False)))
         Articulation(ur5e.robot_cfg())
         stage = sim.stage
         cols, groups, filtered = [], [], []

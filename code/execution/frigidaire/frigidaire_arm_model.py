@@ -20,19 +20,21 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    from isaaclab.app import AppLauncher
-    AppLauncher.add_app_launcher_args(parser)
+    sys.path[:0] = [str(ROOT / "code/src")]
+    from dishsim.app import add_args, launch   # Kit-free; boots Kit below
+    add_args(parser)
     args = parser.parse_args()
-    app = AppLauncher(args).app
+    app = launch(args)
     out = {"result": "FAIL"}
     try:
         sys.path[:0] = [str(ROOT / "code/src"), str(ROOT / "code/frigidaire/src")]
         import numpy as np
         import isaaclab.sim as sim_utils
+        from isaaclab_physx.physics import PhysxCfg
         from isaaclab.assets import Articulation
         import omni.usd
         from dishsim_frigidaire.robot import collide as C, ur5e
-        sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=1 / 120, device="cpu"))
+        sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=1 / 120, device="cpu", physics=PhysxCfg(enable_external_forces_every_iteration=False)))
         robot = Articulation(ur5e.robot_cfg())
         stage = omni.usd.get_context().get_stage()
         ur5e.deinstance_gripper(stage)
@@ -41,7 +43,7 @@ def main():
             sim.step()
             robot.update(sim.get_physics_dt())
         hulls = C.link_hulls(stage, robot=robot)
-        q = robot.data.joint_pos[0, [list(robot.joint_names).index(j) for j in ur5e.ARM_JOINTS]].cpu().numpy()
+        q = robot.data.joint_pos.torch[0, [list(robot.joint_names).index(j) for j in ur5e.ARM_JOINTS]].cpu().numpy()
         X = C.calibrate(robot, q, np.eye(4))
         out.update(result="PASS", q_calibration=q.tolist(),
                    hulls={k: [np.asarray(v).tolist() for _, v in lst] for k, lst in hulls.items()},

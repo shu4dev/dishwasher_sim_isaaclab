@@ -7,7 +7,9 @@ For every candidate base pose (a grid beside the open door, base x axis facing t
 top-down grasps (``robot/grasp.py``) at its START pose and at its GOAL pose (the settled goal, as a proxy for the
 place pose) are tested with the analytic IK (``robot/kin.py``). Score = dishes with a reachable start grasp +
 dishes with a reachable goal grasp (at least one candidate each), ties broken by the mean joint margin. Writes
-data/results/robot/mount/<instance>.json. Collisions of the arm are NOT checked here (the Isaac episode judges them).
+data/results/robot/mount/<instance>.json. Arm collisions ARE checked here, Kit-free: free_reach runs collide.ArmWorld.free on
+data/results/robot/arm_model.json at each grasp and its 0.10 m hover (the record carries collision_checked); the Isaac
+episode judges the executed motion.
 """
 from __future__ import annotations
 

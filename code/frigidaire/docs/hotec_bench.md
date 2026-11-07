@@ -7,6 +7,19 @@ rounds on 2026-09-23; the approved plan is `~/.claude/plans/i-am-creating-a-maje
 
 ## The problem
 
+> **The merged benchmark's goal since 2026-11-02** (`code/src/bench/build.py`, plans/2026-11-02-fit-score-prove.md): an
+> exact CP-SAT packing of the roster over the packer's level-0 poses (one pose per dish, plates and cups one per slot, no
+> pair colliding past 0.8 mm, no pair whose insertion paths block each other, longer DAG cycles cut lazily), then the
+> score ascent (`ascend`, a move kept only if the DAG stays acyclic), then the Isaac build in the DAG order. The upper
+> bowl family (`loading.upper_bowl_variants`) was resampled for the v4 bowl the same day: tilt 100-150 every 5 deg,
+> offset every 2.5 mm, x -10/0/+10 mm; 473 of its 7030 poses clear the rack's tines (was 28 of 350). The "goal" row below
+> is the old bench's.
+>
+> `code/planner/bench.py --to stills` (2026-11-02, plans/2026-11-02-sample-schema.md; it replaced the same day's
+> `--algorithms none` of plans/2026-11-02-three-kinds-medium-easy.md): the stills stage renders the sample's initial and
+> goal stills (`frigidaire_bench_kit.py --stills`) and runs no episode; it passes when the kit log passed and both PNGs
+> exist. A sample file has four blocks (metadata, initial, goal, dag); the episodes go to `<out>/runs/<sample>.json`.
+
 > **Regenerated 2026-09-28/29 on the re-measured racks** (`upper_tines_4x13_v5`, `lower_tines_6x12_v4`,
 > `code/frigidaire/docs/geometry.md`): baseline snapshot, instances, plans, episodes and `compare/` under
 > `data/results/benchmark/frigidaire_hotec/` are new-rack artefacts (see "Results" below); the previous racks' artefacts
@@ -78,7 +91,8 @@ One attempt = one Kit process, rng `[seed, tier index, 1000 + attempt]`, accepte
 
 Then Kit-free `--goal` (the ascent; goal dishes keep >= 3 mm pairwise clearance), the Isaac goal gate
 (`frigidaire_initial_state_validate.py` on the goal manifest: joint settle, retract both racks, containment; a
-rack-speed flake is retried lower-first once; a dish-on-dish or dish-into-appliance penetration is banned),
+rack-speed flake is retried lower-first once (that flake was the lower rack's wheels catching the hinge seam; they are
+visual only since 2026-11-01, results/2026-11-01-rack-wheels-visual.md); a dish-on-dish or dish-into-appliance penetration is banned),
 the Isaac **sequence gate** (`frigidaire_bench_kit.py --sequence`: the goal built one dish at a time, lowest
 centre first, each at its jointly settled pose + 3 mm and settled like a move: it must land within the at-goal
 tolerance with < 2 mm contact depth and move no placed dish > 10 mm / 20 deg; a failing pose or pair is banned;

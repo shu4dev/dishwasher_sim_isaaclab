@@ -22,6 +22,7 @@ absolute S, a <load_id>.relative.json (frigidaire_dot_rules_relative.py) the kin
 import argparse
 import json
 from pathlib import Path
+import re
 import shutil
 
 MAX_FILE = 15 * 2 ** 20
@@ -239,7 +240,7 @@ def physical_page(a, records, clip_dirs, state, pairs=None, picks=None):
         init = best = None
         if pair:                                             # a sampler pair: its difficulty and initial stage
             pp = pair["params"]
-            w = ((picks or {}).get("tiers") or {}).get(pp["difficulty"]) or {}    # code/src/sampler/pick.py's pick
+            w = ((picks or {}).get("tiers") or {}).get(pp["difficulty"]) or {}    # code/src/bench/pick.py's pick
             if w.get("pick") and (Path(__file__).resolve().parents[3] / w["pick"]["pair"]).resolve() == pairs[key].resolve():
                 best = w["n"]
             label = f"{pp['difficulty']}: " + " + ".join(f"{n} {k}s" for k, n in pp["count"].items())
@@ -291,6 +292,7 @@ def physical_page(a, records, clip_dirs, state, pairs=None, picks=None):
         dev = [max((s_.get(k) or 0) for s_ in st) for k in ("lateral_mm", "dz_mm", "tilt_deg")] if st else None
         n = g["counts"]
         samples.append({"key": key, "load": rec["load_id"], "label": label, "title": title, "init": init,
+                        "ginit": next((x for x in reversed((pair or {}).get("stages") or []) if x["stage"] == "gate_initial"), None),
                         "pair": str(pairs[key]) if pair else None, "n_all": n_all, "best": best,
                         "files": files, "s": s_text, "gate": g_text, "arrows": arrows,
                         "n": n, "free": len(free), "video_s": clips["witness"]["seconds"],
@@ -316,8 +318,11 @@ def physical_page(a, records, clip_dirs, state, pairs=None, picks=None):
                f'width="1280" height="912"><figcaption><b>The initial configuration</b> (the bench\'s start generator for '
                f'this tier and seed: dishes in random counter stacks on the worktop, the rest dropped into the extended '
                f'racks, settled in Isaac; drawn with the racks pushed in): the counter from the door side, the racks '
-               f'oblique, each rack from the top, every dish labelled with its id. {esc(s["init"] or "")}. Not gated: the '
-               f'initial gate is not connected yet (gate_initial SKIP).</figcaption></figure>' if "initial" in s["files"]
+               f'oblique, each rack from the top, every dish labelled with its id. {esc(s["init"] or "")}. '
+               + (f'Initial gate: gate_initial {esc(s["ginit"]["result"])}, {esc(s["ginit"]["note"] or "")}.'
+                  if s["ginit"] and s["ginit"]["result"] != "SKIP" else
+                  'Not gated: the initial gate is not connected yet (gate_initial SKIP).')
+               + '</figcaption></figure>' if "initial" in s["files"]
                else '<p class="muted">No initial configuration: this sample predates the sampler\'s initial stage.</p>')
             + f'<figure><img src="{esc(s["files"]["load"])}" alt="{esc("Goal load " + s["load"] + " from four angles (oblique, top of the lower rack, top of the upper rack, front), every dish labelled with its id")}" '
             f'width="1280" height="912"><figcaption><b>The goal configuration (the built load) from four angles</b> '
@@ -412,7 +417,7 @@ def yield_rows(state, gdir=None):
             "(['LowerRack', 'UpperRack'])", "(lower rack first)")
         out.append({"load": k, "stage": v["stage"], "reason": reason, "resumed": v.get("resumed"),
                     "gate": " then ".join(gates) or None,
-                    "certified": "" if v.get("certified") is None else "24 of 24" if v["certified"] else "no",
+                    "certified": "" if v.get("certified") is None else (re.findall(r"witness rebuilt (\d+ of \d+)", v.get("reason") or "") or ["yes"])[0] if v["certified"] else "no",  # the record's own count, from its verdict
                     "edges": f"{n.get('support', 0)} support, {n.get('access', 0)} access" if n else ""})
     return out
 
@@ -552,9 +557,9 @@ def main():
     ap.add_argument("--clips", nargs="*", default=[], metavar="KEY=DIR",
                     help="frigidaire_dependency_clips.py --out (with clips.json) per key")
     ap.add_argument("--pairs", nargs="*", default=[], metavar="KEY=PATH",
-                    help="the sampler pair file (code/src/sampler/sample.py) per key: difficulty label, initial stage")
+                    help="the sampler pair file (code/src/bench/sample.py) per key: difficulty label, initial stage")
     ap.add_argument("--state", type=Path, help="the --sample scheduler's state (scheduler_state.json): the yield")
-    ap.add_argument("--picks", type=Path, help="code/src/sampler/pick.py's picks.json: a pair that is its tier's pick "
+    ap.add_argument("--picks", type=Path, help="code/src/bench/pick.py's picks.json: a pair that is its tier's pick "
                                                 "says so (the highest-S valid load of n candidates)")
     ap.add_argument("--out", type=Path, required=True)
     a = ap.parse_args()

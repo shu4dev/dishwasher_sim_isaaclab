@@ -19,16 +19,6 @@ def B():
     return module
 
 
-def test_tiers_counts_caps_and_n_ranges(B):
-    assert [len(B.roster(t)) for t in B.TIERS] == [7, 15, 23]
-    assert {k for _, k in B.roster("hard")} == {"plate", "bowl", "cup"}
-    for tier, (lo, hi), slack in (("easy", (2, 5), 3), ("medium", (4, 11), 2), ("hard", (6, 17), 1)):   # medium/hard +1 since 2026-09-28
-        ns = {B.draw_n(tier, s) for s in range(200)}
-        assert min(ns) >= lo and max(ns) <= hi and len(ns) > 3
-        assert B.cap_of(tier, 5) == 5 + slack
-    assert B.draw_n("hard", 3) == B.draw_n("hard", 3)            # from (tier, seed) only
-
-
 def test_tub_wall_and_goal_tolerances(B):
     pts = np.array([[0., 0., 0.], [.01, 0., 0.]])
     assert B.tub_clear(pts, [.26, 0., 0.], [0., 0., 0., 1.])
@@ -197,13 +187,13 @@ def test_episode_rows_have_no_copies_and_open_success_needs_a_pooling_free_load(
     _episode(tmp_path, "open", "easy", "planner", solved=False, abort="give-up", gap=None)   # retired 2026-09-29: ignored
     p = _episode(tmp_path, "open", "easy", "mcts", solved=False, abort="give-up", gap=None)
     p.with_suffix(".analysis.json").write_text(json.dumps({"S_final": .26, "feasible_final": False}))
-    q = _episode(tmp_path, "open", "easy", "baseline", solved=False, abort="give-up", gap=None,
+    q = _episode(tmp_path, "open", "easy", "first_fit", solved=False, abort="give-up", gap=None,
                  end_check={"outcome": "not_all_racked"})
     q.with_suffix(".analysis.json").write_text(json.dumps({"S_final": .35, "feasible_final": True}))
     rows = B.episode_rows(tmp_path)
     assert [r["algorithm"] for r in rows["goal"]] == ["greedy_offline", "rrt_connect"]
     assert [(r["algorithm"], r["success"], r["failure"]) for r in rows["open"]] == \
-        [("baseline", False, "not_all_racked"), ("mcts", False, "pooling")]
+        [("first_fit", False, "not_all_racked"), ("mcts", False, "pooling")]
     assert [(r["success"], r["failure"]) for r in rows["goal"]] == [(True, None), (False, "give-up")]
     s = B.summarize(rows["open"])
     assert s["solved"] == 0 and s["S_final"] is None and s["aborts"] == {"not_all_racked": 1, "pooling": 1}
@@ -292,4 +282,4 @@ def test_own_order_keeps_a_legal_plan_and_rejects_an_illegal_one(B):
 
 
 def test_open_track_is_first_fit_and_mcts(B):
-    assert B.TRACK_ALGORITHMS["open"] == ("baseline", "mcts")
+    assert B.TRACK_ALGORITHMS["open"] == ("first_fit", "mcts")

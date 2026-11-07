@@ -6,8 +6,8 @@
 
 The cameras (poses in :data:`dishsim.config.CAMERAS`) are FIXED across all phases so shots stay
 comparable. :class:`CameraRig` is Kit-only (imports ``isaaclab.sensors`` lazily); requires the
-app to run with ``--headless --enable_cameras`` — without the flag camera sensors return
-nothing. :class:`VideoWriter` is Kit-free (imageio/numpy).
+app to run with ``--headless --enable_cameras`` (dishsim.app) — without the flag camera sensors
+return nothing. :class:`VideoWriter` is Kit-free (imageio/numpy).
 """
 
 import os
@@ -16,41 +16,18 @@ import numpy as np
 
 
 def release_sim_for_close(sim=None) -> None:
-    """Disarm isaaclab 2.1's timeline on-stop callback so ``simulation_app.close()`` returns.
+    """Flush python's stdio before ``simulation_app.close()``; otherwise a no-op on Isaac Lab 3.0.
 
-    ``SimulationContext`` subscribes a stop-event handler that spins
-    ``while not timeline.is_playing(): render()`` — meant to keep a GUI app rendering after a
-    user hits stop, but in a headless standalone ``close()`` stops the timeline itself and the
-    callback deadlocks the shutdown at full CPU (measured on this box: kit_smoke finished its
-    work in <1 min, then burned 7.6 cores for 40+ min inside ``close()``). Setting the private
-    disable flag is the same mechanism ``SimulationContext.reset()`` uses around its own
-    internal stop/starts; unsubscribing the handle is what ``clear_instance()`` would do —
-    ``close()`` just reaches the orchestrator stop first. Call this right before
-    ``simulation_app.close()`` in every standalone script.
-
-    Also flushes python's stdio: 4.5's ``close()`` ends in Kit's fast shutdown, which
-    terminates the process natively (exit 0) — a redirected, block-buffered stdout would
-    otherwise lose every print of the run, including the ``[RESULT]`` line the logs are
-    judged by (measured on this box).
+    Isaac Lab 2.1 (Isaac Sim 4.5, corallab's isaac45-final commit) needed this to disarm a
+    timeline on-stop callback that spun ``close()`` forever at full CPU, and its fast shutdown
+    discarded block-buffered stdout. 3.0's ``SimulationContext`` has no such handle and 6.x
+    flushes on close; the flush stays as cheap insurance for the ``[RESULT]`` line the logs are
+    judged by. Kept so every standalone script's shutdown reads the same on both stacks.
     """
     import sys  # noqa: PLC0415
 
     sys.stdout.flush()
     sys.stderr.flush()
-    try:
-        if sim is None:
-            from isaaclab.sim import SimulationContext  # noqa: PLC0415  (Kit-only)
-
-            sim = SimulationContext.instance()
-        if sim is None:  # no context was ever created — nothing to disarm
-            return
-        sim._disable_app_control_on_stop_handle = True
-        handle = getattr(sim, "_app_control_on_stop_handle", None)
-        if handle is not None:
-            handle.unsubscribe()
-            sim._app_control_on_stop_handle = None
-    except Exception as exc:  # never let shutdown hygiene mask a real result
-        print(f"[WARN] release_sim_for_close: {exc!r}")
 
 
 class CameraRig:
@@ -71,6 +48,7 @@ class CameraRig:
         """
         import isaaclab.sim as sim_utils  # noqa: PLC0415  (Kit-only)
         from isaaclab.sensors import Camera, CameraCfg  # noqa: PLC0415
+        from isaaclab_physx.renderers import IsaacRtxRendererCfg  # noqa: PLC0415
 
         # COPY, never alias: callers pass config.CAMERAS itself, and holding references
         # would let any future in-place re-aim silently overwrite the module-level poses
@@ -93,6 +71,9 @@ class CameraRig:
                     height=hw[0],
                     width=hw[1],
                     data_types=["rgb"],
+                    # no per-env scene partitions (3.0's default): these world cameras carry no
+                    # partition token, so they would see only the ground and lights, not env_0
+                    renderer_cfg=IsaacRtxRendererCfg(enable_scene_partitioning=False),
                     spawn=sim_utils.PinholeCameraCfg(
                         focal_length=float(lens["focal_length"]),
                         focus_distance=400.0,
@@ -125,14 +106,14 @@ class CameraRig:
         frame, per extra camera — which is what makes adding a wide episode view look expensive
         when it is not.
         """
-        frame = self.cams[name].data.output["rgb"][0].detach().cpu().numpy()
+        frame = self.cams[name].data.output["rgb"].torch[0].detach().cpu().numpy()
         return frame[..., :3].astype(np.uint8)
 
     def grab(self) -> dict[str, np.ndarray]:
         """Latest RGB frame per camera as HxWx3 uint8 (call :meth:`update` first)."""
         out = {}
         for name, cam in self.cams.items():
-            frame = cam.data.output["rgb"][0].detach().cpu().numpy()
+            frame = cam.data.output["rgb"].torch[0].detach().cpu().numpy()
             out[name] = frame[..., :3].astype(np.uint8)
         return out
 

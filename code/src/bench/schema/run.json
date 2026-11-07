@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "run",
+  "description": "<out>/runs/<sample>.json (plans/2026-11-02-sample-schema.md): the algorithms' results on one sample, written by the run stage (code/src/bench/episodes.py) and the video stage, with the run, video and report ledger entries. instance is the bench instance the episodes ran on (frigidaire_bench.instance_of_sample), episodes one row per algorithm (record, solved, moves, S_over_S_ref, failure, still, video).",
+  "type": "object",
+  "required": ["schema_version", "sample_id", "stages"],
+  "properties": {
+    "schema_version": {"type": "integer", "enum": [2]},
+    "sample_id": {"type": "string"},
+    "instance": {"type": ["string", "null"]},
+    "dir": {"type": ["string", "null"]},
+    "media": {"type": ["string", "null"]},
+    "algorithms": {"type": "array", "items": {"type": "string"}},
+    "own_loads": {"type": "object"},
+    "episodes": {
+      "type": "array",
+      "items": {"type": "object", "required": ["algorithm", "track", "record"], "properties": {"record": {"type": ["string", "null"]}, "video": {"type": ["string", "null"]}}}
+    },
+    "kit_log": {"type": ["string", "null"]},
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["stage", "params", "code_sha", "utc", "result"],
+        "properties": {
+          "stage": {"type": "string", "enum": ["load", "initial", "gate_initial", "build", "gate_goal", "certify", "score", "graph", "stills", "run", "video", "report"]},
+          "params": {"type": "object"},
+          "code_sha": {"type": ["string", "null"]},
+          "utc": {"type": "string"},
+          "result": {"type": "string", "enum": ["PASS", "FAIL", "SKIP"]},
+          "note": {"type": ["string", "null"]}
+        }
+      }
+    }
+  }
+}

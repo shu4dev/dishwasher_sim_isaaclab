@@ -6,7 +6,7 @@
 # run_kit.sh, but execs Kit's python directly without booting Omniverse.
 #
 #   code/util/run_py.sh -m pytest code/tests/
-#   code/util/run_py.sh code/planner/bosch/compare_algorithms.py
+#   code/util/run_py.sh code/planner/bench.py --help
 #
 # PYTEST_DISABLE_PLUGIN_AUTOLOAD is baked in: hydra's pytest plugin (pulled in by Isaac's
 # python) breaks collection outside Kit, and the variable only affects pytest runs.
@@ -25,7 +25,9 @@ export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 # Kit-free `pxr` (USD python) for the Frigidaire FCL collision helpers (loading.collision_parts):
 # Kit's own USD extension carries the modules and their .so files; both paths must be set
 # before the interpreter starts (the loader reads LD_LIBRARY_PATH once).
-USD_LIBS="$(ls -d /isaac-sim/extscache/omni.usd.libs-* 2>/dev/null | head -n 1)"
+# 4.5 kept it in extscache/; the 6.x layout is searched too (first match wins).
+USD_LIBS="$(ls -d /isaac-sim/extscache/omni.usd.libs-* /isaac-sim/kit/extscore/omni.usd.libs* \
+    /isaac-sim/exts/omni.usd.libs* /isaac-sim/kit/exts/omni.usd.libs* 2>/dev/null | head -n 1)"
 if [ -n "$USD_LIBS" ]; then
     export PYTHONPATH="${USD_LIBS}${PYTHONPATH:+:$PYTHONPATH}"
     export LD_LIBRARY_PATH="${USD_LIBS}/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

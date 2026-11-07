@@ -4,11 +4,10 @@
 
 """Kit-free FCL collision world for arrangement planning.
 
-Loads exclusively from the machine's cache dump (``data/assets/<machine>/cache/<state>/<object>/``: meshes +
-``scene_state.json`` manifest —
-never from USD or the simulator), so queries run at millisecond scale in any plain Python
-process. The manifest's frame convention and config hash are asserted at load: if the scene
-config changed since extraction, loading fails loudly instead of answering from a stale world.
+Loads exclusively from a machine's cache dump (``<cache root>/<state>/<object>/``: meshes +
+``scene_state.json`` manifest, see :mod:`dishsim.geometry` — never from USD or the simulator),
+so queries run at millisecond scale in any plain Python process. The manifest's frame
+convention is asserted at load.
 
 Frames: everything in the **base frame** (meters, Z-up, XYZW), matching the manifest.
 
@@ -59,7 +58,7 @@ def load_object_pieces(cache_dir: str) -> list:
     would re-load every static's decomposition to get at one object.
 
     Args:
-        cache_dir: Collision-cache root (see :func:`dishsim.config.scenario_cache_dir`).
+        cache_dir: Collision-cache folder ``<cache root>/<state>/<object>`` (see :mod:`dishsim.geometry`).
 
     Returns:
         Convex pieces in the object's body frame.
@@ -72,7 +71,7 @@ def load_object_pieces(cache_dir: str) -> list:
     if not os.path.isdir(out_dir) or not os.listdir(out_dir):
         raise RuntimeError(
             f"missing CoACD pieces for the object in {cache_dir} — "
-            "run data/assets/bosch800/source/decompose_meshes.py first"
+            "decompose the cache's meshes first"
         )
     return [trimesh.load(os.path.join(out_dir, f), force="mesh") for f in sorted(os.listdir(out_dir))]
 
@@ -86,7 +85,7 @@ class CollisionWorld:
 
     def __init__(
         self,
-        cache_dir: str = config.CACHE_DIR,
+        cache_dir: str,
         margin: float = config.COLLISION_MARGIN_M,
     ):
         self.cache_dir = cache_dir
@@ -121,7 +120,7 @@ class CollisionWorld:
         # ~219 ms for a 32-piece bowl; caching the geometry and re-posing one persistent
         # `fcl.CollisionObject` per piece via ``setTransform`` takes the same query to ~1.8 ms
         # (~120x) and `add_object` from ~216 ms to ~0.01 ms — measured 2026-08 on
-        # bosch800 / placement / side_winner, bowl + plate, verdicts and blocker sets identical
+        # the Bosch 800 placement caches (retired 2026-11-01), bowl + plate, verdicts and blocker sets identical
         # over every derived slot and buffer cell at 0/4/8 placed neighbours.
         #
         # Keying: ``id(piece)`` is only safe because the value keeps a STRONG reference to the
@@ -176,7 +175,7 @@ class CollisionWorld:
             out_dir = coacd_dir_for(name, mesh_rel, self.cache_dir)
             if not os.path.isdir(out_dir) or not os.listdir(out_dir):
                 raise RuntimeError(
-                    f"missing CoACD pieces for '{name}' — run data/assets/bosch800/source/decompose_meshes.py first"
+                    f"missing CoACD pieces for '{name}' — decompose the cache's meshes first"
                 )
             # (the rack piece-count check against the generator went with rack_gen to the asset folder's
             # source/, 2026-10-21: the dataset ships complete piece dirs, git-versioned)

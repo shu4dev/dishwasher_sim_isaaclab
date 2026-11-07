@@ -1,7 +1,7 @@
 """Joint Isaac validation of reusable accepted-pose dish arrangements.
 
 Create one backend per fresh Kit process. Constructor imports are deliberately
-Kit-free; instantiate only after AppLauncher. All public poses are world metres
+Kit-free; instantiate only after dishsim.app.launch. All public poses are world metres
 and XYZW, unless explicitly named rack_local_pose. The door remains open.
 """
 from __future__ import annotations
@@ -19,7 +19,8 @@ import numpy as np
 from dishsim.quats import wxyz_to_xyzw, xyzw_to_wxyz
 from .random_pose_experiment import check_deadline, BudgetExpired
 from .random_pose_runtime import (COMPONENTS, JOINTS, RACK_JOINT, EXTENSION,
-                                  CONTACT_CAPACITY, CONTACT_PERSISTENCE_M, ContactTracker)
+                                  CONTACT_CAPACITY, CONTACT_PERSISTENCE_M, ContactTracker,
+                                  prepare_contact_reports)
 from .random_poses import (KINDS, RACKS, OBJECT_KINDS, OBJECT_RACKS, LIMITS, compose_pose, relative_pose,
                            quaternion_matrix_xyzw, motion_is_settled,
                            transform_vertices, vertices_contained)
@@ -150,11 +151,12 @@ class IsaacInitialStateBackend:
         import carb.settings
         import omni.usd
         import torch
-        from pxr import PhysxSchema, UsdPhysics
+        from pxr import PhysxSchema, Sdf, Usd, UsdPhysics
         import isaaclab.sim as sim_utils
         from isaaclab.assets import RigidObject, RigidObjectCfg
         from isaaclab.sim import SimulationContext
-        from isaacsim.core.api.sensors import RigidContactView
+        from isaaclab_physx.physics import PhysxCfg, PhysxManager
+        from isaaclab_physx.sim.schemas import PhysxCollisionCfg
         from .asset import spawn, apply_mode, COMPONENT_FILES
         from .loading import visual_points
         from .paths import PROTOTYPES_DIR
@@ -186,12 +188,13 @@ class IsaacInitialStateBackend:
         self.baseline = None
         check_deadline(deadline)
         self.sim = SimulationContext(sim_utils.SimulationCfg(dt=self.dt, device=device,
-            use_fabric=True, physx=sim_utils.PhysxCfg(enable_ccd=True)))
+            use_fabric=True, physics=PhysxCfg(enable_ccd=True, enable_external_forces_every_iteration=False)))
         ground = sim_utils.CuboidCfg(size=(200., 200., .05),
-                                    collision_props=sim_utils.CollisionPropertiesCfg())
+                                    collision_props=[sim_utils.UsdPhysicsCollisionCfg(), PhysxCollisionCfg()])
         ground.func("/World/Ground", ground, translation=(0., 0., -.025))
         for path, size, translation in extra_statics:   # e.g. the planner's counter slab, authored before sim.reset()
-            static = sim_utils.CuboidCfg(size=tuple(size), collision_props=sim_utils.CollisionPropertiesCfg())
+            static = sim_utils.CuboidCfg(size=tuple(size),
+                                         collision_props=[sim_utils.UsdPhysicsCollisionCfg(), PhysxCollisionCfg()])
             static.func(path, static, translation=tuple(translation))
         self.prim = "/World/InitialStateDishwasher"
         self.dishwasher, self.basket = spawn(self.prim, mode="scripted", usd_path=str(self.usd_path))
@@ -205,6 +208,15 @@ class IsaacInitialStateBackend:
                 spawn=sim_utils.UsdFileCfg(usd_path=str(self.tableware[entry["kind"]])),
                 init_state=RigidObjectCfg.InitialStateCfg(pos=(3.+index*.4, 0., .3))))
         stage = omni.usd.get_context().get_stage()
+        # The appliance is welded to the world by Joints/base_fixed, which the PhysX parser keeps as a maximal-coordinate
+        # joint (the articulation root is the Cabinet rigid body, not a fixed base), and its bodies stand on the ground
+        # slab. On Isaac Sim 6.2 that weld and the slab's contacts fight: the Cabinet jumps up to 22 mm and the basket
+        # never rests, so no baseline holds (merged-benchmark window, 2026-11-01; Isaac Sim 4.5 held still). The slab is a
+        # floor for parked dishes only: its pairs with the appliance bodies are filtered.
+        for collider in (prim for prim in Usd.PrimRange(stage.GetPrimAtPath("/World/Ground"))
+                         if prim.HasAPI(UsdPhysics.CollisionAPI)):
+            UsdPhysics.FilteredPairsAPI.Apply(collider).CreateFilteredPairsRel().SetTargets(
+                [Sdf.Path(self.prim + "/" + name) for name in COMPONENTS])
         for identity, obj in self.objects.items():
             body = stage.GetPrimAtPath(obj.cfg.prim_path)
             rigid = UsdPhysics.RigidBodyAPI(body)
@@ -218,19 +230,20 @@ class IsaacInitialStateBackend:
         carb.settings.get_settings().set_bool("/physics/disableContactProcessing", False)
         paths = [self.prim+"/"+name for name in COMPONENTS]
         paths += [obj.cfg.prim_path for obj in self.objects.values()]
-        self.contacts = RigidContactView(prim_paths_expr=paths,
-            filter_paths_expr=[paths.copy() for _ in paths], name="initial_state_contacts",
-            max_contact_count=CONTACT_CAPACITY, disable_stablization=False)
+        # Every body against every body, through the PhysX tensor API (omni.physics.tensors.api) as
+        # isaacsim.core.api's RigidContactView did: contact reports at threshold 0 before reset, the view after.
+        prepare_contact_reports(stage, paths)
         if before_reset is not None:   # e.g. authoring camera sensors, which must exist before sim.reset()
             before_reset(self)
         self.sim.reset()
         apply_mode(self.dishwasher, "scripted")
-        self.contacts.initialize()
+        self.contacts = PhysxManager.get_physics_sim_view().create_rigid_contact_view(
+            paths, filter_patterns=[paths.copy() for _ in paths], max_contact_data_count=CONTACT_CAPACITY)
         if set(self.dishwasher.joint_names) != set(JOINTS):
             raise RuntimeError("Appliance joint names do not match the experiment")
         self.indices = {name: self.dishwasher.joint_names.index(name) for name in JOINTS}
         self.body_indices = {name: self.dishwasher.body_names.index(name) for name in COMPONENTS[:-1]}
-        self.target = self.dishwasher.data.default_joint_pos.clone()
+        self.target = self.dishwasher.data.default_joint_pos.torch.clone()
         geometry = {name: visual_points(self.usd_path.parent/filename)
                     for name, filename in COMPONENT_FILES.items()}
         geometry.update({entry["object_id"]: self.points[entry["kind"]] for entry in self.entries})
@@ -249,8 +262,8 @@ class IsaacInitialStateBackend:
             "rack_speed_measurement_tolerance_m_s": RACK_SPEED_MEASUREMENT_TOLERANCE_M_S,
             "dynamic_gravity_enabled_dishes": True, "fresh_scene_per_arrangement": True,
             "support_rule": "contact path through dishes to assigned rack; seated basket allowed for lower rack",
-            "drive_settings": {name: {"stiffness": float(self.dishwasher.data.joint_stiffness[0, i]),
-                                       "damping": float(self.dishwasher.data.joint_damping[0, i])}
+            "drive_settings": {name: {"stiffness": float(self.dishwasher.data.joint_stiffness.torch[0, i]),
+                                       "damping": float(self.dishwasher.data.joint_damping.torch[0, i])}
                                for name, i in self.indices.items()}}
 
     @staticmethod
@@ -262,31 +275,32 @@ class IsaacInitialStateBackend:
         return {"position_m": position.tolist(), "quaternion_xyzw": quaternion.tolist()}
 
     def poses(self):
-        result = {name: self._pose(self.dishwasher.data.body_pos_w[0, i],
-                                   self.dishwasher.data.body_quat_w[0, i])
+        result = {name: self._pose(self.dishwasher.data.body_pos_w.torch[0, i],
+                                   self.dishwasher.data.body_quat_w.torch[0, i])
                   for name, i in self.body_indices.items()}
-        result["SilverwareBasket"] = self._pose(self.basket.data.root_pos_w[0], self.basket.data.root_quat_w[0])
-        result.update({name: self._pose(obj.data.root_pos_w[0], obj.data.root_quat_w[0])
+        result["SilverwareBasket"] = self._pose(self.basket.data.root_pos_w.torch[0],
+                                                self.basket.data.root_quat_w.torch[0])
+        result.update({name: self._pose(obj.data.root_pos_w.torch[0], obj.data.root_quat_w.torch[0])
                        for name, obj in self.objects.items()})
         return result
 
     def joints(self):
-        values = self.dishwasher.data.joint_pos[0].detach().cpu().numpy()
+        values = self.dishwasher.data.joint_pos.torch[0].detach().cpu().numpy()
         if not np.isfinite(values).all():
             raise RuntimeError("Nonfinite joint positions")
         return {name: float(values[i]) for name, i in self.indices.items()}
 
     def snapshot(self):
-        velocities = {name: obj.data.root_vel_w[0].detach().cpu().numpy().tolist()
+        velocities = {name: obj.data.root_vel_w.torch[0].detach().cpu().numpy().tolist()
                       for name, obj in {**self.objects, "SilverwareBasket": self.basket}.items()}
         return {"joints": self.joints(), "poses": self.poses(),
                 "velocities_world": velocities, "step": self.tick_index}
 
     def set_rigid_pose(self, obj, pose):
         values = [*pose["position_m"], *xyzw_to_wxyz(pose["quaternion_xyzw"])]
-        obj.write_root_pose_to_sim(self.torch.tensor([values], dtype=self.torch.float32,
-                                                     device=self.sim.device))
-        obj.write_root_velocity_to_sim(self.torch.zeros((1, 6), device=self.sim.device))
+        obj.write_root_pose_to_sim_index(root_pose=self.torch.tensor([values], dtype=self.torch.float32,
+                                                                     device=self.sim.device))
+        obj.write_root_velocity_to_sim_index(root_velocity=self.torch.zeros((1, 6), device=self.sim.device))
         obj.reset()
 
     def restore(self, snapshot):
@@ -297,10 +311,12 @@ class IsaacInitialStateBackend:
                                       "quaternion_xyzw": [0., 0., 0., 1.]})
         for name, value in snapshot["joints"].items():
             self.target[0, self.indices[name]] = value
-        self.dishwasher.write_joint_state_to_sim(self.target, self.torch.zeros_like(self.target))
-        self.dishwasher.write_root_velocity_to_sim(self.torch.zeros((1, 6), device=self.sim.device))
+        self.dishwasher.write_joint_state_to_sim_index(position=self.target,
+                                                       velocity=self.torch.zeros_like(self.target))
+        self.dishwasher.write_root_velocity_to_sim_index(
+            root_velocity=self.torch.zeros((1, 6), device=self.sim.device))
         self.dishwasher.reset()
-        self.dishwasher.set_joint_position_target(self.target)
+        self.dishwasher.actuators.target_command.set_position_index(value=self.target)
         self.set_rigid_pose(self.basket, snapshot["poses"]["SilverwareBasket"])
         self.tracker.clear()
         self.previous_frames = None
@@ -312,7 +328,7 @@ class IsaacInitialStateBackend:
         check_deadline(self.deadline)
         if not self.app.is_running():
             raise RuntimeError("Isaac application stopped during the experiment")
-        self.dishwasher.set_joint_position_target(self.target)
+        self.dishwasher.actuators.target_command.set_position_index(value=self.target)
         self.dishwasher.write_data_to_sim()
         self.sim.step(render=False)
         self.dishwasher.update(self.dt)
@@ -321,7 +337,7 @@ class IsaacInitialStateBackend:
             obj.update(self.dt)
         frames, joints = self.poses(), self.joints()
         self.latest_contact = self.tracker.update(
-            self.contacts.get_contact_force_data(dt=self.dt, clone=False), frames)
+            tuple(buffer.numpy() for buffer in self.contacts.get_contact_data(self.dt)), frames)
         self.maximum_penetration_m = max(self.maximum_penetration_m, self.latest_contact["peak_m"])
         self.peak_event = retain_peak_event(self.peak_event, self.latest_contact, frames, joints,
                                            phase=self.phase, step=self.tick_index+1, dt=self.dt)

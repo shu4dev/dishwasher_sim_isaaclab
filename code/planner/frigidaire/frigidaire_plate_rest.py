@@ -14,7 +14,7 @@ else 'gap'), the settle deviation (rest origin from the move pose origin), the d
 depth and the move's path; with the code SHA and the move's constants.
     code/util/run_kit.sh code/planner/frigidaire/frigidaire_plate_rest.py --headless --out data/results/sampler/plate_rest
 --kinds bowl,cup (plans/2026-10-22-bowl-rest-pose-dag.md): one bowl or cup alone, the same move and settle, once per
-sampler.order.bowl_key of the packer's level-0 bowl and cup families under the level-0 masks (frigidaire_hotec_top5: the
+bench.order.bowl_key of the packer's level-0 bowl and cup families under the level-0 masks (frigidaire_hotec_top5: the
 lifts collapsed, and in the lower rack the x too): the key's candidate at the median of its x values (its lowest lift),
 moved with that lift removed (the lift only sets the release height). Writes <out>/bowl_rest.json: per key the rest pose
 (rack-local in the baseline's extended rack of the dish), x_m (the candidate's x: order.py moves a lower-rack bowl's row
@@ -65,7 +65,7 @@ def plate_jobs(B, X):
 def bowl_jobs(kinds):
     """(row, rack-local move pose) per bowl_key of the masked level-0 bowl and cup families (module docstring)."""
     import importlib.util
-    from sampler.order import bowl_key
+    from bench.order import bowl_key
     spec = importlib.util.spec_from_file_location("top5_rest", ROOT / "code/planner/frigidaire/frigidaire_hotec_top5.py")
     T = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(T)
@@ -187,13 +187,14 @@ def main():
     parser.add_argument("--merge", action="store_true", help="Kit-free: join the bowl table's parts")
     if "--merge" in sys.argv:
         return merge(parser.parse_known_args()[0].out)
-    from isaaclab.app import AppLauncher
-    AppLauncher.add_app_launcher_args(parser)
+    sys.path[:0] = [str(ROOT / "code/src")]
+    from dishsim.app import add_args, launch   # Kit-free; boots Kit in the try below
+    add_args(parser)
     parser.set_defaults(device="cpu", headless=True)
     args = parser.parse_args()
     report, app = {"result": "FAIL", "reason": None}, None
     try:
-        app = AppLauncher(args).app
+        app = launch(args)
         args.app = app
         sys.path[:0] = [str(ROOT / "code/src"), str(ROOT / "code/frigidaire/src"), str(ROOT / "code/planner/frigidaire")]
         settle_all(args, report)

@@ -50,9 +50,8 @@ full release.
 - `docs/`: current geometry notes and historical notes (the collection README template
   moved to `data/assets/frigidaire_fdpc4221as/source/`).
 
-The earlier four-view lower-rack polish (of the standalone Bosch 800 asset) moved with its
-module, both scripts and `lower_rack_polish.md` to `data/assets/bosch800/source/` on
-2026-10-21. Its documentation describes the existing prototype and installation target.
+The earlier four-view lower-rack polish (of the standalone Bosch 800 asset) left with that asset folder
+(history on the hub, 2026-11-01).
 
 The root project installs both `dishsim` and `dishsim_frigidaire`; refresh an
 existing editable installation with `code/util/run_py.sh -m pip install -e . --no-deps`.

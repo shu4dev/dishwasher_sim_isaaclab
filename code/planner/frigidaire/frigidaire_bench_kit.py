@@ -3,20 +3,25 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Kit side of the HOTEC rearrangement benchmark (boot-first; one Kit process per call).
 
---start: one generation attempt for (tier, seed, attempt): n dishes in a messy pile on the 1.8 m counter
-slab, the rest dropped messily into the racks, one joint settle with the racks extended, then the
-reproduction gate (teleport back to the settled poses, re-settle 2.5 s, every dish within 10 mm / 15 deg).
-Writes <out>/instances/attempts/<tier>_s<seed>_a<attempt>/start.json; [RESULT] PASS | REROLL <reason>.
+--start: one generation attempt of the merged benchmark's initial stage (code/src/bench/initial.py) for (roster,
+n, cap, seed, attempt): n dishes in a messy pile on the 1.8 m counter slab, the rest dropped messily into the racks,
+one joint settle with the racks extended, then the reproduction gate (teleport back to the settled poses, re-settle
+2.5 s, every dish within 10 mm / 15 deg) and the unstack rehearsal. Writes
+<out>/instances/attempts/s<seed>_a<attempt>/start.json; [RESULT] PASS | REROLL <reason>.
 
---run: every episode of one accepted instance. Goal track: greedy_offline, rrt_connect and the planner
-pair's sequencer on the sampled goal. Open track: the planner and first-fit baseline plans made Kit-free
-(frigidaire_bench.py --plan), replayed here. Every move is teleported and settled (150 ticks + 60-tick
-drift window at 120 Hz, the Bosch oracle verdicts, settle-deviation limit 0.08 m); an all-racked end state
-gets the end check (tub wall, both racks retracted, containment). Stills of the initial, finished and goal
-configurations go to data/media/benchmark/frigidaire_hotec/stills/ when --enable_cameras is set.
+--run: every episode of one sample (code/src/bench, stage run; --sample, converted by frigidaire_bench.instance_of_sample)
+or of an old bench instance (--instance). Goal track (A): greedy_offline and rrt_connect on the sample's goal. Open track (B):
+the first_fit and mcts plans made Kit-free (frigidaire_bench.py --plan) and certified (--sequence-plan, --resequence),
+replayed here. Every move is teleported and settled (150 ticks + 60-tick drift window at 120 Hz, settle-deviation
+limit 0.08 m); an all-racked end state gets the end check (tub wall, both racks retracted, containment). Stills of the
+initial, finished and goal configurations go to --media (default data/media/benchmark/frigidaire_hotec/stills/<tier>/<id>/)
+when --enable_cameras is set.
 
-    code/util/run_kit.sh code/planner/frigidaire/frigidaire_bench_kit.py --start --tier easy --seed 0 --attempt 0 --headless
-    code/util/run_kit.sh code/planner/frigidaire/frigidaire_bench_kit.py --run --instance <json> --headless --enable_cameras
+--stills: the initial and goal stills of --sample (or --instance) only, no episode (code/src/bench/stills.py); PASS when
+both PNGs exist.
+
+    code/util/run_kit.sh code/planner/frigidaire/frigidaire_bench_kit.py --start --count bowl=7 --n 3 --cap 6 --seed 0 --attempt 0 --headless
+    code/util/run_kit.sh code/planner/frigidaire/frigidaire_bench_kit.py --run --sample <sample.json> --out <dir> --headless --enable_cameras
 """
 from __future__ import annotations
 
@@ -44,8 +49,9 @@ SEQUENCE_BUILDS, SEQUENCE_NEIGHBOUR_M = 8, .15          # sequence gate: rebuild
                                                         # that does not land goes in after its neighbours (< 15 cm)
 BUILD_TICKS = 120                                       # 1 s settle after each dish while the start is built
 DEV_MAX_M = .08                                         # measured HOTEC drops reach 66.5 mm (the Bosch limit is 0.06)
-EPISODES = (("goal", "greedy_offline"), ("goal", "rrt_connect"), ("open", "baseline"), ("open", "mcts"))
-# (the goal-track "planner" row, the fixed-goal sequencer, was dropped 2026-09-28: track A compares the executors)
+EPISODES = (("goal", "greedy_offline"), ("goal", "rrt_connect"), ("open", "first_fit"), ("open", "mcts"))
+# (the goal-track "planner" row, the fixed-goal sequencer, was dropped 2026-09-28: track A compares the executors;
+# first_fit was named "baseline" until 2026-11-01)
 
 
 def pose_distance(a, b):
@@ -58,7 +64,7 @@ def pose_distance(a, b):
 
 # --------------------------------------------------------------------------- scene helpers
 
-def make_backend(args, B, entries, out_dir, counter_ids=(), cameras=False):
+def make_backend(args, B, entries, out_dir, counter_ids=(), cameras=False, kinematic=False):
     from dishsim_frigidaire.initial_state_runtime import IsaacInitialStateBackend
     from dishsim_frigidaire.random_poses import source_geometry_domains
     rig = {}
@@ -76,6 +82,12 @@ def make_backend(args, B, entries, out_dir, counter_ids=(), cameras=False):
             return s
 
     def before_reset(backend):
+        if kinematic:                                   # frigidaire_planner_video.py: a written pose holds, no physics
+            import omni.usd
+            from pxr import UsdPhysics
+            stage = omni.usd.get_context().get_stage()
+            for obj in backend.objects.values():
+                UsdPhysics.RigidBodyAPI(stage.GetPrimAtPath(obj.cfg.prim_path)).CreateKinematicEnabledAttr(True)
         if cameras:
             from dishsim.media import CameraRig
             sys.path.insert(0, str(ROOT / "code/util/frigidaire"))
@@ -210,17 +222,18 @@ def start(args, B, report):
     from dishsim_frigidaire.loading import visual_points
     from dishsim_frigidaire.random_poses import compose_pose, relative_pose, sample_pose, source_geometry_domains
 
-    tier, seed, attempt = args.tier, args.seed, args.attempt
-    rng = np.random.default_rng([seed, B.TIER_INDEX[tier], 1000 + attempt])
-    n = B.draw_n(tier, seed)
-    cap = B.cap_of(tier, n)
-    ids = B.roster(tier)
+    from bench.difficulty import roster
+    seed, attempt, n, cap = args.seed, args.attempt, args.n, args.cap
+    count = {k: int(v) for k, v in (x.split("=") for x in args.count.split(",") if x)}
+    ids = roster(count)
     kinds = dict(ids)
+    tag = "-".join(f"{k}{v}" for k, v in count.items())
+    rng = np.random.default_rng([seed, sum(1 for v in count.values() if v) - 1, 1000 + attempt])   # (the old tier index)
     counter_ids = sorted(ids[i][0] for i in rng.permutation(len(ids))[:n])
     baseline = json.loads(Path(args.baseline).read_text())
     baseline = baseline.get("snapshot", baseline)
     frames = {name: baseline["poses"][name] for name in COMPONENT_NAMES}
-    report.update(tier=tier, seed=seed, attempt=attempt, n=n, cap=cap, counter_ids=counter_ids)
+    report.update(count=count, seed=seed, attempt=attempt, n=n, cap=cap, counter_ids=counter_ids)
     checker = B.bench_checker()
     checker.update_components(frames)
     slab = P.slab_body(checker, B.COUNTER)
@@ -411,11 +424,11 @@ def start(args, B, report):
         report.update(result="REROLL", reason=f"unstack rehearsal: {unstack['reason']}")
         return
     start_record = {
-        "schema_version": 1, "purpose": "hotec_bench_start", "instance_id": f"{tier}_s{seed}", "tier": tier, "seed": seed,
-        "attempt": attempt, "n_objects": len(objects), "inventory": B.TIERS[tier]["inventory"],
+        "schema_version": 1, "purpose": "hotec_bench_start", "instance_id": f"{tag}_s{seed}", "tier": tag, "seed": seed,
+        "attempt": attempt, "n_objects": len(objects), "inventory": count,
         "tableware": B.tableware(), "tableware_sha256": {k: B.digest(v) for k, v in B.tableware().items()},
         "counter": {**{k: list(v) if isinstance(v, tuple) else v for k, v in B.COUNTER.items()}, "start_count": n,
-                    "slack": B.TIERS[tier]["slack"], "cap": cap, "cells_pitch_m": B.CELL_PITCH_M, "pile": report["pile"]},
+                    "slack": cap - n, "cap": cap, "cells_pitch_m": B.CELL_PITCH_M, "pile": report["pile"]},
         "objects": objects,
         "initial_snapshot": {"joints": snap["joints"], "poses": snap["poses"], "step": snap["step"], "contact_pairs": snap["contact_pairs"]},
         "support": support, "baseline": baseline,
@@ -769,32 +782,6 @@ def _sequence_scene(args, B, entries, baseline, scene_dir, report):
     return backend
 
 
-def sequence_gate(args, B, report):
-    """--sequence ATTEMPT_DIR: certify the instance GOAL (the goal gate's jointly settled poses are the targets;
-    landing = the at-goal tolerance). Writes sequence.json and, on failure, the banned poses/pairs (bans.json)."""
-    from dishsim_frigidaire import planner as P
-    from dishsim_frigidaire.loading import visual_points
-    adir = Path(args.attempt_dir)
-    goal = json.loads((adir / "goal.json").read_text())
-    gate = json.loads((adir / "gate" / "result.json").read_text())
-    start_rec = json.loads((adir / "start.json").read_text())
-    joint = gate["initial_snapshot"]["poses"]
-    centroids = B.kind_centroids({kind: visual_points(B.ASSETS / f"{kind}.usda") for kind in B.KINDS})
-    backend = _sequence_scene(args, B, goal["entries"], start_rec["baseline"], adir / "sequence_scene", report)
-    if backend is None:
-        return
-    by_id = {e["id"]: e for e in goal["entries"]}
-    status, record, bans = build_sequence(backend, B, P, by_id, {i: joint[i] for i in by_id}, centroids,
-                                          lambda kind, dist, dev: B.within_goal(kind, dist))
-    report.update(result="PASS" if status == "ok" else "REROLL", reason=record["reason"])
-    (adir / "sequence.json").write_text(json.dumps(record, indent=1) + "\n")
-    if bans:
-        path = adir / "bans.json"
-        data = json.loads(path.read_text()) if path.is_file() else {"outcome": "sequence", "pairs": []}
-        data["pairs"] += bans
-        path.write_text(json.dumps(data, indent=1) + "\n")
-
-
 def sequence_plan(args, B, report):
     """--sequence-plan PLAN --instance INSTANCE: certify an open-track algorithm's OWN load the way the goal is
     certified (2026-09-28): its commanded rack-local poses are built one dish at a time in the instance's
@@ -896,8 +883,8 @@ class BenchOracle:
 
     def measured(self, item_id):
         from dishsim_frigidaire import planner as P
-        return P.pose_T(self.backend._pose(self.backend.objects[item_id].data.root_pos_w[0],
-                                           self.backend.objects[item_id].data.root_quat_w[0]))
+        return P.pose_T(self.backend._pose(self.backend.objects[item_id].data.root_pos_w.torch[0],
+                                           self.backend.objects[item_id].data.root_quat_w.torch[0]))
 
     def teleport(self, item_id, T):
         from dishsim_frigidaire import planner as P
@@ -1033,7 +1020,10 @@ def run(args, B, report):
     from dishsim_frigidaire.loading import visual_points
     from dishsim_frigidaire.random_pose_runtime import EXTENSION, RACK_JOINT
 
-    inst = json.loads(Path(args.instance).read_text())
+    if args.sample:                                           # a sample of code/planner/bench.py (the merged benchmark)
+        inst = B.instance_of_sample(json.loads(Path(args.sample).read_text()), Path(args.sample).stem)
+    else:
+        inst = json.loads(Path(args.instance).read_text())
     iid, tier = inst["instance_id"], inst["tier"]
     ids = [o["object_id"] for o in inst["objects"]]
     kinds = {o["object_id"]: o["kind"] for o in inst["objects"]}
@@ -1044,7 +1034,7 @@ def run(args, B, report):
                for o in inst["objects"]]
     work = args.out / "episodes" / "_kit" / iid
     backend, rig = make_backend(args, B, entries, work, counter_ids, cameras=args.cameras)
-    stills = ROOT / "data/media/benchmark/frigidaire_hotec/stills" / tier / iid
+    stills = Path(args.media) if args.media else ROOT / "data/media/benchmark/frigidaire_hotec/stills" / tier / iid
     checker = B.bench_checker()
     baseline = inst["baseline"]
     start_poses = inst["initial_snapshot"]["poses"]
@@ -1117,8 +1107,12 @@ def run(args, B, report):
         backend.set_rigid_pose(backend.objects[oid], goal_world[oid])
     for _ in range(60):
         backend.tick()
-    still(backend, rig, stills / "goal.png", f"{iid}: sampled goal (S_ref {inst['goal']['S_ref']:.3f})",
-          f"highest-exposure load found by coordinate ascent; {len(inst['goal']['keep'])} dishes kept in place")
+    still(backend, rig, stills / "goal.png", f"{iid}: goal (S_ref {inst['goal']['S_ref']:.3f})",
+          f"{inst['goal'].get('method', 'goal')}; {len(inst['goal']['objects'])} dishes")
+    if args.stills:                                         # stills only (the stills stage, code/src/bench/stills.py)
+        got = all((stills / f"{k}.png").is_file() for k in ("initial", "goal"))
+        report.update(result="PASS" if got else "FAIL", reason=None if got else "stills not written")
+        return
     algorithms = {"greedy_offline": rearrange.OfflineGreedy}
     try:
         from dishsim import rrt
@@ -1152,13 +1146,14 @@ def run(args, B, report):
         plan = None
         if track == "open":
             plan_path = args.out / "plans" / "open" / tier / f"{iid}__{name}.json"
-            plan = json.loads(plan_path.read_text())
+            plan = json.loads(plan_path.read_text()) if plan_path.is_file() else \
+                {"certified": False, "certification": {"reason": f"no plan file {plan_path.name}"}, "planning_time_s": None}
             if not plan.get("certified"):                   # the load never built one dish at a time in Isaac:
                 rec = {"solved": False, "abort": "load-not-buildable", "moves": [], "moves_used": 0,   # the algorithm failed
                        "reason": plan.get("certification", {}).get("reason"), "planning_time_total_s": plan.get("planning_time_s"),
                        "planning_cpu_s": plan.get("planning_cpu_s"), "plan_goal": plan.get("goal"), "end_check": {"ran": False, "outcome": "aborted"}}
                 rec.update(track=track, tier=tier, instance=iid, algorithm=name, seed=seed, counter_cap=inst["counter"]["cap"],
-                           lower_bound=inst["goal"]["lower_bound"], S_ref=inst["goal"]["S_ref"], success=False, nudges=0)
+                           S_ref=inst["goal"]["S_ref"], success=False, nudges=0)
                 out.parent.mkdir(parents=True, exist_ok=True)
                 out.write_text(json.dumps(rec, indent=1) + "\n")
                 report["episodes"].append({"track": track, "algorithm": name, "success": False, "abort": rec["abort"]})
@@ -1197,11 +1192,9 @@ def run(args, B, report):
                                       f"{rec.get('moves_used', 0)} moves, abort {rec.get('abort')}")
         rec["end_check"] = end_check() if rec.get("abort") in (None, "give-up") else {"ran": False, "outcome": "aborted"}
         rec.update(track=track, tier=tier, instance=iid, algorithm=name, seed=seed, counter_cap=inst["counter"]["cap"],
-                   lower_bound=inst["goal"]["lower_bound"], S_ref=inst["goal"]["S_ref"])
+                   S_ref=inst["goal"]["S_ref"])
         end_ok = rec["end_check"].get("outcome") == "accepted"
         rec["success"] = bool(rec.get("solved") and end_ok) if track == "goal" else bool(end_ok)
-        if track == "goal":
-            rec["gap"] = rec.get("moves_used", 0) - inst["goal"]["lower_bound"] if rec["success"] else None
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(rec, indent=1, default=lambda o: o.tolist() if hasattr(o, "tolist") else str(o)) + "\n")
         report["episodes"].append({"track": track, "algorithm": name, "success": rec["success"], "abort": rec.get("abort"),
@@ -1214,51 +1207,58 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--start", action="store_true")
     mode.add_argument("--run", action="store_true")
-    mode.add_argument("--sequence", type=Path, metavar="ATTEMPT_DIR", help="build the goal one dish at a time, certify the order")
+    mode.add_argument("--stills", action="store_true", help="the initial and goal stills of --sample or --instance, no episode")
     mode.add_argument("--sequence-plan", type=Path, metavar="PLAN", help="build an open-track plan's own load one dish at a time (needs --instance)")
     parser.add_argument("--gate", type=Path, metavar="DIR", help="--sequence-plan: the load's joint gate (frigidaire_initial_state_validate.py --out-dir)")
-    parser.add_argument("--tier", choices=("easy", "medium", "hard"))
+    parser.add_argument("--count", help="--start: the roster, kind=n,... (code/src/bench/initial.py)")
+    parser.add_argument("--n", type=int, help="--start: dishes that start on the counter")
+    parser.add_argument("--cap", type=int, help="--start: the counter cap (n + the allowance)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--attempt", type=int, default=0)
-    parser.add_argument("--instance", type=Path)
+    parser.add_argument("--instance", type=Path, help="--run (an old bench instance) or --sequence-plan: the instance")
+    parser.add_argument("--sample", type=Path, help="--run, --stills: a sample of code/planner/bench.py (converted in-process)")
+    parser.add_argument("--media", type=Path, help="--run, --stills: the stills folder (default data/media/benchmark/frigidaire_hotec/stills/<tier>/<id>)")
     parser.add_argument("--algorithms", nargs="*", default=None)
     parser.add_argument("--baseline", type=Path, default=ROOT / "data/results/benchmark/frigidaire_hotec/baseline/result.json")
     parser.add_argument("--out", type=Path, default=ROOT / "data/results/benchmark/frigidaire_hotec")
     parser.add_argument("--usd", type=Path, default=ROOT / "data/assets/frigidaire_fdpc4221as/usd/fdpc4221as.usdc")
     parser.add_argument("--max-wall-seconds", type=float, default=7200.)
     parser.add_argument("--pile-coverage", type=float, default=PILE_COVERAGE, help="summed dish footprint / pile box area")
-    from isaaclab.app import AppLauncher
-    AppLauncher.add_app_launcher_args(parser)
+    sys.path[:0] = [str(ROOT / "code/src")]
+    from dishsim.app import add_args, launch   # Kit-free; boots Kit in the try below
+    add_args(parser)
     parser.set_defaults(device="cpu", headless=True)
     args = parser.parse_args()
-    args.cameras = bool(getattr(args, "enable_cameras", False))     # AppLauncher consumes its own flags at boot
+    args.cameras = bool(getattr(args, "enable_cameras", False))
     started = time.monotonic()
-    reroll = bool(args.start or args.sequence or args.sequence_plan)
+    reroll = bool(args.start or args.sequence_plan)
     report = {"result": "REROLL" if reroll else "FAIL", "reason": None, "started_utc": datetime.now(timezone.utc).isoformat()}
     app = None
-    if args.sequence:
-        args.attempt_dir = args.sequence
     if args.sequence_plan and not args.instance:
         raise SystemExit("[RESULT] FAIL --sequence-plan needs --instance")
+    if (args.run or args.stills) and not (args.sample or args.instance):
+        raise SystemExit("[RESULT] FAIL --run and --stills need --sample or --instance")
     if args.start:
-        args.attempt_dir = args.out / "instances" / "attempts" / f"{args.tier}_s{args.seed}_a{args.attempt}"
+        if not args.count or args.n is None or args.cap is None:
+            raise SystemExit("[RESULT] FAIL --start needs --count, --n and --cap")
+        args.attempt_dir = args.out / "instances" / "attempts" / f"s{args.seed}_a{args.attempt}"
         if (args.attempt_dir / "start.json").exists():
             raise SystemExit(f"[RESULT] FAIL refusing to overwrite {args.attempt_dir / 'start.json'}")
         args.attempt_dir.mkdir(parents=True, exist_ok=True)
     try:
-        app = AppLauncher(args).app
+        app = launch(args)
         args.app = app
         sys.path[:0] = [str(ROOT / "code/src"), str(ROOT / "code/frigidaire/src"), str(ROOT / "code/planner/frigidaire")]
         import frigidaire_bench as B
-        (start if args.start else sequence_gate if args.sequence else sequence_plan if args.sequence_plan else run)(args, B, report)
+        (start if args.start else sequence_plan if args.sequence_plan else run)(args, B, report)
     except Exception as exc:                                   # noqa: BLE001
         traceback.print_exc()
         report.update(result="REROLL" if reroll else "FAIL", reason=f"exception {exc!r}")
     finally:
         report.update(wall_seconds=time.monotonic() - started, finished_utc=datetime.now(timezone.utc).isoformat())
-        target = (args.attempt_dir / "generation.json") if args.start else (args.attempt_dir / "sequence_report.json") if args.sequence \
+        target = (args.attempt_dir / "generation.json") if args.start \
             else args.sequence_plan.with_name(args.sequence_plan.name[:-len(".json")] + ".sequence_report.json") if args.sequence_plan \
-            else (args.out / "episodes" / "_kit" / f"{Path(args.instance).stem}.json")
+            else (args.out / "episodes" / "_kit" / f"{Path(args.sample or args.instance).stem}.json")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(report, indent=2, default=str) + "\n")
         print(f"[RESULT] {report['result']} {report.get('reason') or report.get('start', '') or report.get('instance', '')}", flush=True)

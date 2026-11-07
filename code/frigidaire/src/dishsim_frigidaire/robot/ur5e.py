@@ -32,12 +32,14 @@ def set_gripper(target, joint_names, theta):
         target[0, joint_names.index(name)] = sign * float(theta)
 
 
-def robot_cfg(prim_path="/World/Robot", pos=(0., 0., 0.), rot_wxyz=(1., 0., 0., 0.), gripper_effort=10.,
-              gripper_stiffness=40.):
-    """ArticulationCfg of the arm; gripper effort/stiffness are parameters (the friction gate varies them)."""
+def robot_cfg(prim_path="/World/Robot", pos=(0., 0., 0.), rot_xyzw=(0., 0., 0., 1.), gripper_effort=10.,
+              gripper_stiffness=40., gripper_damping=1., finger_effort=10., finger_stiffness=10., finger_damping=.05):
+    """ArticulationCfg of the arm; the finger drives are parameters (the friction gate and plans/2026-11-04-grip-force.md
+    vary them): finger_joint's effort limit, stiffness and damping (gripper_*) and the inner finger joints' (finger_*)."""
     import isaaclab.sim as sim_utils
     from isaaclab.actuators import ImplicitActuatorCfg
     from isaaclab.assets import ArticulationCfg
+    from isaaclab_physx.sim.schemas import PhysxArticulationCfg, PhysxRigidBodyCfg
 
     if not os.path.isfile(UR5E_USD):
         raise FileNotFoundError(f"{UR5E_USD} missing: run code/execution/frigidaire/mirror_robot_usd.sh")
@@ -46,29 +48,30 @@ def robot_cfg(prim_path="/World/Robot", pos=(0., 0., 0.), rot_wxyz=(1., 0., 0., 
         articulation_root_prim_path="/root_joint",   # the asset carries a second, disabled root on the gripper
         spawn=sim_utils.UsdFileCfg(
             usd_path=UR5E_USD, variants={"Gripper": "Robotiq_2f_85"},
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=True, max_depenetration_velocity=5.0),
-            articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-                enabled_self_collisions=False, solver_position_iteration_count=16, solver_velocity_iteration_count=1),
+            rigid_props=[sim_utils.UsdPhysicsRigidBodyCfg(),
+                         PhysxRigidBodyCfg(disable_gravity=True, max_depenetration_velocity=5.0)],
+            articulation_props=[PhysxArticulationCfg(
+                enabled_self_collisions=False, solver_position_iteration_count=16, solver_velocity_iteration_count=1)],
             activate_contact_sensors=True),
         init_state=ArticulationCfg.InitialStateCfg(
             joint_pos={**dict(zip(ARM_JOINTS, HOME_Q)), "finger_joint": 0.0, ".*_inner_finger_joint": 0.0,
                        ".*_inner_finger_knuckle_joint": 0.0, ".*_outer_.*_joint": 0.0},
-            pos=tuple(pos), rot=tuple(rot_wxyz)),
+            pos=tuple(pos), rot=tuple(rot_xyzw)),
         actuators={
-            "shoulder": ImplicitActuatorCfg(joint_names_expr=["shoulder_.*"], effort_limit_sim=150.0, velocity_limit_sim=3.14,
+            "shoulder": ImplicitActuatorCfg(joint_names_expr=["shoulder_.*"], joint_effort_limit=150.0, joint_velocity_limit=3.14,
                                             stiffness=1320.0, damping=72.6636085, friction=0.0, armature=0.0),
-            "elbow": ImplicitActuatorCfg(joint_names_expr=["elbow_joint"], effort_limit_sim=150.0, velocity_limit_sim=3.14,
+            "elbow": ImplicitActuatorCfg(joint_names_expr=["elbow_joint"], joint_effort_limit=150.0, joint_velocity_limit=3.14,
                                          stiffness=600.0, damping=34.64101615, friction=0.0, armature=0.0),
-            "wrist": ImplicitActuatorCfg(joint_names_expr=["wrist_.*"], effort_limit_sim=28.0, velocity_limit_sim=3.14,
+            "wrist": ImplicitActuatorCfg(joint_names_expr=["wrist_.*"], joint_effort_limit=28.0, joint_velocity_limit=3.14,
                                          stiffness=216.0, damping=29.39387691, friction=0.0, armature=0.0),
-            "gripper_drive": ImplicitActuatorCfg(joint_names_expr=["finger_joint"], effort_limit_sim=gripper_effort,
-                                                 velocity_limit_sim=1.0, stiffness=gripper_stiffness, damping=1.0,
+            "gripper_drive": ImplicitActuatorCfg(joint_names_expr=["finger_joint"], joint_effort_limit=gripper_effort,
+                                                 joint_velocity_limit=1.0, stiffness=gripper_stiffness, damping=gripper_damping,
                                                  friction=0.0, armature=0.001),
-            "gripper_finger": ImplicitActuatorCfg(joint_names_expr=[".*_inner_finger_joint"], effort_limit_sim=10.0,
-                                                  velocity_limit_sim=1.0, stiffness=10.0, damping=0.05, friction=0.0,
-                                                  armature=0.001),
+            "gripper_finger": ImplicitActuatorCfg(joint_names_expr=[".*_inner_finger_joint"], joint_effort_limit=finger_effort,
+                                                  joint_velocity_limit=1.0, stiffness=finger_stiffness, damping=finger_damping,
+                                                  friction=0.0, armature=0.001),
             "gripper_passive": ImplicitActuatorCfg(joint_names_expr=[".*_inner_finger_knuckle_joint", "right_outer_knuckle_joint"],
-                                                   effort_limit_sim=1.0, velocity_limit_sim=1.0, stiffness=0.0, damping=0.05,
+                                                   joint_effort_limit=1.0, joint_velocity_limit=1.0, stiffness=0.0, damping=0.05,
                                                    friction=0.0, armature=0.001),
         },
     )

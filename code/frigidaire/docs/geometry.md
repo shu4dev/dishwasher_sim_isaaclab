@@ -3,7 +3,9 @@
 Coordinates are metres in USD: X left/right, -Y front, +Y rear, Z up. Rack layout
 images and this page report millimetres in the rack-local frame, with tine base
 centres measured to the outer wire-rim edge. Wheel and grip projections are outside
-the rim footprint.
+the rim footprint. Since 2026-11-01 the lower rack's 8 wheels are visual only (`collision=False`, like their hubs
+and brackets; the slide joint carries the rack): their faceted hulls caught the hinge seam on the way in
+(results/2026-11-01-rack-wheels-visual.md).
 
 The user tape-measured the real racks and basket on 2026-09-21 and re-measured the
 racks on 2026-09-28 (the first tape's uniform pitches and margins over-determined both

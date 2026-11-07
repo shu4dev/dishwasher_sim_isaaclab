@@ -19,18 +19,16 @@
 
 services:
   dishsim:
-    image: dishsim-isaac:4.5.0
+    image: dishsim-isaac:6.2.0
     container_name: ${DISHSIM_NAME:-dishsim-isaac}
     restart: unless-stopped
     # The base image's entrypoint launches the streaming sim — override it: editable-install
     # the repo on every start (idempotent, seconds) so `import dishsim` works everywhere,
-    # then just stay alive for docker exec. The isaaclab core package and pytest ride along
-    # because the local image predates the Dockerfile lines that bake them — those installs
-    # land in the container's writable layer and die with it, so every start re-applies them
-    # (rebuilding the image would cost root disk for nothing).
+    # then just stay alive for docker exec. The isaaclab core + PhysX packages ride along as a
+    # self-heal (the image bakes them; --no-deps keeps pip off Kit's numpy/torch).
     entrypoint: ["bash", "-c",
-                 "/isaac-sim/python.sh -m pip install -q --no-build-isolation -e /workspace/isaaclab/source/isaaclab
-                  && /isaac-sim/python.sh -m pip install -q pytest -e /workspace/dishsim
+                 "/isaac-sim/python.sh -m pip install -q --no-build-isolation --no-deps -e /workspace/isaaclab/source/isaaclab -e /workspace/isaaclab/source/isaaclab_physx
+                  && /isaac-sim/python.sh -m pip install -q --no-deps -e /workspace/dishsim
                   && exec sleep infinity"]
     command: []
     environment:

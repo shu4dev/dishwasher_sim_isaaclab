@@ -3,8 +3,9 @@
 Reference for agents working on `code/planner/frigidaire/frigidaire_dependency_{kit,clips,page,score}.py`. Plans and
 run notes: `plans/2026-10-16-physical-cause-graph.md` (the method), `plans/2026-10-16-labelled-views-overlap-rule.md`
 (the overlap rule, the four-view load image, the graph variants), `plans/2026-10-21-kind-ceiling-score.md` (the score)
-and their `results/` notes. Page: Dependency graphs, https://claude.ai/artifact/AkiJZLtFZnFtXYUxSEHJmm (Version 13,
-2026-10-21). The score: the fair score in [exposure.md](exposure.md).
+and their `results/` notes. Page: Dependency graphs, https://claude.ai/artifact/AkiJZLtFZnFtXYUxSEHJmm (Version 18,
+2026-10-23: one complete sample per difficulty beside r05_00027; results/2026-10-23-one-sample-per-difficulty.md).
+The score: the fair score in [exposure.md](exposure.md).
 
 ## The claim
 
@@ -20,19 +21,31 @@ a time. It is valid when three things hold, and it claims nothing more:
 3. **An arrow only for a physical cause** in the finished load. No arrow means no physical cause was found, not that any
    order works.
 
+The 24-dish samples below come from the kit's own `--sample` loop (`samples_v5`, 2026-10-16; last run 2026-10-22 as
+`samples_v7`) and stay as history. Since 2026-10-22 the sampler package `code/src/sampler` (`sample.py`: load, initial,
+gate_initial, build, gate_goal, certify, score, graph) runs the same per-load Kit jobs (`build.py`:
+`frigidaire_dependency_kit.py --load --order`; `goal.py`: `--certify --gate`) over the tiers' rosters, the presets in
+`difficulty.TIERS`: easy 7 bowls, medium 15 dishes (8 plates, 7 bowls), hard 23 (8 plates, 7 bowls, 8 cups).
+
 ## The sampler (one Kit process per packing)
 
 - **Move** (`frigidaire_bench.insertion_release`): a plate stands upright in its slot, 3 mm toward the side its packed
-  pose leans to; a bowl or cup keeps its packed pose. It starts with its lowest collision point 20 mm above its rack's
-  rim wire (its top under the tub ceiling) and goes down in 5 mm steps, each checked against the placed dishes and the
-  appliance with the bench checker's 1 mm allowance; a placed dish in the way (or a blocked start) blocks the move, the
-  rack alone stops it; it is let go 20 mm above the lowest clear step and settles 150 + 60 ticks at 120 Hz.
+  pose leans to in the front bank and 3 mm toward the other side in the rear bank (`frigidaire_bench.move_side`, since
+  2026-11-03). The lone-plate rest table is the reason: dropped from +x every rear slot perches on the tine tips at
+  83 deg, and from -x every one seats in its gap (results/2026-10-22-plate-rest-pose-dag.md; the 6.2 table is
+  `data/results/sampler/plate_rest_62`, results/2026-11-03-rear-plate-drop.md). A bowl or cup keeps its packed pose. It
+  starts with its lowest collision point 20 mm above its rack's rim wire (its top under the tub ceiling) and goes down in
+  5 mm steps, each checked against the placed dishes and the appliance with the bench checker's 1 mm allowance; a placed
+  dish in the way (or a blocked start) blocks the move, the rack alone stops it; it is let go 20 mm above the lowest
+  clear step and settles 150 + 60 ticks at 120 Hz.
 - **Order**: a seeded random permutation whose plate positions are refilled per bank in chain order, the slot furthest on
   the lean side first (an upright plate tips about 30 deg into a lean and overhangs the next 3-4 slots;
   `frigidaire_bench_kit.chain_order`); bowls and cups stay where the permutation put them.
-- **Landing**: within `DEV_MAX_M` (80 mm) of its target, contact under 2 mm, no placed dish moved out of its tolerance,
-  and the **overlap rule**: no pair among the placed dishes, nor any dish against the racks, basket, cabinet or door, past
-  the joint gate's own 1 mm preflight (the same collision pieces, `InitialCollisionChecker.pair`).
+- **Landing**: within `DEV_MAX_M` (80 mm) of its target, and since 2026-11-03 a plate also within `AT_GOAL`'s 20 mm dz
+  and 16 deg tilt of it, so a plate perched on the tine tips is a failed landing; contact under 2 mm, no placed dish
+  moved out of its tolerance, and the **overlap rule**: no pair among the placed dishes, nor any dish against the racks,
+  basket, cabinet or door, past the joint gate's own 1 mm preflight (the same collision pieces,
+  `InitialCollisionChecker.pair`).
 - A dish that does not go in is undone and **re-posed** at up to 5 other free poses of its kind with a clear descent
   (`Reposer`; a plate along its own bank's chain only), else **deferred** (a plate after the plates still queued, a bowl
   or cup to the back); the packing fails when no dish left goes in. No backtracking.
@@ -78,23 +91,28 @@ code/util/run_py.sh code/planner/frigidaire/frigidaire_dependency_score.py --dep
 
 Outputs: records and `_kit/`, `_gate/` under `data/results/dot_rules/dependency/<run>/`; `scheduler.log`,
 `scheduler_state.json` and one log per job under `data/logs/dot_rules/<run>/`; clips under
-`data/media/dot_rules/dependency_<run>/<id>/`. On the Mac (Kit-free): the kind-ceiling score and the page.
+`data/media/dot_rules/dependency_<run>/<id>/`. On the Mac (Kit-free): the kind-ceiling score and the page; the score
+needs `--grid-obj-dir` (the inward grid) for the per-arm ceilings of 2026-10-22, as the run notes since then pass it.
 
 ```bash
 python3 code/planner/frigidaire/frigidaire_dot_rules_relative.py --grid-payload data/media/dot_rules/page_v22/index.html \
+    --grid-obj-dir data/results/dot_rules/ceiling_inward/N0262144 \
     --dependency-dir data/results/dot_rules/dependency/samples_v5 --summary
 python3 code/planner/frigidaire/frigidaire_dependency_page.py --records r05_00027=data/results/dot_rules/dependency/samples_v5/r05_00027.json \
     --clips r05_00027=data/media/dot_rules/dependency_samples_v6/r05_00027 \
     --state data/logs/dot_rules/samples_v6b/scheduler_state_merged.json --out data/media/dot_rules/dependency_page_kind
 ```
 
-The second reproduces Version 13 byte for byte. Publish with the Artifact tool to the same URL, `root` = the page dir
-and a files map of its `media/*` (a dropped file set to null).
+The second reproduced Version 13 byte for byte before the 2026-10-22 rescore; Version 18 adds `--pairs` and the three
+tier samples (its command is in results/2026-10-23-one-sample-per-difficulty.md). Publish with the Artifact tool to the
+same URL, `root` = the page dir and a files map of its `media/*` (a dropped file set to null).
 
 ## Results on record
 
 `samples_v5` (2026-10-16): 1 valid of 20 packings, `r05_00027` (1 hard support, 11 access arrows, 15 free dishes, 4
-layers; S 0.3551, surface reached 0.2776). 17 of the 18 new packings stopped in the sampler; `r07_00012` failed the
+layers; built S 0.3545, surface reached 0.2756 under the per-arm ceilings, `states.settled` of
+`data/results/dot_rules/dependency/samples_v5/r05_00027.relative.json`, rescored 2026-10-22; S 0.3551, surface reached
+0.2776 under the 2026-10-21 constants). 17 of the 18 new packings stopped in the sampler; `r07_00012` failed the
 joint gate's preflight on its built poses, then with the dish-pair overlap rule (`samples_v6`) built all 24 and failed
 the preflight on `plate_06`/`SilverwareBasket`, and with the dish-appliance pairs too (`samples_v6b`) its sampler placed
 23 of 24; `r00_00038` failed the gate on the loaded lower rack's retraction speed both ways.
@@ -113,8 +131,9 @@ the preflight on `plate_06`/`SilverwareBasket`, and with the dish-appliance pair
 - `--resume-from` imports an earlier run's built samples; a record's `rejudged.from` (written by the retired swap-test
   re-judging) names its parent run's folder, whose packings are skipped too.
 - The kind-ceiling score only rescales the per-dish New+J saved in a load's `.relative.json`, which the retired per-dish
-  reference pass wrote; a new sample has its `.scores.json` (absolute S) but no `.relative.json`, so its page caption
-  shows the absolute S until that file exists.
+  reference pass wrote; since 2026-10-23 `seed_relative` seeds a missing one from a dependency `.scores.json` (per-dish
+  id, kind, arm, area and NJ; results/2026-10-23-one-sample-per-difficulty.md), so a new sample shows its absolute S only
+  until the next `frigidaire_dot_rules_relative.py` pass over its directory.
 - The page's graph PNGs come from `rsvg-convert`: another librsvg version differs by a few pixels.
 - Stop jobs by PID; the loop kills its own jobs by their `--load <id> ... --max-wall-seconds` command line.
 

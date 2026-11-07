@@ -4,9 +4,9 @@
 
 """The rearrangement episode driver + greedy baseline, through a 1-D toy oracle (no Kit/FCL).
 
-``run_episode`` never touches slot JSON itself — only the oracle's ``at_goal`` does — which is
-what lets a toy oracle exercise the entire Kit-free surface: greedy pass-1/pass-2/buffer
-logic, the FCL pre-check path, budget and fault aborts, and the bookkeeping.
+``run_episode`` judges at-goal only through the oracle's ``at_goal``, which is what lets a toy
+oracle exercise the entire Kit-free surface: greedy pass-1/pass-2/buffer logic, the FCL
+pre-check path, budget and fault aborts, and the bookkeeping.
 """
 
 import numpy as np
@@ -160,40 +160,6 @@ def test_failed_settle_is_nonfatal_and_counted():
     assert rec["solved"] and rec["abort"] is None
     assert rec["moves_used"] == 4 and rec["failed_settles"] == 1
     assert rec["moves"][1]["kind"] == "failed-settle"
-
-
-def _toy_scene(settle_to):
-    """A point-mass scene: teleports store the pose; stepping moves the moved item to ``settle_to``."""
-    state = {"a": make_T((0., 0., 0.), (0., 0., 0., 1.)), "b": make_T((.5, 0., 0.), (0., 0., 0., 1.))}
-    last = {}
-
-    def teleport(item_id, T):
-        state[item_id] = np.asarray(T, dtype=float).copy()
-        last["id"] = item_id
-
-    def step(n):
-        for key, T in settle_to.items():
-            if key == last.get("id") or key != "a":
-                state[key] = T.copy() if callable(getattr(T, "copy", None)) else T
-    return state, teleport, step, (lambda: {k: v.copy() for k, v in state.items()}), (lambda k: state[k].copy())
-
-
-def test_settle_move_clean_and_failed_and_disturbed():
-    from dishsim import rearrange
-    target = make_T((.1, 0., 0.), (0., 0., 0., 1.))
-    # clean: the item stays where it was put
-    state, tp, st, poses, meas = _toy_scene({})
-    _, fault, info = rearrange.settle_move(Move("a", target), tp, st, poses, meas, steps=6, window=3)
-    assert fault is None and info["settle_dev_mm"] == 0.
-    # failed settle: it slides 10 cm (> dev_max 6 cm) and is put back to its pre-move pose
-    state, tp, st, poses, meas = _toy_scene({"a": make_T((.2, 0., 0.), (0., 0., 0., 1.))})
-    out, fault, info = rearrange.settle_move(Move("a", target), tp, st, poses, meas, steps=6, window=3,
-                                             dev_max_m=.06)
-    assert fault in ("failed-settle", "unstable-settle") and "teleport_back_mm" in info
-    # a neighbour pushed 2 cm is a fatal disturbance, checked first
-    state, tp, st, poses, meas = _toy_scene({"b": make_T((.52, 0., 0.), (0., 0., 0., 1.))})
-    _, fault, info = rearrange.settle_move(Move("a", target), tp, st, poses, meas, steps=6, window=3)
-    assert fault == "disturbed" and info["disturbed"] == ["b"]
 
 
 def test_harness_collides_overrides_the_driver_check():

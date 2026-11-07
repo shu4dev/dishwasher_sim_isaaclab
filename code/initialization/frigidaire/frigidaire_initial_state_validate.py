@@ -23,8 +23,9 @@ def main():
     parser.add_argument('--peak-penetration-m', type=float, default=None,
                         help='override the peak penetration limit (settle and retraction) for this run only; '
                              'the median limit and the 1 mm preflight stay (default: random_poses.LIMITS)')
-    from isaaclab.app import AppLauncher
-    AppLauncher.add_app_launcher_args(parser)
+    sys.path[:0] = [str(ROOT/'code/src'), str(ROOT/'code/frigidaire/src')]
+    from dishsim.app import add_args, launch   # Kit-free; boots Kit in the try below
+    add_args(parser)
     parser.set_defaults(device='cpu', headless=True)
     args = parser.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -35,8 +36,7 @@ def main():
     result['execution_source_hashes'] = {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                                          for path in source_files}
     try:
-        app = AppLauncher(args).app
-        sys.path[:0] = [str(ROOT/'code/src'), str(ROOT/'code/frigidaire/src')]
+        app = launch(args)
         from dishsim import legacy_data_path
         from dishsim_frigidaire.initial_state_runtime import IsaacInitialStateBackend
         from dishsim_frigidaire.random_poses import LIMITS, source_geometry_domains

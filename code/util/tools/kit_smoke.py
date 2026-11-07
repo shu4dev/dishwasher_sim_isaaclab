@@ -19,22 +19,21 @@ Run with:
 
 import argparse
 import os
-
-from isaaclab.app import AppLauncher
+import sys
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))  # code/<stage>/<folder>/<file>.py
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "code", "src"))
+
+from dishsim.app import add_args, launch  # noqa: E402  (Kit-free; boots Kit below)
 
 parser = argparse.ArgumentParser(description="Kit-process collision-stack + media smoke test.")
 parser.add_argument("--out_dir", type=str, default=os.path.join(PROJECT_ROOT, "data", "media", "smoke"))
-AppLauncher.add_app_launcher_args(parser)
+add_args(parser)
 args_cli = parser.parse_args()
 
-app_launcher = AppLauncher(args_cli)
-simulation_app = app_launcher.app
+simulation_app = launch(args_cli)
 
 """Rest everything follows."""
-
-import sys
 
 import numpy as np
 import torch
@@ -42,8 +41,9 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.sensors import Camera, CameraCfg
 from isaaclab.sim import SimulationContext
-
-sys.path.insert(0, os.path.join(PROJECT_ROOT, "code", "src"))
+from isaaclab_physx.physics import PhysxCfg
+from isaaclab_physx.renderers import IsaacRtxRendererCfg
+from isaaclab_physx.sim.schemas import PhysxCollisionCfg, PhysxRigidBodyCfg
 
 from dishsim.checks import check, finish  # noqa: E402
 from dishsim.media import release_sim_for_close  # noqa: E402
@@ -64,15 +64,17 @@ def main() -> None:
     test_imports()
 
     # --- minimal scene: ground, light, one falling cube -----------------------------------
-    sim = SimulationContext(sim_utils.SimulationCfg(dt=1.0 / 60.0, device=args_cli.device))
+    sim = SimulationContext(sim_utils.SimulationCfg(
+        dt=1.0 / 60.0, device=args_cli.device,
+        physics=PhysxCfg(enable_external_forces_every_iteration=False)))
     sim_utils.GroundPlaneCfg().func("/World/ground", sim_utils.GroundPlaneCfg())
     light_cfg = sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75))
     light_cfg.func("/World/light", light_cfg)
     cube_cfg = sim_utils.CuboidCfg(
         size=(0.25, 0.25, 0.25),
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(),
-        mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
-        collision_props=sim_utils.CollisionPropertiesCfg(),
+        rigid_props=[sim_utils.UsdPhysicsRigidBodyCfg(), PhysxRigidBodyCfg()],
+        mass_props=sim_utils.MassCfg(mass=1.0),
+        collision_props=[sim_utils.UsdPhysicsCollisionCfg(), PhysxCollisionCfg()],
         visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.9, 0.3, 0.1)),
     )
     cube_cfg.func("/World/cube", cube_cfg, translation=(0.0, 0.0, 1.0))
@@ -84,6 +86,7 @@ def main() -> None:
             height=720,
             width=1280,
             data_types=["rgb"],
+            renderer_cfg=IsaacRtxRendererCfg(),
             spawn=sim_utils.PinholeCameraCfg(
                 focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 100.0)
             ),
@@ -103,7 +106,7 @@ def main() -> None:
         camera.update(dt)
 
     def grab() -> np.ndarray:
-        data = camera.data.output["rgb"][0]
+        data = camera.data.output["rgb"].torch[0]
         frame = data.detach().cpu().numpy()
         return frame[..., :3].astype(np.uint8)
 

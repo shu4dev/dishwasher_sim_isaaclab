@@ -85,7 +85,7 @@ counter cap  at most `cap` objects in the counter band at once; a move into a fu
 | `src/dishsim_frigidaire/initial_state_runtime.py` | Isaac backend; the `extra_statics` hook authors the counter slab before `sim.reset()` (`frigidaire_bench_kit.py` passes it) |
 | `code/planner/frigidaire/frigidaire_bench.py` | `make_bench_world` (`BenchWorld(PlannerWorld)`), the `sequence` calls, the CLI |
 | `code/planner/frigidaire/frigidaire_bench_kit.py` | Kit side: the slab through `extra_statics`, `BenchOracle`, episodes |
-| `code/planner/frigidaire/frigidaire_planner_video.py` | Kit, `--enable_cameras`: stop-motion MP4 of one episode; `frigidaire_bench.py` calls it for the benchmark's episodes |
+| `code/planner/frigidaire/frigidaire_planner_video.py` | Kit, `--enable_cameras`: stop-motion MP4 of one recorded episode on the bench kit's scene (kinematic dishes at the record's poses); the bench's video stage (`code/src/bench/video.py`) calls it |
 | `tests/test_planner.py` | 7 Kit-free tests (counter band, support edges, unstack fault, sequencer cap and buffer, counter-first order and support gate, instance glue, allowed kinds do not widen racks) |
 | `code/util/run_py.sh` | exports Kit's USD extension so `pxr` imports Kit-free (the FCL checker reads colliders from USD) |
 

@@ -25,17 +25,15 @@ arrangements and ALWAYS re-syncs it to the observed state before returning — t
 own pre-check depends on it. Counter caps are respected during search via
 ``obs["counter_cap"]`` and the world's band predicate.
 
-Candidate placements per class: the full placeable slot lattice (via
-``capacity.load_state_tables``, matching the abstraction the compat optimum certifies) plus
-the counter buffer cells; when the state tables are unavailable (toy tests), it falls back
-to the roster's target poses plus buffer cells.
+Candidate placements per class: the roster's target poses of that class plus the world's
+counter buffer cells (``world.buffer_poses``).
 """
 
 import time
 
 import numpy as np
 
-#: search knobs (module constants — never in config.py, so they cannot touch config_hash)
+#: search knobs (module constants)
 GOAL_BIAS = 0.3           # probability a sample IS the goal arrangement
 MAX_ITERS = 200_000       # hard iteration backstop under the time budget
 EXTEND_TRIES = 4          # differing items tried per extend before the sample is discarded
@@ -109,21 +107,10 @@ class RRT:
 
     # ---- candidate lattice ---------------------------------------------------------------
     def _candidates(self, instance, world):
-        """Per class: placeable slot poses + buffer cells (fallback: targets + buffers)."""
+        """Per class: the roster's targets of that class + the world's buffer cells."""
         classes = sorted({it["object_class"] for it in instance.items})
-        cands: dict = {}
-        try:
-            from . import capacity, config  # noqa: PLC0415
-
-            tables = capacity.load_state_tables(instance.state, classes)
-            for cls in classes:
-                with config.active_object(cls):
-                    cands[cls] = [capacity._nominal_release_pose(tables.slots[cls][sid])
-                                  for sid, ok in tables.placeable[cls].items() if ok]
-        except Exception:  # toy tests / no caches: the roster's own targets stand in
-            for cls in classes:
-                cands[cls] = [np.asarray(it["target"]["T_base_obj"])
-                              for it in instance.items if it["object_class"] == cls]
+        cands = {cls: [np.asarray(it["target"]["T_base_obj"]) for it in instance.items if it["object_class"] == cls]
+                 for cls in classes}
         for cls in classes:
             cands[cls] = cands[cls] + [np.asarray(T) for T in world.buffer_poses(cls)]
         return cands
@@ -267,9 +254,7 @@ def prove_solvable(instance, world, counter_cap=None, seconds=30.0, seed=0):
     """Constructive solvability proof: one RRT-Connect search from the instance's initials.
 
     A found plan PROVES the instance solvable under ``counter_cap`` and its length is an
-    UPPER bound on the optimum — the certificate of record when the exact A*
-    (:func:`compat.optimal_moves`) exhausts its budget on hard instances. ``None`` means no
-    proof (not a proof of infeasibility).
+    UPPER bound on the optimum. ``None`` means no proof (not a proof of infeasibility).
     """
     planner = RRTConnect(seed=seed)
     planner.reset(instance, world)

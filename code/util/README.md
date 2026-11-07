@@ -5,7 +5,8 @@ helpers that planner and execution scripts import. The assets are not restored h
 the HF dataset `shu4dev/dishsim-assets` (since 2026-10-21): `hf download` to restore, `hf upload` to publish.
 
 - `run_kit.sh`: boots Kit. On the host it forwards itself into the container `${DISHSIM_NAME:-dishsim-isaac}` at
-  the cwd mapped under `/workspace/dishsim`; inside it hands off to `/workspace/isaaclab/isaaclab.sh -p`.
+  the cwd mapped under `/workspace/dishsim`; inside it execs Kit's python (`/isaac-sim/python.sh`). Scripts boot
+  Kit through `dishsim.app` (Isaac Lab 3.0's `launch_simulation`; corallab's 4.5 commit used `isaaclab.sh -p`).
 - `run_py.sh`: Kit-free python the same way (`/isaac-sim/python.sh`), with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` and
   Kit's USD extension on the path, so `pxr` imports without Kit.
 - Both forward `HF_TOKEN` only when it is set in the shell. They always run the code under `/workspace/dishsim`

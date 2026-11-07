@@ -59,14 +59,14 @@ def caption_fonts():
 
 
 def render(args, report):
-    # All project/scene/USD imports happen after AppLauncher initialized Kit.
+    # All project/scene/USD imports happen after dishsim.app.launch initialized Kit.
     import numpy as np
     import omni.usd
     import isaaclab.sim as sim_utils
     from isaaclab.sim import SimulationContext
+    from isaaclab_physx.physics import PhysxCfg
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
     from dishsim.media import CameraRig
-    from dishsim.quats import xyzw_to_wxyz
     from dishsim_frigidaire.asset import COMPONENT_FILES
     from dishsim_frigidaire.paths import PROTOTYPES_DIR
     from frigidaire_initial_state_report import validate_state, pose_error
@@ -106,7 +106,8 @@ def render(args, report):
                   runtime={"isaac_sim": Path("/isaac-sim/VERSION").read_text().strip()},
                   scope="Isaac RTX rendering of saved measured initial poses; dynamics disabled in this render scene only. "
                         "No new physics validation, geometry scaling, pose settling, or hidden dishes.")
-    sim = SimulationContext(sim_utils.SimulationCfg(dt=1/120, device=args.device, use_fabric=False))
+    sim = SimulationContext(sim_utils.SimulationCfg(dt=1/120, device=args.device, use_fabric=False,
+                                                    physics=PhysxCfg(enable_external_forces_every_iteration=False)))
     stage = omni.usd.get_context().get_stage()
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
     UsdGeom.SetStageMetersPerUnit(stage, 1.)
@@ -116,9 +117,9 @@ def render(args, report):
     fill = sim_utils.DomeLightCfg(intensity=1200, color=(.92, .95, 1.))
     fill.func("/World/Fill", fill)
     key = sim_utils.DistantLightCfg(intensity=2400, angle=15, color=(1., .97, .93))
-    key.func("/World/Key", key, orientation=(.9238795, .3826834, 0, 0))
+    key.func("/World/Key", key, orientation=(.3826834, 0, 0, .9238795))   # XYZW (Isaac Lab 3.0)
     rim = sim_utils.DistantLightCfg(intensity=1100, angle=20, color=(.86, .92, 1.))
-    rim.func("/World/Rim", rim, orientation=(.7071068, -.5, .5, 0))
+    rim.func("/World/Rim", rim, orientation=(-.5, .5, 0, .7071068))
     saved = state["initial_snapshot"]["poses"]
     tints = item_tints(state["objects"])
     roots = {}
@@ -132,7 +133,7 @@ def render(args, report):
         xf.AddTranslateOp(precision=UsdGeom.XformOp.PrecisionDouble).Set(Gf.Vec3d(*pose["position_m"]))
         q = np.asarray(pose["quaternion_xyzw"], dtype=float)
         q /= np.linalg.norm(q)
-        w, x, y, z = xyzw_to_wxyz(q)
+        x, y, z, w = q                                   # Gf.Quatd takes the real part first
         xf.AddOrientOp(precision=UsdGeom.XformOp.PrecisionDouble).Set(Gf.Quatd(float(w), Gf.Vec3d(float(x), float(y), float(z))))
         material = None
         if tint is not None:
@@ -208,8 +209,9 @@ def main():
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--usd", type=Path, default=ROOT / "data/assets/frigidaire_fdpc4221as/usd/fdpc4221as.usdc")
     parser.add_argument("--out-dir", type=Path, required=True)
-    from isaaclab.app import AppLauncher
-    AppLauncher.add_app_launcher_args(parser)
+    sys.path[:0] = [str(ROOT / "code/src")]
+    from dishsim.app import add_args, launch   # Kit-free; boots Kit in the try below
+    add_args(parser)
     parser.set_defaults(headless=True, device="cpu")
     args = parser.parse_args()
     if not args.enable_cameras:
@@ -222,7 +224,7 @@ def main():
     if evidence_path.exists():
         raise FileExistsError(f"Refusing to overwrite render evidence: {evidence_path}")
     try:
-        app = AppLauncher(args).app
+        app = launch(args)
         sys.path[:0] = [str(ROOT / "code/src"), str(ROOT / "code/frigidaire/src"), str(Path(__file__).parent)]
         render(args, report)
     except Exception as exc:

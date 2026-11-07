@@ -33,14 +33,15 @@ def main():
     ap.add_argument("--reach", type=Path, default=ROOT / "data/results/robot/limits_v1/reach.json")
     ap.add_argument("--out", type=Path, default=ROOT / "data/results/robot/exhaustive_w1/tines")
     ap.add_argument("--usd", type=Path, default=ROOT / "data/assets/frigidaire_fdpc4221as/usd/fdpc4221as.usdc")
-    from isaaclab.app import AppLauncher
-    AppLauncher.add_app_launcher_args(ap)
+    sys.path[:0] = [str(ROOT / "code/src")]
+    from dishsim.app import add_args, launch   # Kit-free; boots Kit below
+    add_args(ap)
     args = ap.parse_args()
     args.out = args.out if args.out.is_absolute() else ROOT / args.out
     if args.out.exists():
         raise SystemExit(f"[RESULT] FAIL refusing to overwrite {args.out}")
     args.out.mkdir(parents=True)
-    app = AppLauncher(args).app
+    app = launch(args)
     sys.path[:0] = [str(ROOT / "code/src"), str(ROOT / "code/frigidaire/src"), str(ROOT / "code/planner/frigidaire"),
                     str(ROOT / "code/execution/frigidaire")]
     import importlib.util

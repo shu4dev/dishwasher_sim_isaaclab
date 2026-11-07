@@ -67,6 +67,13 @@ class Flags:
     # R2: finger_joint drive (Phase 0 keeps the measured 8 N m / 400; Phase 1 calibrates within the 2F-85's limits)
     gripper_effort: float = 8.
     gripper_stiffness: float = 400.
+    gripper_damping: float = 1.                  # plans/2026-11-04-grip-force.md: finger_joint damping and the inner finger
+    finger_effort: float = 10.                   #     joints' drive (ur5e.robot_cfg gripper_finger), the measured sweep's knobs
+    finger_stiffness: float = 10.
+    finger_damping: float = .05
+    grip_family: str | None = None               # R2 per hold (plans/2026-11-04-fifteen-of-fifteen.md): the grasp family whose
+                                                 #     GRIP_DRIVE_BY_FAMILY drive the gripper_* fields carry (resolve's
+                                                 #     grip_family); None = the profile's fields as written
     # R7 / D8: blocked-motion limits. None = the rig's settled default (the pre-R7 value, rig.SETTLED_LAG_RAD 0.03)
     lag_max_rad: float = .15                     # rig.LAG_MAX_RAD, in motion (never widened)
     settled_lag_rad: float = .03                 # rig.SETTLED_LAG_RAD, after the last waypoint
@@ -82,6 +89,10 @@ class Flags:
     mount: str = "data/results/robot/mount/easy_s0_any.json"
     # D19: the benchmark's counter cap (a park beyond it is refused and counted)
     counter_cap: bool = True
+    # plans/2026-11-04-fifteen-of-fifteen.md, basket out (the user, 2026-11-04 19:20 EST; the real basket lifts out): False = the
+    #     twin without its SilverwareBasket in the Kit scene and in the arm's FCL world (the episode's --no-basket / --basket out, or
+    #     a --place-goal load's top-level "basket": false); s0's goals, the benchmark samples and S_ref keep the basket
+    basket: bool = True
     # D18 (diagnostic, NOT headline): skip a dish after its two attempts and continue with the next move
     continue_after_failed_dish: bool = False
     # geometry of the motion primitives (unchanged from the upright3 PASS)
@@ -108,6 +119,20 @@ PROFILES = {
         counter_cap=False, invariants_abort=False, diag_settle_active=False),
 }
 
+# R2 per grasp family (plans/2026-11-04-fifteen-of-fifteen.md, the user 2026-11-04): finger_joint's effort limit, stiffness and
+# damping follow the dish's hold, as the real 2F-85 takes a force and a speed with each grip command
+# (results/2026-11-04-grip-force.md). The bowls' ring holds and the cups' side pinches close at the calibrated 22 N squeeze
+# (8 / 4 / 2.5: 22.5 N per pad in the probe, 22.3 to 23.2 N in the side ring gate, 20.4 N in the cup gate); the plates' pinches
+# keep 8 / 400 / 1 (76 to 99 N at the wall, 10 of 10 on the plank; 2 of 10 at the soft drive, which closes too slowly). A family
+# not listed (rim, wall, foot-in: never measured at another drive) keeps the profile's fields. "side-down" is the mouth-down cup
+# side pinch (--grasp-family side with --hold side-down or --mouth-down). The inner finger joints keep the profile's fields.
+GRIP_SQUEEZE_22N = {"gripper_effort": 8., "gripper_stiffness": 4., "gripper_damping": 2.5}
+GRIP_WALL_90N = {"gripper_effort": 8., "gripper_stiffness": 400., "gripper_damping": 1.}
+GRIP_DRIVE_BY_FAMILY = {"foot-out": GRIP_SQUEEZE_22N, "foot-side": GRIP_SQUEEZE_22N, "side": GRIP_SQUEEZE_22N,
+                        "side-down": GRIP_SQUEEZE_22N, "plate-wall": GRIP_WALL_90N, "edge": GRIP_WALL_90N}
+GRIP_DRIVE_FIELDS = ("gripper_effort", "gripper_stiffness", "gripper_damping", "finger_effort", "finger_stiffness",
+                     "finger_damping")
+
 CHOICES = {"test_case": (None, "upright3"), "place_mode": ("goal_pose", "lower_until_contact"),
            "judge": ("at_goal", "racked_in"), "disturbance": ("benchmark", "any_neighbour"),
            "end_check": ("benchmark", "racked_in"), "move_settle": ("benchmark", "legacy"),
@@ -118,27 +143,32 @@ FIELD_ITEM = {"test_case": "R4", "place_mode": "R5", "judge": "R6", "disturbance
               "move_settle": "D3", "final_hold_observation_s": "D3", "upper_in_for_lower": "R3",
               "reextend_before_scoring": "R3/D2", "hold_gate": "R1/D9", "in_hand_settle_ticks": "R1/D9",
               "hold_window_s": "R1/D9", "hold_drift_max_m": "R1/D9", "legacy_rise_min_m": "R1",
-              "legacy_near_tcp_m": "R1", "gripper_effort": "R2", "gripper_stiffness": "R2", "lag_max_rad": "R7/D8",
+              "legacy_near_tcp_m": "R1", "gripper_effort": "R2", "gripper_stiffness": "R2", "gripper_damping": "R2",
+              "finger_effort": "R2", "finger_stiffness": "R2", "finger_damping": "R2", "grip_family": "R2",
+              "lag_max_rad": "R7/D8",
               "settled_lag_rad": "R7/D8", "tol_approach": "R7/D8", "tol_joint_move_held": "R7/D8", "tol_rrt": "R7/D8",
               "tol_rise": "R7/D8", "tol_lift": "R7/D8", "tol_reaim": "R7/D8", "place_down_contact_lag": "R7/D8",
-              "jaw_wall_rad": "R7", "mount": "D17", "counter_cap": "D19", "continue_after_failed_dish": "D18",
+              "jaw_wall_rad": "R7", "mount": "D17", "counter_cap": "D19", "basket": "fifteen-of-fifteen: basket out",
+              "continue_after_failed_dish": "D18",
               "sleep_threshold": "D10", "invariants_abort": "Phase 0.4", "deinstance_root": "D12",
               "diag_settle_active": "D3"}
 
 # Fields whose headline value departs from the benchmark's teleport rules and must be labelled in every report.
 BENCHMARK_RELAXATIONS = ("test_case", "place_mode", "judge", "disturbance", "end_check", "move_settle",
-                         "reextend_before_scoring", "counter_cap", "continue_after_failed_dish")
+                         "reextend_before_scoring", "counter_cap", "continue_after_failed_dish", "basket")
 
 
-def resolve(profile="headline", **overrides):
-    """The profile's Flags with explicit overrides (validated against CHOICES)."""
+def resolve(profile="headline", grip_family=None, **overrides):
+    """The profile's Flags with explicit overrides (validated against CHOICES). ``grip_family`` (R2 per hold): finger_joint's
+    drive is that family's GRIP_DRIVE_BY_FAMILY entry (a family not listed keeps the profile's fields), the explicit
+    overrides on top (the episode's --grip-drive pairs override the family's values)."""
     if profile not in PROFILES:
         raise ValueError(f"unknown profile {profile!r}; choose from {sorted(PROFILES)}")
     names = {f.name for f in fields(Flags)}
     bad = set(overrides) - names
     if bad:
         raise ValueError(f"unknown flag(s) {sorted(bad)}")
-    flags = replace(PROFILES[profile], **overrides)
+    flags = replace(PROFILES[profile], grip_family=grip_family, **{**GRIP_DRIVE_BY_FAMILY.get(grip_family, {}), **overrides})
     for name, allowed in CHOICES.items():
         if getattr(flags, name) not in allowed:
             raise ValueError(f"{name}={getattr(flags, name)!r} not in {allowed}")
@@ -153,10 +183,19 @@ def to_dict(flags):
 
 
 def deviations(flags):
-    """[(field, value, headline value, plan item)] where ``flags`` differs from the headline profile."""
-    head = PROFILES["headline"]
+    """[(field, value, headline value, plan item)] where ``flags`` differs from the headline profile at the same grasp family
+    (R2 per hold: the family's own drive is the headline's, an explicit override of it is a deviation)."""
+    head = resolve("headline", grip_family=flags.grip_family)
     return [(f.name, getattr(flags, f.name), getattr(head, f.name), FIELD_ITEM.get(f.name, ""))
-            for f in fields(Flags) if f.name != "profile" and getattr(flags, f.name) != getattr(head, f.name)]
+            for f in fields(Flags) if f.name not in ("profile", "grip_family")
+            and getattr(flags, f.name) != getattr(head, f.name)]
+
+
+def grip_drive(flags):
+    """The finger drive a run spawns with (flags R2): finger_joint's and the inner finger joints' fields, the family and, when
+    the family has a GRIP_DRIVE_BY_FAMILY entry, that entry (an explicit override shows as a difference to it)."""
+    return {**{k: getattr(flags, k) for k in GRIP_DRIVE_FIELDS}, "family": flags.grip_family,
+            "family_drive": dict(GRIP_DRIVE_BY_FAMILY[flags.grip_family]) if flags.grip_family in GRIP_DRIVE_BY_FAMILY else None}
 
 
 def is_headline(flags):

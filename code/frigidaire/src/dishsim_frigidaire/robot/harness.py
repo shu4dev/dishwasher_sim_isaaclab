@@ -83,7 +83,8 @@ def classify(path, roots=("/World/Robot",)):
         comp = p.split("/")[3]
         return comp, ("rack" if comp in ("LowerRack", "UpperRack") else "basket" if comp == "SilverwareBasket"
                       else "appliance")
-    for name, cat in (("/World/Counter", "counter"), ("/World/Pedestal", "pedestal"), ("/World/Ground", "ground")):
+    for name, cat in (("/World/Counter", "counter"), ("/World/Backstop", "counter"),   # the plate presentation's fixture on
+                      ("/World/Pedestal", "pedestal"), ("/World/Ground", "ground")):    # the counter (plans/2026-11-04-plate-pick-presentation.md)
         if p == name or p.startswith(name + "/"):
             return name.split("/")[-1], cat
     return p, "other"
@@ -355,8 +356,8 @@ class Harness:
             self.media.video_frame()
 
     def _check(self, tick):
-        q = self.robot.data.joint_pos[0].detach().cpu().numpy()
-        qd = self.robot.data.joint_vel[0].detach().cpu().numpy()
+        q = self.robot.data.joint_pos.torch[0].detach().cpu().numpy()
+        qd = self.robot.data.joint_vel.torch[0].detach().cpu().numpy()
         if not (np.isfinite(q).all() and np.isfinite(qd).all()):
             self.violate("nan_frame", {"joint_pos_finite": bool(np.isfinite(q).all()), "joint_vel_finite": bool(np.isfinite(qd).all())})
         qa = q[self.arm]
@@ -417,8 +418,8 @@ class Harness:
 
     def _sample(self, frames):
         r = self.robot
-        q = r.data.joint_pos[0].detach().cpu().numpy()
-        qt = r.data.joint_pos_target[0].detach().cpu().numpy() if getattr(r.data, "joint_pos_target", None) is not None else q
+        q = r.data.joint_pos.torch[0].detach().cpu().numpy()
+        qt = r.actuators.target_command.position.torch[0].detach().cpu().numpy()
         row = {"t_trial_s": round(self.trial_time(), 4),
                "q": [round(float(v), 5) for v in q[self.arm]], "q_cmd": [round(float(v), 5) for v in qt[self.arm]],
                "lag": [round(float(v), 5) for v in (q[self.arm] - qt[self.arm])],
@@ -438,7 +439,7 @@ class Harness:
     def dish_speeds(self):
         out = {}
         for oid in self.ids:
-            v = self.backend.objects[oid].data.root_vel_w[0].detach().cpu().numpy()
+            v = self.backend.objects[oid].data.root_vel_w.torch[0].detach().cpu().numpy()
             out[oid] = (float(np.linalg.norm(v[:3])), float(np.linalg.norm(v[3:])))
         return out
 

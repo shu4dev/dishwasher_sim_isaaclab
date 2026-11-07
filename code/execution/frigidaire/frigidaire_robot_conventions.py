@@ -57,8 +57,9 @@ def main():
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--effort", type=float, default=8.)
     parser.add_argument("--stiffness", type=float, default=400.)
-    from isaaclab.app import AppLauncher
-    AppLauncher.add_app_launcher_args(parser)
+    sys.path[:0] = [str(ROOT / "code/src")]
+    from dishsim.app import add_args, launch   # Kit-free; boots Kit below
+    add_args(parser)
     args = parser.parse_args()
     cameras = bool(getattr(args, "enable_cameras", False))
     run_id = args.run_id or f"conventions_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
@@ -66,7 +67,7 @@ def main():
     if out_dir.exists():
         raise SystemExit(f"[RESULT] FAIL refusing to overwrite {out_dir}")
     (out_dir / "frames").mkdir(parents=True)
-    app = AppLauncher(args).app
+    app = launch(args)
     res = {"result": "FAIL", "run_id": run_id, "started_utc": datetime.now(timezone.utc).isoformat(),
            "label": "ANALYSIS (arms and bowl teleported into place; not a counted trial)",
            "args": {"effort": args.effort, "stiffness": args.stiffness, "insert_mm": INSERT_MM}}
@@ -96,6 +97,9 @@ def run(args, res, log, out_dir, cameras):
     import torch
     import omni.usd
     import isaaclab.sim as sim_utils
+    from isaaclab_physx.sim.schemas import PhysxCollisionCfg, PhysxRigidBodyCfg
+    from isaaclab_physx.renderers import IsaacRtxRendererCfg
+    from isaaclab_physx.physics import PhysxCfg
     from isaaclab.assets import Articulation, RigidObject, RigidObjectCfg
     from isaaclab.sensors import ContactSensor, ContactSensorCfg
     from dishsim_frigidaire.robot import harness as H, kin, ur5e
@@ -104,7 +108,7 @@ def run(args, res, log, out_dir, cameras):
         log.write(json.dumps({"event": event, "sim_s": round(state["tick"] / 120., 4), **payload}) + "\n")
 
     state = {"tick": 0}
-    sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=1 / 120, device="cpu"))
+    sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=1 / 120, device="cpu", physics=PhysxCfg(enable_external_forces_every_iteration=False)))
     sim_utils.GroundPlaneCfg().func("/World/Ground", sim_utils.GroundPlaneCfg())
     sim_utils.DomeLightCfg(intensity=2000.).func("/World/Light", sim_utils.DomeLightCfg(intensity=2000.))
     robots = {}
@@ -117,17 +121,17 @@ def run(args, res, log, out_dir, cameras):
     res["pad_colliders"] = {n: ur5e.pad_material(stage, root=f"/World/Robot{n}/Gripper") for n in robots}
     res["authored"] = {n: H.author_sleep_and_reports(stage, [], robot_root=f"/World/Robot{n}") for n in robots}
     bowl = RigidObject(RigidObjectCfg(prim_path="/World/Bowl", spawn=sim_utils.UsdFileCfg(
-        usd_path=str(BOWL_USD), rigid_props=sim_utils.RigidBodyPropertiesCfg(sleep_threshold=0.0)),
+        usd_path=str(BOWL_USD), rigid_props=[sim_utils.UsdPhysicsRigidBodyCfg(), PhysxRigidBodyCfg(sleep_threshold=0.0)]),
         init_state=RigidObjectCfg.InitialStateCfg(pos=(1.5, 1.5, .0))))
     H.author_sleep_and_reports(stage, ["/World/Bowl"], robot_root="/World/RobotB")
     support = RigidObject(RigidObjectCfg(prim_path="/World/Support", spawn=sim_utils.CylinderCfg(
-        radius=.03, height=.1, rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
-        collision_props=sim_utils.CollisionPropertiesCfg()), init_state=RigidObjectCfg.InitialStateCfg(pos=(1.5, -1.5, .05))))
+        radius=.03, height=.1, rigid_props=[sim_utils.UsdPhysicsRigidBodyCfg(kinematic_enabled=True), PhysxRigidBodyCfg()],
+        collision_props=[sim_utils.UsdPhysicsCollisionCfg(), PhysxCollisionCfg()]), init_state=RigidObjectCfg.InitialStateCfg(pos=(1.5, -1.5, .05))))
     walls = {}                                                     # the press-test plates (one per robot)
     for name in robots:
         walls[name] = RigidObject(RigidObjectCfg(prim_path=f"/World/Plate{name}", spawn=sim_utils.CuboidCfg(
-            size=PLATE["size_m"], rigid_props=sim_utils.RigidBodyPropertiesCfg(sleep_threshold=0.0),
-            mass_props=sim_utils.MassPropertiesCfg(mass=PLATE["mass_kg"]), collision_props=sim_utils.CollisionPropertiesCfg(),
+            size=PLATE["size_m"], rigid_props=[sim_utils.UsdPhysicsRigidBodyCfg(), PhysxRigidBodyCfg(sleep_threshold=0.0)],
+            mass_props=sim_utils.MassCfg(mass=PLATE["mass_kg"]), collision_props=[sim_utils.UsdPhysicsCollisionCfg(), PhysxCollisionCfg()],
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(.8, .45, .2))),
             init_state=RigidObjectCfg.InitialStateCfg(pos=(-4. - 2 * len(walls), 4., .05))))
     H.author_sleep_and_reports(stage, [f"/World/Plate{n}" for n in robots], robot_root="/World/RobotB")
@@ -136,7 +140,7 @@ def run(args, res, log, out_dir, cameras):
     cam = None
     if cameras:
         from isaaclab.sensors import Camera, CameraCfg
-        cam = Camera(CameraCfg(prim_path="/World/Cam", height=720, width=1280, data_types=["rgb"],
+        cam = Camera(CameraCfg(prim_path="/World/Cam", height=720, width=1280, data_types=["rgb"], renderer_cfg=IsaacRtxRendererCfg(),
                                spawn=sim_utils.PinholeCameraCfg(focal_length=18.)))
     sim.reset()
     monitor = H.ContactMonitor(1 / 120, roots=("/World/RobotA", "/World/RobotB"))
@@ -147,7 +151,7 @@ def run(args, res, log, out_dir, cameras):
         names, bodies = list(r.joint_names), list(r.body_names)
         info[name] = {"names": names, "bodies": bodies, "arm": [names.index(j) for j in ur5e.ARM_JOINTS],
                       "fj": names.index("finger_joint"), "w3": bodies.index("wrist_3_link"),
-                      "target": r.data.default_joint_pos.clone()}
+                      "target": r.data.default_joint_pos.torch.clone()}
     res["joint_names"] = info["B"]["names"]
     res["body_names"] = info["B"]["bodies"]
     T_tcp = np.eye(4)
@@ -158,12 +162,12 @@ def run(args, res, log, out_dir, cameras):
     for name, r in robots.items():
         t = info[name]["target"]
         t[0, info[name]["arm"]] = torch.tensor(q_down, dtype=t.dtype)
-        r.write_joint_state_to_sim(t, torch.zeros_like(t))
+        r.write_joint_state_to_sim_index(position=t, velocity=torch.zeros_like(t))
 
     def step(n=1, on=None):
         for _ in range(n):
             for name, r in robots.items():
-                r.set_joint_position_target(info[name]["target"])
+                r.actuators.target_command.set_position_index(value=info[name]["target"])
                 r.write_data_to_sim()
             sim.step()
             state["tick"] += 1
@@ -178,16 +182,16 @@ def run(args, res, log, out_dir, cameras):
 
     def tcp(name):
         r, i = robots[name], info[name]["w3"]
-        p = r.data.body_link_pos_w[0, i].cpu().numpy()
-        q = r.data.body_link_quat_w[0, i].cpu().numpy()
-        return T_of(p, (q[1], q[2], q[3], q[0])) @ T_w3_tcp
+        p = r.data.body_link_pos_w.torch[0, i].cpu().numpy()
+        q = r.data.body_link_quat_w.torch[0, i].cpu().numpy()   # XYZW (Isaac Lab 3.0)
+        return T_of(p, q) @ T_w3_tcp
 
     def body_T(name, body):
         r = robots[name]
         i = info[name]["bodies"].index(body)
-        p = r.data.body_link_pos_w[0, i].cpu().numpy()
-        q = r.data.body_link_quat_w[0, i].cpu().numpy()
-        return T_of(p, (q[1], q[2], q[3], q[0]))
+        p = r.data.body_link_pos_w.torch[0, i].cpu().numpy()
+        q = r.data.body_link_quat_w.torch[0, i].cpu().numpy()   # XYZW (Isaac Lab 3.0)
+        return T_of(p, q)
 
     def shot(tag, eye, target):
         if cam is None:
@@ -198,7 +202,7 @@ def run(args, res, log, out_dir, cameras):
             sim.render()
         cam.update(sim.get_physics_dt())
         path = out_dir / "frames" / f"{tag}.png"
-        Image.fromarray(cam.data.output["rgb"][0, ..., :3].cpu().numpy()).save(path)
+        Image.fromarray(cam.data.output["rgb"].torch[0, ..., :3].cpu().numpy()).save(path)
         return f"frames/{tag}.png"
 
     step(120)
@@ -268,7 +272,7 @@ def run(args, res, log, out_dir, cameras):
     traj = []
 
     def log_joints(tag, extra=None):
-        q = B.data.joint_pos[0].cpu().numpy()
+        q = B.data.joint_pos.torch[0].cpu().numpy()
         row = {"t": state["tick"], "tag": tag, "q": {nB[i]: round(float(q[i]), 5) for i in range(len(nB))}}
         if extra:
             row.update(extra)
@@ -280,7 +284,7 @@ def run(args, res, log, out_dir, cameras):
         step(1, lambda: log_joints("unloaded_close"))
     step(60, lambda: log_joints("unloaded_hold"))
     pads_closed = pad_geometry()
-    q = B.data.joint_pos[0].cpu().numpy()
+    q = B.data.joint_pos.torch[0].cpu().numpy()
     fj = float(q[info["B"]["fj"]])
     ratios = {nB[i]: round(float(q[i]) / fj, 4) for i in gripper_ids if nB[i] != "finger_joint"}
     gearing = {"right_outer_knuckle_joint": -1., "right_inner_finger_joint": -1., "right_inner_finger_knuckle_joint": 1.,
@@ -304,15 +308,15 @@ def run(args, res, log, out_dir, cameras):
     u = u / np.linalg.norm(u)
     centre = T[:3, 3] + (RIM_R - WALL_T / 2) * u
     foot_z = T[2, 3] + INSERT_MM * 1e-3 - HEIGHT
-    support.write_root_pose_to_sim(torch.tensor([[centre[0], centre[1], foot_z - .05, 1., 0., 0., 0.]], dtype=torch.float32))
-    bowl.write_root_pose_to_sim(torch.tensor([[centre[0], centre[1], foot_z + .001, 1., 0., 0., 0.]], dtype=torch.float32))
-    bowl.write_root_velocity_to_sim(torch.zeros(1, 6))
+    support.write_root_pose_to_sim_index(root_pose=torch.tensor([[centre[0], centre[1], foot_z - .05, 0., 0., 0., 1.]], dtype=torch.float32))
+    bowl.write_root_pose_to_sim_index(root_pose=torch.tensor([[centre[0], centre[1], foot_z + .001, 0., 0., 0., 1.]], dtype=torch.float32))
+    bowl.write_root_velocity_to_sim_index(root_velocity=torch.zeros(1, 6))
     step(60)
     traj = []
     fj_i = info["B"]["fj"]
 
     def loaded_row(tag):
-        sens = [round(float(v), 3) for v in pads.data.force_matrix_w[0, :, 0].norm(dim=-1).cpu()]
+        sens = [round(float(v), 3) for v in pads.data.normal_force_matrix_w.torch[0, :, 0].norm(dim=-1).cpu()]   # 2.x meaning
         mon = {k: round(v, 3) for k, v in monitor.pad_N.items() if k.startswith("RobotB:")}
         per = {}                                    # bowl-robot normal force per robot collider label (pad vs finger side)
         for key, f in monitor.step_pairs.items():
@@ -329,7 +333,7 @@ def run(args, res, log, out_dir, cameras):
         ur5e.set_gripper(info["B"]["target"], nB, float(s))
         step(1, lambda: loaded_row("loaded_close"))
     step(60, lambda: loaded_row("loaded_hold"))
-    q = B.data.joint_pos[0].cpu().numpy()
+    q = B.data.joint_pos.torch[0].cpu().numpy()
     fj = float(q[fj_i])
     last = traj[-1]
     sensor_sum = sum(last["pad_sensor_N"])
@@ -346,8 +350,8 @@ def run(args, res, log, out_dir, cameras):
     for s in np.linspace(.8, 0., 60):
         ur5e.set_gripper(info["B"]["target"], nB, float(s))
         step(1)
-    bowl.write_root_pose_to_sim(torch.tensor([[1.5, 1.5, .1, 1., 0., 0., 0.]], dtype=torch.float32))
-    support.write_root_pose_to_sim(torch.tensor([[1.5, -1.5, .05, 1., 0., 0., 0.]], dtype=torch.float32))
+    bowl.write_root_pose_to_sim_index(root_pose=torch.tensor([[1.5, 1.5, .1, 0., 0., 0., 1.]], dtype=torch.float32))
+    support.write_root_pose_to_sim_index(root_pose=torch.tensor([[1.5, -1.5, .05, 0., 0., 0., 1.]], dtype=torch.float32))
     step(30)
     # ------------------------------------------------------------------ 1. arm-collider press test (A and B)
     home = np.asarray(ur5e.HOME_Q, dtype=float)
@@ -355,7 +359,7 @@ def run(args, res, log, out_dir, cameras):
         t = info[name]["target"]
         t[0, info[name]["arm"]] = torch.tensor(home, dtype=t.dtype)
         ur5e.set_gripper(t, info[name]["names"], 0.)
-        r.write_joint_state_to_sim(t, torch.zeros_like(t))
+        r.write_joint_state_to_sim_index(position=t, velocity=torch.zeros_like(t))
     step(120)
     press = {}
     arm_links = ("shoulder_link", "upper_arm_link", "forearm_link", "wrist_1_link", "wrist_2_link", "wrist_3_link")
@@ -370,8 +374,8 @@ def run(args, res, log, out_dir, cameras):
         mid = (body_T(name, "forearm_link")[:3, 3] + body_T(name, "wrist_1_link")[:3, 3]) / 2
         grip = (body_T(name, "left_inner_finger")[:3, 3] + body_T(name, "right_inner_finger")[:3, 3]) / 2
         clear_xy = float(np.max(np.abs(grip[:2] - mid[:2])))
-        walls[name].write_root_pose_to_sim(torch.tensor([[mid[0], mid[1], PLATE["drop_z_m"], 1., 0., 0., 0.]], dtype=torch.float32))
-        walls[name].write_root_velocity_to_sim(torch.zeros(1, 6))
+        walls[name].write_root_pose_to_sim_index(root_pose=torch.tensor([[mid[0], mid[1], PLATE["drop_z_m"], 0., 0., 0., 1.]], dtype=torch.float32))
+        walls[name].write_root_velocity_to_sim_index(root_velocity=torch.zeros(1, 6))
         press[name] = {"link_radii": rad, "plate": {**PLATE, "centre_xy": np.round(mid[:2], 4).tolist(),
                                                     "forearm_mid_z_m": round(float(mid[2]), 4),
                                                     "gripper_offset_xy_m": round(clear_xy, 4),
@@ -387,7 +391,7 @@ def run(args, res, log, out_dir, cameras):
                     h = hits[n].setdefault(other, {"first_tick": state["tick"], "peak_N": 0., "cats": list(act["cats"])})
                     h["peak_N"] = max(h["peak_N"], monitor.step_pairs.get(key, 0.))
     for n, r in robots.items():
-        z = float(walls[n].data.root_pos_w[0, 2])
+        z = float(walls[n].data.root_pos_w.torch[0, 2])
         arm_hit = sorted(l for l, h in hits[n].items() if "arm" in h["cats"])
         grip_hit = sorted(l for l, h in hits[n].items() if any(c in ("pad", "finger", "palm") for c in h["cats"]))
         caught = z > PLATE["caught_above_m"]

@@ -39,7 +39,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT / "code/src"), str(ROOT / "code/frigidaire/src")]
-from dishsim_frigidaire import geometry                                # noqa: E402  numpy-only, safe before AppLauncher
+from dishsim_frigidaire import geometry                                # noqa: E402  numpy-only, safe before Kit boots
 
 KINDS = ("plate", "bowl", "cup")
 COLOURS = ("blue_grey", "teal", "coral", "mustard")
@@ -303,13 +303,15 @@ def layout_main(argv):
 # ----------------------------------------------------------------------------- Kit session
 
 def run(args, report):
-    # All Kit/USD/project imports happen after AppLauncher initialized Kit.
+    # All Kit/USD/project imports happen after dishsim.app.launch initialized Kit.
     import numpy as np
     import torch
     import omni.usd
     import isaaclab.sim as sim_utils
     from isaaclab.sim import SimulationContext
     from isaaclab.assets import RigidObject, RigidObjectCfg
+    from isaaclab_physx.physics import PhysxCfg
+    from isaaclab_physx.sim.schemas import PhysxCollisionCfg
     from pxr import PhysxSchema, Usd, UsdGeom, UsdPhysics
     from PIL import Image, ImageDraw
     from dishsim.media import CameraRig, VideoWriter
@@ -345,22 +347,24 @@ def run(args, report):
                         "no contact/penetration gate; asset colour variants, no per-item tint override")
 
     sim = SimulationContext(sim_utils.SimulationCfg(dt=dt, device=args.device, use_fabric=True,
-                                                    physx=sim_utils.PhysxCfg(enable_ccd=True)))
+        physics=PhysxCfg(enable_ccd=True, enable_external_forces_every_iteration=False)))
     stage = omni.usd.get_context().get_stage()
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
     UsdGeom.SetStageMetersPerUnit(stage, 1.)
-    ground = sim_utils.CuboidCfg(size=(200., 200., .05), collision_props=sim_utils.CollisionPropertiesCfg(),
+    ground = sim_utils.CuboidCfg(size=(200., 200., .05),
+                                 collision_props=[sim_utils.UsdPhysicsCollisionCfg(), PhysxCollisionCfg()],
                                  visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(.20, .225, .255), roughness=.8))
     ground.func("/World/Ground", ground, translation=(0., 0., -.025))
-    slab = sim_utils.CuboidCfg(size=tuple(COUNTER["size_m"]), collision_props=sim_utils.CollisionPropertiesCfg(),
+    slab = sim_utils.CuboidCfg(size=tuple(COUNTER["size_m"]),
+                               collision_props=[sim_utils.UsdPhysicsCollisionCfg(), PhysxCollisionCfg()],
                                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(.72, .70, .66), roughness=.5))
     slab.func("/World/Counter", slab, translation=tuple(COUNTER["center_m"]))
     fill = sim_utils.DomeLightCfg(intensity=1200, color=(.92, .95, 1.))
     fill.func("/World/Fill", fill)
     key = sim_utils.DistantLightCfg(intensity=2400, angle=15, color=(1., .97, .93))
-    key.func("/World/Key", key, orientation=(.9238795, .3826834, 0, 0))
+    key.func("/World/Key", key, orientation=(.3826834, 0, 0, .9238795))   # XYZW (Isaac Lab 3.0)
     rim = sim_utils.DistantLightCfg(intensity=1100, angle=20, color=(.86, .92, 1.))
-    rim.func("/World/Rim", rim, orientation=(.7071068, -.5, .5, 0))
+    rim.func("/World/Rim", rim, orientation=(-.5, .5, 0, .7071068))
     dishwasher, basket = spawn("/World/HotecDishwasher", mode="scripted", usd_path=str(args.usd))
 
     objects, selections, spawned_sizes = {}, {}, {}
@@ -401,9 +405,9 @@ def run(args, report):
     masses = {}
     for oid, obj in objects.items():
         try:
-            masses[oid] = float(obj.data.default_mass.reshape(-1)[0])
+            masses[oid] = float(obj.data.body_mass.torch.reshape(-1)[0])
         except AttributeError:
-            masses[oid] = float(obj.root_physx_view.get_masses().reshape(-1)[0])
+            masses[oid] = float(obj.root_view.get_masses().reshape(-1)[0])
     measured = {kind: catalog["items"][kind].get("mass_kg") for kind in KINDS}
     if all(m is not None for m in measured.values()):
         for oid, m in masses.items():
@@ -419,24 +423,24 @@ def run(args, report):
 
     indices = {name: dishwasher.joint_names.index(name) for name in JOINTS}
     body_indices = {name: dishwasher.body_names.index(name) for name in COMPONENTS[:-1]}
-    target = dishwasher.data.default_joint_pos.clone()
+    target = dishwasher.data.default_joint_pos.torch.clone()
 
     def _pose(position, quaternion_wxyz):
         return {"position_m": position.detach().cpu().numpy().tolist(),
                 "quaternion_xyzw": wxyz_to_xyzw(quaternion_wxyz.detach().cpu().numpy().copy()).tolist()}
 
     def poses():
-        result = {name: _pose(dishwasher.data.body_pos_w[0, i], dishwasher.data.body_quat_w[0, i]) for name, i in body_indices.items()}
-        result["SilverwareBasket"] = _pose(basket.data.root_pos_w[0], basket.data.root_quat_w[0])
-        result.update({oid: _pose(obj.data.root_pos_w[0], obj.data.root_quat_w[0]) for oid, obj in objects.items()})
+        result = {name: _pose(dishwasher.data.body_pos_w.torch[0, i], dishwasher.data.body_quat_w.torch[0, i]) for name, i in body_indices.items()}
+        result["SilverwareBasket"] = _pose(basket.data.root_pos_w.torch[0], basket.data.root_quat_w.torch[0])
+        result.update({oid: _pose(obj.data.root_pos_w.torch[0], obj.data.root_quat_w.torch[0]) for oid, obj in objects.items()})
         return result
 
     def joints():
-        values = dishwasher.data.joint_pos[0].detach().cpu().numpy()
+        values = dishwasher.data.joint_pos.torch[0].detach().cpu().numpy()
         return {name: float(values[i]) for name, i in indices.items()}
 
     def tick():
-        dishwasher.set_joint_position_target(target)
+        dishwasher.actuators.target_command.set_position_index(value=target)
         dishwasher.write_data_to_sim()
         sim.step(render=False)
         dishwasher.update(dt)
@@ -520,8 +524,8 @@ def run(args, report):
     def teleport(oid, pose):
         values = [*pose["position_m"], *xyzw_to_wxyz(pose["quaternion_xyzw"])]
         obj = objects[oid]
-        obj.write_root_pose_to_sim(torch.tensor([values], dtype=torch.float32, device=sim.device))
-        obj.write_root_velocity_to_sim(torch.zeros((1, 6), device=sim.device))
+        obj.write_root_pose_to_sim_index(root_pose=torch.tensor([values], dtype=torch.float32, device=sim.device))
+        obj.write_root_velocity_to_sim_index(root_velocity=torch.zeros((1, 6), device=sim.device))
         obj.reset()
 
     order = layout.get("insertion_order") if args.sequential else None
@@ -701,8 +705,8 @@ def main():
     parser.add_argument("--fps", type=int, default=24)
     parser.add_argument("--video-width", type=int, default=1280)
     parser.add_argument("--renders-per-frame", type=int, default=3, dest="renders_per_frame")
-    from isaaclab.app import AppLauncher
-    AppLauncher.add_app_launcher_args(parser)
+    from dishsim.app import add_args, launch   # Kit-free (code/src joined sys.path at import); boots Kit below
+    add_args(parser)
     parser.set_defaults(headless=True, device="cpu")
     args = parser.parse_args()
     if not args.enable_cameras:
@@ -717,7 +721,7 @@ def main():
     if evidence.exists():
         raise FileExistsError(f"Refusing to overwrite evidence: {evidence}")
     try:
-        app = AppLauncher(args).app
+        app = launch(args)
         sys.path[:0] = [str(ROOT / "code/src"), str(ROOT / "code/frigidaire/src"), str(ROOT / "code/util/frigidaire")]
         run(args, report)
     except Exception as exc:
