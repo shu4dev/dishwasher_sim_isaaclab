@@ -5,8 +5,8 @@
 # Kit-free python launcher (pytest, planners, tools) — same host→container forwarding as
 # run_kit.sh, but execs Kit's python directly without booting Omniverse.
 #
-#   code/util/run_py.sh -m pytest code/tests/
-#   code/util/run_py.sh code/planner/bench.py --help
+#   code/util/run_py.sh -m pytest code/
+#   code/util/run_py.sh code/sampler/scripts/bench.py --help
 #
 # PYTEST_DISABLE_PLUGIN_AUTOLOAD is baked in: hydra's pytest plugin (pulled in by Isaac's
 # python) breaks collection outside Kit, and the variable only affects pytest runs.

@@ -1,0 +1,477 @@
+"""Deterministic, full-size mixed loading for the independent Frigidaire asset.
+
+The finite candidate pattern establishes scenario saturation, not a global packing
+maximum. FCL reads the exact authored contact primitives, without benchmark caches.
+All recorded poses are component-local metres with XYZW quaternions.
+"""
+from __future__ import annotations
+
+from collections import Counter
+from dataclasses import dataclass
+import hashlib
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+
+
+ORDER = ("dinner_plate", "salad_plate", "saucer", "mug", "tumbler", "bowl",
+         "fork", "knife", "tablespoon", "teaspoon")
+CUTLERY = ORDER[-4:]
+
+
+def rotation(axis, angle):
+    """Right-handed rotation, with radians at this interface."""
+    c, s = math.cos(angle), math.sin(angle)
+    if axis == "X":
+        return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
+    if axis == "Y":
+        return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+    return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+
+
+def quaternion_xyzw(matrix):
+    from scipy.spatial.transform import Rotation
+    return Rotation.from_matrix(matrix).as_quat().tolist()
+
+
+def matrix_xyzw(quaternion):
+    from scipy.spatial.transform import Rotation
+    return Rotation.from_quat(quaternion).as_matrix()
+
+
+@dataclass
+class Part:
+    geometry: object
+    rotation: np.ndarray
+    translation: np.ndarray
+    name: str
+
+
+def collision_parts(filename):
+    """Extract actual USD box, cylinder, capsule and convex-mesh colliders."""
+    import fcl
+    import trimesh
+    from pxr import Usd, UsdGeom, UsdPhysics
+
+    stage = Usd.Stage.Open(str(filename))
+    root = stage.GetDefaultPrim()
+    cache = UsdGeom.XformCache()
+    root_inverse = cache.GetLocalToWorldTransform(root).GetInverse()
+    result = []
+    for prim in Usd.PrimRange(root):
+        if not prim.HasAPI(UsdPhysics.CollisionAPI):
+            continue
+        if UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr().Get() is False:
+            continue
+        matrix = np.asarray(cache.GetLocalToWorldTransform(prim) * root_inverse).T
+        scale = np.linalg.norm(matrix[:3, :3], axis=0)
+        orient = matrix[:3, :3] / scale
+        if prim.IsA(UsdGeom.Cube):
+            size = float(UsdGeom.Cube(prim).GetSizeAttr().Get())
+            geometry = fcl.Box(*(scale * size))
+        elif prim.IsA(UsdGeom.Cylinder) or prim.IsA(UsdGeom.Capsule):
+            shape = UsdGeom.Cylinder(prim) if prim.IsA(UsdGeom.Cylinder) else UsdGeom.Capsule(prim)
+            assert np.allclose(scale, 1), str(prim.GetPath())
+            constructor = fcl.Cylinder if prim.IsA(UsdGeom.Cylinder) else fcl.Capsule
+            geometry = constructor(float(shape.GetRadiusAttr().Get()), float(shape.GetHeightAttr().Get()))
+            axis = shape.GetAxisAttr().Get()
+            orient = orient @ ({"X": rotation("Y", math.pi / 2),
+                                "Y": rotation("X", -math.pi / 2), "Z": np.eye(3)}[axis])
+        elif prim.IsA(UsdGeom.Mesh):
+            approximation = UsdPhysics.MeshCollisionAPI(prim).GetApproximationAttr().Get()
+            if approximation not in ("convexHull", "none", None):
+                raise ValueError(f"Unsupported collision approximation {approximation}: {prim.GetPath()}")
+            points = np.asarray(UsdGeom.Mesh(prim).GetPointsAttr().Get(), dtype=float) * scale
+            hull = trimesh.convex.convex_hull(points)
+            faces = np.column_stack((np.full(len(hull.faces), 3), hull.faces)).astype(np.int32)
+            geometry = fcl.Convex(np.asarray(hull.vertices), len(faces), faces.ravel())
+        else:
+            raise ValueError(f"Unsupported collider {prim.GetTypeName()}: {prim.GetPath()}")
+        result.append(Part(geometry, orient, matrix[:3, 3], str(prim.GetPath())))
+    if not result:
+        raise ValueError(f"No colliders in {filename}")
+    return result
+
+
+def visual_points(filename):
+    """Geometry points used only for support-height candidates and size checking."""
+    from pxr import Usd, UsdGeom, UsdPhysics
+    stage = Usd.Stage.Open(str(filename))
+    root = stage.GetDefaultPrim()
+    cache = UsdGeom.XformCache()
+    root_inverse = cache.GetLocalToWorldTransform(root).GetInverse()
+    points = []
+    for prim in Usd.PrimRange(root):
+        if not prim.IsA(UsdGeom.Mesh) or prim.HasAPI(UsdPhysics.CollisionAPI):
+            continue
+        matrix = np.asarray(cache.GetLocalToWorldTransform(prim) * root_inverse).T
+        p = np.asarray(UsdGeom.Mesh(prim).GetPointsAttr().Get(), dtype=float)
+        points.append(p @ matrix[:3, :3].T + matrix[:3, 3])
+    if not points:
+        raise ValueError(f"No visual meshes in {filename}")
+    return np.concatenate(points)
+
+
+class CollisionWorld:
+    """FCL broadphase scoped to this asset and the accepted load only."""
+    def __init__(self, asset_dir):
+        import fcl
+        from .twin import BODY_POSITIONS, COMPONENT_FILES
+        from .paths import PROTOTYPES_DIR
+        self.fcl = fcl
+        self.parts = {}
+        self.points = {}
+        self.static_objects = []
+        self.placed_objects = []
+        self.manager = fcl.DynamicAABBTreeCollisionManager()
+        self.names = {}
+        for body, file in COMPONENT_FILES.items():
+            parts = collision_parts(Path(asset_dir) / file)
+            objects = self.transform(parts, np.eye(3), BODY_POSITIONS[body])
+            self.static_objects.extend(objects)
+            for obj in objects:
+                self.names[id(obj)] = body
+        self.manager.registerObjects(self.static_objects)
+        self.manager.setup()
+        for kind in ORDER:
+            filename = PROTOTYPES_DIR / (kind + ".usdc")
+            self.parts[kind] = collision_parts(filename)
+            self.points[kind] = visual_points(filename)
+
+    def transform(self, parts, orient, position):
+        fcl = self.fcl
+        return [fcl.CollisionObject(part.geometry, fcl.Transform(orient @ part.rotation,
+                    orient @ part.translation + position)) for part in parts]
+
+    def candidate_objects(self, candidate):
+        from .twin import BODY_POSITIONS
+        position = np.asarray(candidate["position"]) + BODY_POSITIONS[candidate["rack"]]
+        orient = matrix_xyzw(candidate["quaternion_xyzw"])
+        return self.transform(self.parts[candidate["kind"]], orient, position)
+
+    def collides(self, objects):
+        fcl = self.fcl
+        data = fcl.CollisionData(request=fcl.CollisionRequest(num_max_contacts=1))
+        for obj in objects:
+            self.manager.collide(obj, data, fcl.defaultCollisionCallback)
+            if data.result.is_collision:
+                return True
+        return False
+
+    def add(self, candidate):
+        objects = self.candidate_objects(candidate)
+        self.manager.registerObjects(objects)
+        self.manager.update()
+        self.placed_objects.extend(objects)
+
+    def reset_load(self, entries):
+        for obj in self.placed_objects:
+            self.manager.unregisterObject(obj)
+        self.placed_objects = []
+        self.manager.update()
+        for entry in entries:
+            self.add(entry)
+
+
+def geometry_hashes(directory):
+    directory = Path(directory)
+    return {str(path.relative_to(directory)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(directory.rglob("*.usdc"))}
+
+
+def _candidate(kind, rack, slot, x, y, orient, points, floor, variant):
+    z = float(floor + .002 - (points @ orient.T)[:, 2].min())
+    return {"kind": kind, "rack": rack, "slot": slot, "variant": variant,
+            "position": [float(x), float(y), z], "quaternion_xyzw": quaternion_xyzw(orient)}
+
+
+def _sloped_candidate(kind, slot, mouth_x, y, lean, points, floor, yaw=0):
+    side = np.sign(mouth_x)
+    angle = math.radians(side * lean)
+    orient = rotation("Y", angle) @ rotation("Z", math.radians(yaw)) @ rotation("X", math.pi)
+    normal = np.array([math.sin(angle), 0., math.cos(angle)])
+    half_height = .080 if kind == "tumbler" else .050
+    x = mouth_x + half_height * math.sin(angle)
+    z = (floor * normal[2] + .002 - ((points @ orient.T) @ normal).min()
+         - normal[0] * (x-mouth_x)) / normal[2]
+    return {"kind": kind, "rack": "UpperRack", "slot": slot,
+            "variant": f"yaw{yaw}_lean{lean}", "position": [float(x), float(y), float(z)],
+            "quaternion_xyzw": quaternion_xyzw(orient)}
+
+
+def candidates(world):
+    """Finite photo-based loading patterns; sizes never change during packing."""
+    from .geometry import (PARAMETERS, lower_basket_footprint, lower_plate_gaps, lower_tine_positions,
+                           upper_tine_gaps, upper_tine_positions)
+
+    result = {kind: [] for kind in ORDER}
+    # Use the outer pairs of rows as front/rear plate supports: the gaps between tines
+    # present in both rows (the basket bay shortens the rear bank). The middle combs
+    # remain part of the collision geometry for every candidate.
+    teeth, rows = lower_tine_positions()
+    mids = (teeth[:-1] + teeth[1:]) / 2
+    lower_banks = (("front", float((rows[0]+rows[1])/2)),
+                   ("rear", float((rows[-2]+rows[-1])/2)))
+    # Reserve the photographed front-right bowl area: front gaps centred within 20 mm of
+    # the basket's left face, or right of it, are left to the bowls.
+    bowl_zone_x = lower_basket_footprint()["x"][0] - .020
+    # A 260 mm dinner plate standing on the bank centreline cuts the rim wire (rows 80 mm
+    # apart in a 563 mm rack); the inset variant seats it further from the rim.
+    inset_y = {"front": .025, "rear": -.015}
+    for kind in ("dinner_plate", "salad_plate"):
+        for bank, y in lower_banks:
+            for index in lower_plate_gaps(bank):
+                x = mids[index]
+                if bank == "front" and x > bowl_zone_x:
+                    continue
+                offset_4 = .008 if kind == "dinner_plate" else .004
+                for lean, offset, suffix, seat_y in ((-4, offset_4, "", y), (-8, .010, "", y),
+                                                     (-4, offset_4, "_inset", y + inset_y[bank])):
+                    orient = rotation("Y", math.radians(90 - lean))
+                    result[kind].append(_candidate(kind, "LowerRack", f"lower_{bank}_{index:02d}",
+                        x + offset, seat_y, orient, world.points[kind], .006,
+                        f"lean{lean}_offset{offset}{suffix}"))
+    # Saucers in the regular gaps of a centre tine column (the wide gap at the absent
+    # positions is left to bowls); slots are named by the gap's front tine index.
+    _, upper_ys = upper_tine_positions()
+    for a, b in upper_tine_gaps(1):
+        y = (upper_ys[a] + upper_ys[b]) / 2
+        for lean, offset in ((8, .010), (4, .008)):
+            orient = rotation("X", math.radians(90 - lean))
+            result["saucer"].append(_candidate("saucer", "UpperRack", f"saucer_{a:02d}",
+                0, y + offset, orient, world.points["saucer"], -.0081, f"lean{lean}_offset{offset}"))
+    # Five inverted tumblers per outer glass channel (the claims ladder, near-upright over
+    # the low ridge) and four mugs per intermediate cup channel (x = 0.10875), all inside
+    # the 515 mm tape-measured depth.
+    up = PARAMETERS["upper_rack"]
+    glass = (max(up["tine_bank_x"]) + up["channel_profile"]["ridge_offset_from_column"]
+             + up["wire_width"] / 2 - up["rim_diameter"] / 2 - up["channel_profile"]["trough_inset_from_rim"]) / 2
+    for side in (-1, 1):
+        for index, y in enumerate(-.170 + .085 * i for i in range(5)):
+            for x, lean, lift in ((round(glass, 5), 0, .010), (round(glass - .003, 5), 4, .010),
+                                  (round(glass + .003, 5), 8, .012), (round(glass - .005, 5), 0, .012)):
+                c = _sloped_candidate("tumbler", f"glass_{side}_{index}",
+                    side * x, y, lean, world.points["tumbler"], -.002)
+                c["position"][2] += lift
+                c["variant"] += f"_x{x}_lift{lift}"
+                result["tumbler"].append(c)
+    for side in (-1, 1):
+        for index, y in enumerate(np.arange(-.1875, .1876, .125)):
+            for yaw in (90, 270, 0, 180):
+                for x, lean, lift in ((.094, 11, .006), (.085, 15, .006)):
+                    c = _sloped_candidate("mug", f"mug_{side}_{index}",
+                        side * x, y, lean, world.points["mug"], -.0096, yaw)
+                    c["position"][2] += lift
+                    c["variant"] += f"_x{x}_lift{lift}"
+                    result["mug"].append(c)
+    # Bowls only in the visible front-right zone; the grid stays at y < -.074, ahead of
+    # the basket bay. Base origins are left of their tilted mouths. This pair has
+    # separated depth slabs along its common normal, so neither bowl nests in the other.
+    for index, x in enumerate((.075, .155)):
+        result["bowl"].append(_candidate("bowl", "LowerRack", f"bowl_pair_{index}",
+            x, -.140, rotation("Y", math.radians(65)), world.points["bowl"], .007, "tilt65"))
+    for ix, x in enumerate(np.arange(.125, .226, .020)):
+        for iy, y in enumerate(np.arange(-.205, -.124, .020)):
+            for tilt in (55, 65, 75):
+                orient = rotation("Y", math.radians(tilt))
+                result["bowl"].append(_candidate("bowl", "LowerRack", f"bowl_{ix}_{iy}",
+                    x, y, orient, world.points["bowl"], .007, f"tilt{tilt}"))
+    cutlery_pattern = json.loads(Path(__file__).with_name("cutlery_candidates.json").read_text())
+    for kind in CUTLERY:
+        result[kind] = cutlery_pattern["patterns"][kind]
+    return result
+
+
+def plan_full_load(asset_dir, output, banned=()):
+    """Greedy first-fit over the frozen finite candidate pattern, with an audit log."""
+    from .tableware import CATALOG
+    from .twin import BODY_POSITIONS
+    asset_dir, output = Path(asset_dir), Path(output)
+    world = CollisionWorld(asset_dir)
+    pools = candidates(world)
+    accepted, rejected, occupied = [], [], set()
+    banned = set(banned)
+    visited = set()
+
+    def attempt(kind):
+        for candidate in pools[kind]:
+            key = f'{kind}:{candidate["slot"]}:{candidate["variant"]}'
+            if key in visited:
+                continue
+            visited.add(key)
+            if candidate["slot"] in occupied or key in banned:
+                rejected.append({"candidate": key, "reason": "occupied_slot" if key not in banned else "physics_rejected"})
+                continue
+            objects = world.candidate_objects(candidate)
+            if world.collides(objects):
+                rejected.append({"candidate": key, "reason": "authored_collider_overlap"})
+                continue
+            entry = dict(candidate, id=f"{kind}_{sum(o['kind']==kind for o in accepted)+1:03d}", candidate_key=key)
+            accepted.append(entry)
+            occupied.add(candidate["slot"])
+            world.add(candidate)
+            return True
+        return False
+
+    attempt("bowl")
+    attempt("bowl")
+    # Complete balanced rounds establish variety before residual saturation.
+    for _ in range(6):
+        start = len(accepted)
+        rejection_start = len(rejected)
+        previous_visited, previous_occupied = set(visited), set(occupied)
+        complete = True
+        for kind in ORDER:
+            if kind != "bowl":
+                complete = attempt(kind) and complete
+        if not complete:
+            del accepted[start:]
+            del rejected[rejection_start:]
+            visited.clear()
+            visited.update(previous_visited)
+            occupied.clear()
+            occupied.update(previous_occupied)
+            world.reset_load(accepted)
+            break
+    passes = 0
+    cutlery_saturated = False
+    incomplete_bundles = []
+    while True:
+        passes += 1
+        added = sum(attempt(kind) for kind in ORDER if kind not in CUTLERY)
+        if not cutlery_saturated:
+            start, rejection_start = len(accepted), len(rejected)
+            previous_visited, previous_occupied = set(visited), set(occupied)
+            outcomes = [attempt(kind) for kind in CUTLERY]
+            if all(outcomes):
+                added += len(CUTLERY)
+            else:
+                incomplete_bundles.append({"pass": passes, "available": dict(zip(CUTLERY, outcomes)),
+                    "reason": "No complete fork/knife/tablespoon/teaspoon bundle fits; provisional items rolled back."})
+                del accepted[start:]
+                del rejected[rejection_start:]
+                visited.clear()
+                visited.update(previous_visited)
+                occupied.clear()
+                occupied.update(previous_occupied)
+                world.reset_load(accepted)
+                cutlery_saturated = True
+        if not added:
+            break
+    counts = dict(Counter(item["kind"] for item in accepted))
+    manifest = {"schema_version": 1, "asset_dir": str(asset_dir.resolve()),
+                "coordinate_system": "component-local metres; quaternion XYZW; initial closed appliance",
+                "objects": accepted, "catalog": CATALOG, "counts": counts,
+                "body_positions_m": BODY_POSITIONS, "geometry_hashes": geometry_hashes(asset_dir),
+                "packing": {"status": "FCL candidates only; physics validation required",
+                            "claim": "saturated within the frozen candidate patterns using individual dishes and complete four-piece cutlery bundles; not a global maximum",
+                            "candidate_pattern_sha256": hashlib.sha256(Path(__file__).with_name("cutlery_candidates.json").read_bytes()).hexdigest(),
+                            "candidate_count": sum(map(len, pools.values())), "residual_passes": passes,
+                            "visited_count": len(visited), "rejections": rejected,
+                            "cutlery_policy": "complete four-piece bundles only",
+                            "incomplete_cutlery_bundles": incomplete_bundles,
+                            "forbidden_shortcuts": ["resizing props", "nested bowls", "stacked cups", "fixed dishes", "invisible supports"]}}
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(manifest, indent=2) + "\n")
+    return manifest
+
+
+# ----------------------------------------------------------------------------- claim candidates
+# The bowl and floor helpers the HOTEC planner reuses, verbatim from the retired claim layouts (claims.py, moved to
+# data/assets/frigidaire_fdpc4221as/source/ on 2026-10-21).
+from .geometry import PARAMETERS as _PARAMETERS, lower_tine_positions as _lower_tine_positions  # noqa: E402
+
+LOWER_PLATE_FLOOR = .006
+LOWER_BOWL_FLOOR = .007
+UPPER_CENTRE_FLOOR = -.0081      # centre rib top (-10 mm) + 1.9 mm wire radius
+UPPER_GLASS_FLOOR = -.002         # wire top at the tumbler mouth's higher (outer, wall-foot) contact; the inner rim point hovers over the ridge flank
+BASKET_FRONT_Y = _PARAMETERS["lower_rack"]["basket_reserved_y"][0] - .004   # lower bowls stay ahead of the basket bay
+BOWL_SLAB_CLEARANCE = .003
+LOWER_BOWL_LIFTS = (0., .020, .040, .060)
+
+
+def _tilted(kind, rack, slot, x, y, orient, points, floor, variant):
+    """Candidate plus the rotation matrix, kept for the nesting check."""
+    return _candidate(kind, rack, slot, x, y, orient, points, floor, variant), orient
+
+
+def lower_bowl_variants(points, y_bank, slot, x_start=.060):
+    """Bowls in the front-right zone ahead of the basket, scanning x rightward from ``x_start``.
+
+    Vertical tines cannot straddle a 140 mm bowl, so the bowl goes OVER them: mouth facing
+    down and sideways (rotation about Y past 90 deg) or down and forward (about X), rim on
+    the floor, tines entering the cavity from below. The v2 mouth-up family (65 deg about Y)
+    is kept last as a fallback; it only fit the old 150 mm row pitch.
+    """
+    out = []
+    _, rows = _lower_tine_positions()
+    families = ([("Y", t) for t in (120, 135, 105, 150)] + [("X", t) for t in (120, 135, 105, 150)]
+                + [("Y", t) for t in (65, 55, 75)])
+    for axis, tilt in families:
+        orient = rotation(axis, math.radians(tilt))
+        for base_y in (y_bank, float(rows[1]), float(rows[0])):   # bank centreline, second row, front row
+            for dy in (0., .010, -.010):
+                y = base_y + dy
+                for x in np.arange(x_start, .2251, .005):
+                    base, _ = _tilted("bowl", "LowerRack", slot, x, y, orient, points,
+                                      LOWER_BOWL_FLOOR, f"{axis}{tilt}_y{y:.4f}_x{x:.3f}")
+                    world_pts = points @ orient.T + np.asarray(base["position"])
+                    if world_pts[:, 1].max() > BASKET_FRONT_Y:
+                        continue
+                    # lifts let the bowl ride on tine tips instead of the floor rib
+                    for lift in LOWER_BOWL_LIFTS:
+                        c = dict(base, position=[base["position"][0], base["position"][1],
+                                                 base["position"][2] + lift],
+                                 variant=f'{base["variant"]}_lift{lift}')
+                        out.append((c, orient))
+    return out
+
+
+UPPER_BOWL_TILTS = tuple(range(100, 151, 5))                        # mouth down, every 5 deg (2026-11-02 resample)
+UPPER_BOWL_OFFSETS = tuple(round(k * .0025, 4) for k in range(-10, 11))   # y offset every 2.5 mm, +-25 mm
+UPPER_BOWL_XS = (-.010, 0., .010)
+UPPER_BOWL_FALLBACK = (82, 70)                                       # mouth-up fallback, the old offsets, x 0
+
+
+def upper_bowl_variants(gap, y, points):
+    """Bowl in one centre gap (index of its front tine, or "wide" for the gap at the absent
+    centre positions), mouth facing down and forward, tines inside the cavity.
+
+    Rotation about X past 90 deg turns the mouth toward the front and the floor; the rim
+    rests on the centre floor rib and the base leans on the tine row behind. Mouth-up
+    poses (tilt < 90) cannot clear the inner tine columns and are kept only as a fallback.
+    The mouth-down grid was 5 tilts x 5 offsets at x 0 until 2026-11-02: one pose per slot fit
+    the October bowl, and the v4 bowl lost slots 03, 10 and 11 against the rack's own tines
+    (plans/2026-11-02-fit-score-prove.md, Revision); it is now UPPER_BOWL_TILTS x
+    UPPER_BOWL_OFFSETS x UPPER_BOWL_XS.
+    """
+    out = []
+    slot = f"upper_bowl_{gap:02d}" if isinstance(gap, int) else f"upper_bowl_{gap}"
+    for tilt in UPPER_BOWL_TILTS:
+        orient = rotation("X", math.radians(tilt))
+        for offset in UPPER_BOWL_OFFSETS:
+            for x in UPPER_BOWL_XS:
+                out.append(_tilted("bowl", "UpperRack", slot, x, y + offset, orient, points, UPPER_CENTRE_FLOOR,
+                                   f"tilt{tilt}_offset{offset:.4f}_x{x:.3f}"))
+    for tilt in UPPER_BOWL_FALLBACK:
+        orient = rotation("X", math.radians(tilt))
+        for offset in (0., .010, -.010, .020, -.020):
+            out.append(_tilted("bowl", "UpperRack", slot, 0., y + offset, orient,
+                               points, UPPER_CENTRE_FLOOR, f"tilt{tilt}_offset{offset}"))
+    return out
+
+
+def _slab(points, orient, position, normal):
+    projected = (points @ orient.T + np.asarray(position)) @ normal
+    return float(projected.min()), float(projected.max())
+
+
+def slabs_disjoint(points, first, second, clearance=BOWL_SLAB_CLEARANCE):
+    """Two bowls cannot nest when their depth slabs along the first bowl's mouth axis
+    do not overlap. ``first``/``second`` are (candidate, orient) pairs."""
+    normal = first[1] @ np.array([0., 0., 1.])
+    a = _slab(points, first[1], first[0]["position"], normal)
+    b = _slab(points, second[1], second[0]["position"], normal)
+    return b[0] >= a[1] + clearance or a[0] >= b[1] + clearance

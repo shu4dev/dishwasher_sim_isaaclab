@@ -5,7 +5,7 @@
 #
 #   docker compose -f code/util/docker/compose.yaml up -d       # start (builds nothing; image is prebuilt)
 #   code/util/run_kit.sh <script> --headless ...        # host-side entry; forwards in here
-#   code/util/run_py.sh -m pytest code/tests/                # Kit-free python the same way
+#   code/util/run_py.sh -m pytest code/                # Kit-free python the same way
 #
 # Storage contract (root disk: 99% full in August, 80% on 2026-09-29): the image and the container's
 # ~1 GiB writable layer are the only root-disk artifacts.

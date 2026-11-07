@@ -7,9 +7,9 @@ Two stacks since 2026-11-01. HEAD (branch `plan`) runs on the **Brev box** `dish
 and the 2.1 API notes live in that commit's copy of this file. This is the **canonical home of the
 launcher landmines** — the README and `CLAUDE.md` link here rather than restating them.
 
-> The benchmark (the Frigidaire twin + the HOTEC set, `code/planner/bench.py`) is teleport-only (no robot arm, no arm
+> The benchmark (the Frigidaire twin + the HOTEC set, `code/sampler/scripts/bench.py`) is teleport-only (no robot arm, no arm
 > motion planning); an arm was studied separately in the Frigidaire twin
-> ([code/frigidaire/docs/robot.md](../code/frigidaire/docs/robot.md), closed 2026-10-30). The FCL planning stack and the
+> ([code/sampler/robot/docs/robot.md](../code/sampler/robot/docs/robot.md), closed 2026-10-30). The FCL planning stack and the
 > PhysX settles are CPU-bound; the score-greedy build, the score and the ceiling grids cast rays on the GPU (Warp).
 
 ## Hardware (corallab host, the 4.5 stack)
@@ -121,17 +121,17 @@ carried over unchanged. The Bosch 800 slot pipeline and its caches left the repo
 1. **Boot-first requirement.** Every Kit entry script boots Kit **first** (`dishsim.app.launch`;
    `AppLauncher` on the 4.5 commit) and imports/resolves everything afterwards (`isaaclab.*` scene
    modules, `pxr`, the Kit-only `dishsim` modules; `dishsim.app` itself is Kit-free).
-2. **Package name vs. repo name.** The Python package is `dishsim` (under `code/src/`), never
+2. **Package name vs. repo name.** The Python package is `dishsim` (under `code/util/`), never
    `dishwasher_sim_isaaclab`: Kit's extension scan turns a directory whose name matches an
    importable package into a shadowing namespace package (`unknown location` ImportErrors).
    Keep module-scope `pxr`/`omni` imports out of the package (lazy in-function imports, see
-   `code/src/dishsim/media.py`).
+   `code/util/dishsim/media.py`).
 3. **The exit code is not a verdict.** `./isaaclab.sh -p` (4.5) exits 0 even when the wrapped
    script crashes, and Kit's close can end the process with 0 on 6.2 too — verify success from log
    content (`[RESULT] PASS`, absence of tracebacks / `free(): invalid pointer`), never from the exit
    code. `code/util/run_kit.sh` inherits this property.
 4. **The standalone `SimulationContext(sim_utils.SimulationCfg(...))` pattern** (see
-   `code/frigidaire/src/dishsim_frigidaire/initial_state_runtime.py`) is the reliable construction for this project's
+   `code/sampler/initial_state_runtime.py`) is the reliable construction for this project's
    scenes.
 
 ## Launchers (docker era)

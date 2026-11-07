@@ -30,7 +30,7 @@ exposure score S, built in Isaac one dish at a time and gated. The goal and its 
 Track A (greedy_offline, rrt_connect) must reach the goal: solved within a 60 s planning budget, raw moves.
 Track B (first_fit, move-level MCTS) builds its own load: S / S_ref. There is no robot arm in the benchmark;
 a UR5e + Robotiq 2F-85 arm was studied separately, a hardware-limits study closed on 2026-10-30
-([code/frigidaire/docs/robot.md](code/frigidaire/docs/robot.md)).
+([code/sampler/robot/docs/robot.md](code/sampler/robot/docs/robot.md)).
 
 Rosters come from explicit flags; each sample carries three level labels: kinds 1 / 2 / all, count 1-8 / 9-16 /
 17-24 and counter allowance n+3 / n+2 / n+1, each easy / medium / hard.
@@ -42,23 +42,23 @@ Every Kit command goes through `code/util/run_kit.sh`, every Kit-free one throug
 `[RESULT] PASS` and the absence of tracebacks. Exit codes lie.
 
 1. Assets and bring-up: the dataset download and `code/util/tools/bootstrap.sh` above (5 min).
-2. Tests: `code/util/run_py.sh -m pytest code/tests/ code/frigidaire/tests/ -q`.
+2. Tests: `code/util/run_py.sh -m pytest code/ -q`.
 3. The empty-machine baseline (Kit, 1 min):
-   `code/util/run_kit.sh code/initialization/frigidaire/frigidaire_initial_state_validate.py --headless --out-dir data/results/benchmark/frigidaire_hotec/baseline`.
+   `code/util/run_kit.sh code/sampler/scripts/frigidaire_initial_state_validate.py --headless --out-dir data/results/benchmark/frigidaire_hotec/baseline`.
 4. The fair score's ceilings on this stack: the two grid commands in [CLAUDE.md](CLAUDE.md#commands), then
-   `PYTHONPATH=code/src python3 -m bench.score --write-ceilings`.
+   `PYTHONPATH=code:code/util python3 -m sampler.scorer.score --write-ceilings`.
 5. One roster, every stage (inside the container; about an hour on one L4 core pair):
    ```bash
-   code/util/run_py.sh code/planner/bench.py --kinds bowl --count bowl=7 --counter-allowance 3 --seed 0 --to report \
+   code/util/run_py.sh code/sampler/scripts/bench.py --kinds bowl --count bowl=7 --counter-allowance 3 --seed 0 --to report \
        --algorithms greedy_offline,rrt_connect,first_fit,mcts --out data/results/bench/v1
    ```
    Samples land in `data/results/bench/v1/` (episodes in its `runs/`), stills, videos and the page (`index.html`) in `data/media/bench/v1/`.
 
 ## Add your algorithm
 
-1. Implement `reset(instance, world)` and `next_move(obs)` in one class (`code/src/dishsim/rearrange.py` shows the greedy baseline).
-2. Add it to `EPISODES` in `code/planner/frigidaire/frigidaire_bench_kit.py` (and to `ALGORITHMS` in `code/src/bench/sample.py`). Accept `seed=` if stochastic.
-3. Rerun the run and report stages on a stored sample: `code/util/run_py.sh code/planner/bench.py --from run --to report --input <sample.json> --algorithms <name>`.
+1. Implement `reset(instance, world)` and `next_move(obs)` in one class (`code/motion_planning/rearrange.py` shows the greedy baseline).
+2. Add it to `EPISODES` in `code/sampler/scripts/frigidaire_bench_kit.py` (and to `ALGORITHMS` in `code/sampler/sample.py`). Accept `seed=` if stochastic.
+3. Rerun the run and report stages on a stored sample: `code/util/run_py.sh code/sampler/scripts/bench.py --from run --to report --input <sample.json> --algorithms <name>`.
 
 ## Results on record
 
@@ -70,11 +70,12 @@ history: their notes are under [results/](results/), the code in git history (ta
 
 | Path | What |
 |---|---|
-| `code/planner/bench.py` | the benchmark CLI |
-| `code/src/bench/` | the benchmark's stages (`load` ... `graph`, `run`, `report`) |
-| `code/src/dishsim/` | the episode driver (`rearrange.py`), `rrt.py`, the Kit launcher (`app.py`), media, a cache-based FCL world |
-| `code/{initialization,planner,execution,util}/` | the stages' scripts, in order ([code/README.md](code/README.md)) |
-| `code/frigidaire/` | the Frigidaire twin: loaders, scorer, `docs/`, tests (tracked in git; the generator ships in `data/assets/frigidaire_fdpc4221as/source/`) |
+| `code/sampler/scripts/bench.py` | the benchmark CLI |
+| `code/sampler/`, `code/paths/` | the benchmark's stages (`load` ... `graph`, `stills`; `run`, `video`, `report`) |
+| `code/motion_planning/` | the episode driver (`rearrange.py`), `rrt.py`, the FCL planner world (`planner.py`) |
+| `code/util/dishsim/` | the Kit core: the Kit launcher (`app.py`), media, quats, a cache-based FCL world |
+| `code/{asset,sampler,motion_planning,arrangement_optimization,paths,optimal_arrangement,util}/` | the repo map's blocks, one package each ([code/README.md](code/README.md)) |
+| `code/asset/` | the Frigidaire twin: loaders, `docs/`, tests (tracked in git; the generator ships in `data/assets/frigidaire_fdpc4221as/source/`) |
 | `data/assets/` | gitignored; a copy of the HF dataset `shu4dev/dishsim-assets`: `hf download` to restore, `hf upload` to publish |
 | `data/media/ data/results/ data/logs/ data/outputs/` | gitignored |
 | `docs/figures/` | the only tracked media, with provenance in its README |
@@ -97,11 +98,11 @@ history: their notes are under [results/](results/), the code in git history (ta
 | [docs/maps/](docs/maps/) | One detail map per block of the repo map |
 | [docs/known_limitations.md](docs/known_limitations.md) | Negative results and open items, with measurements |
 | [docs/hotec_wheatstraw_asset.md](docs/hotec_wheatstraw_asset.md) | The HOTEC wheat-straw plate/bowl/cup USD assets: parameters, capacities, Frigidaire load render |
-| [code/frigidaire/docs/geometry.md](code/frigidaire/docs/geometry.md) | Frigidaire FDPC4221AS rack, basket and appliance geometry (tape re-measured 2026-09-28) |
-| [code/frigidaire/docs/hotec_bench.md](code/frigidaire/docs/hotec_bench.md) | The 2026-09-23 HOTEC bench whose start generator, fault rule and episodes the benchmark keeps |
-| [code/frigidaire/docs/exposure.md](code/frigidaire/docs/exposure.md) | Exposure scorer and fair score reference ([quickstart](code/frigidaire/docs/exposure_quickstart.md) for humans) |
-| [code/frigidaire/docs/dependency.md](code/frigidaire/docs/dependency.md) | The insertion build, certify and the physical-cause graph |
-| [code/frigidaire/docs/robot.md](code/frigidaire/docs/robot.md) | UR5e + Robotiq 2F-85 in the Frigidaire twin: bring-up and the hardware-limits study (closed 2026-10-30) |
+| [code/asset/docs/geometry.md](code/asset/docs/geometry.md) | Frigidaire FDPC4221AS rack, basket and appliance geometry (tape re-measured 2026-09-28) |
+| [code/sampler/docs/hotec_bench.md](code/sampler/docs/hotec_bench.md) | The 2026-09-23 HOTEC bench whose start generator, fault rule and episodes the benchmark keeps |
+| [code/sampler/scorer/docs/exposure.md](code/sampler/scorer/docs/exposure.md) | Exposure scorer and fair score reference ([quickstart](code/sampler/scorer/docs/exposure_quickstart.md) for humans) |
+| [code/sampler/docs/dependency.md](code/sampler/docs/dependency.md) | The insertion build, certify and the physical-cause graph |
+| [code/sampler/robot/docs/robot.md](code/sampler/robot/docs/robot.md) | UR5e + Robotiq 2F-85 in the Frigidaire twin: bring-up and the hardware-limits study (closed 2026-10-30) |
 
 ## Assets and licenses
 

@@ -14,8 +14,8 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT / "code/planner/frigidaire"))
-import frigidaire_bench as B  # noqa: E402
+sys.path[:0] = [str(ROOT / "code"), str(ROOT / "code/util")]
+import arrangement_optimization.frigidaire_bench as B  # noqa: E402
 
 fam, parts, points = B.families()
 masks = B.family_masks(fam, parts, points)
