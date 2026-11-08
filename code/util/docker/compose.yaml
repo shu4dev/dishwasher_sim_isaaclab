@@ -9,9 +9,8 @@
 #
 # Storage contract (root disk: 99% full in August, 80% on 2026-09-29): the image and the container's
 # ~1 GiB writable layer are the only root-disk artifacts.
-# Everything mutable lives on the 2 TB drive under /media/corallab-s1/2tbhdd/brianshu/dishsim,
-# which is mounted at its host path so the repo's data/{assets,media,results,logs,outputs} symlinks
-# resolve identically on both sides. Kit's shader/data/pip caches are redirected there too.
+# Kit's shader/data/pip caches live on the host under /home/shu4/dishsim-cache (corallab4's NVMe);
+# data/ is a plain folder inside the bind-mounted repo.
 #
 # GPU: device 1 by default; labmates' jobs move around, so check `nvidia-smi` and pick the
 # least-loaded card per shell before starting:
@@ -44,12 +43,11 @@ services:
               capabilities: [gpu]
     volumes:
       - ${DISHSIM_REPO:-../../..}:/workspace/dishsim
-      - /media/corallab-s1/2tbhdd/brianshu:/media/corallab-s1/2tbhdd/brianshu
       # Kit/Omniverse caches — GBs once shaders warm; kept off the root disk.
-      - /media/corallab-s1/2tbhdd/brianshu/dishsim/kit_cache:/isaac-sim/kit/cache
-      - /media/corallab-s1/2tbhdd/brianshu/dishsim/ov_data/cache_ov:/root/.cache/ov
-      - /media/corallab-s1/2tbhdd/brianshu/dishsim/pip_cache:/root/.cache/pip
-      - /media/corallab-s1/2tbhdd/brianshu/dishsim/ov_data/glcache:/root/.cache/nvidia/GLCache
-      - /media/corallab-s1/2tbhdd/brianshu/dishsim/ov_data/computecache:/root/.nv/ComputeCache
-      - /media/corallab-s1/2tbhdd/brianshu/dishsim/ov_data/logs:/root/.nvidia-omniverse/logs
-      - /media/corallab-s1/2tbhdd/brianshu/dishsim/ov_data/data:/root/.local/share/ov/data
+      - /home/shu4/dishsim-cache/kit_cache:/isaac-sim/kit/cache
+      - /home/shu4/dishsim-cache/ov_data/cache_ov:/root/.cache/ov
+      - /home/shu4/dishsim-cache/pip_cache:/root/.cache/pip
+      - /home/shu4/dishsim-cache/ov_data/glcache:/root/.cache/nvidia/GLCache
+      - /home/shu4/dishsim-cache/ov_data/computecache:/root/.nv/ComputeCache
+      - /home/shu4/dishsim-cache/ov_data/logs:/root/.nvidia-omniverse/logs
+      - /home/shu4/dishsim-cache/ov_data/data:/root/.local/share/ov/data
