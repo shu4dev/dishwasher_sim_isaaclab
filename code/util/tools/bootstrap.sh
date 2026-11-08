@@ -48,4 +48,4 @@ grep -q '^\[RESULT\] PASS' /tmp/dishsim_kit_smoke.log \
     || { echo "[RESULT] FAIL (kit_smoke gate)"; exit 1; }
 
 echo "[INFO] bootstrap complete — try:"
-echo "  code/util/run_py.sh code/planner/bench.py --kinds bowl --count bowl=7 --counter-allowance 3 --seed 0 --to report --out data/results/bench/v1"
+echo "  code/util/run_py.sh code/sampler/scripts/bench.py --kinds bowl --count bowl=7 --counter-allowance 3 --seed 0 --to report --out data/results/bench/v1"

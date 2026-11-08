@@ -22,7 +22,7 @@ import os
 import sys
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))  # code/<stage>/<folder>/<file>.py
-sys.path.insert(0, os.path.join(PROJECT_ROOT, "code", "src"))
+sys.path[:0] = [os.path.join(PROJECT_ROOT, "code"), os.path.join(PROJECT_ROOT, "code", "util")]
 
 from dishsim.app import add_args, launch  # noqa: E402  (Kit-free; boots Kit below)
 

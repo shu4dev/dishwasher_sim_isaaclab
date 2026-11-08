@@ -1,0 +1,1272 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026, dishsim project.
+# SPDX-License-Identifier: BSD-3-Clause
+"""Kit side of the HOTEC rearrangement benchmark (boot-first; one Kit process per call).
+
+--start: one generation attempt of the merged benchmark's initial stage (code/sampler/initial.py) for (roster,
+n, cap, seed, attempt): n dishes in a messy pile on the 1.8 m counter slab, the rest dropped messily into the racks,
+one joint settle with the racks extended, then the reproduction gate (teleport back to the settled poses, re-settle
+2.5 s, every dish within 10 mm / 15 deg) and the unstack rehearsal. Writes
+<out>/instances/attempts/s<seed>_a<attempt>/start.json; [RESULT] PASS | REROLL <reason>.
+
+--run: every episode of one sample (code/paths/episodes.py, stage run; --sample, converted by frigidaire_bench.instance_of_sample)
+or of an old bench instance (--instance). Goal track (A): greedy_offline and rrt_connect on the sample's goal. Open track (B):
+the first_fit and mcts plans made Kit-free (frigidaire_bench.py --plan) and certified (--sequence-plan, --resequence),
+replayed here. Every move is teleported and settled (150 ticks + 60-tick drift window at 120 Hz, settle-deviation
+limit 0.08 m); an all-racked end state gets the end check (tub wall, both racks retracted, containment). Stills of the
+initial, finished and goal configurations go to --media (default data/media/benchmark/frigidaire_hotec/stills/<tier>/<id>/)
+when --enable_cameras is set.
+
+--stills: the initial and goal stills of --sample (or --instance) only, no episode (code/sampler/stills.py); PASS when
+both PNGs exist.
+
+    code/util/run_kit.sh code/sampler/scripts/frigidaire_bench_kit.py --start --count bowl=7 --n 3 --cap 6 --seed 0 --attempt 0 --headless
+    code/util/run_kit.sh code/sampler/scripts/frigidaire_bench_kit.py --run --sample <sample.json> --out <dir> --headless --enable_cameras
+"""
+from __future__ import annotations
+
+import argparse
+from datetime import datetime, timezone
+import json
+import math
+from pathlib import Path
+import sys
+import time
+import traceback
+
+ROOT = Path(__file__).resolve().parents[3]
+STACK_MAX, STACK_OFFSET_M, STACK_TILT_DEG = 4, .015, 4.  # messy stacks on the counter: height, offset, tilt
+STACK_DROP_M, STACK_LIFT_STEP_M, STACK_LIFT_MAX_M = .005, .005, .15
+PILE_EDGE_M = .02                                       # every dish rim at least 2 cm inside the slab edge
+PILE_COVERAGE, PILE_ASPECT = .5, 1.6                    # stack bases: summed base footprint / box area, box x:y
+LIFT_STEP_M, RACK_LIFT_MAX_M = .01, .16
+RACK_DROP_Z_M = (.02, .06)                              # bbox centre above the rack floor datum before lifting clear
+RACK_MARGIN_M = .09                                     # keep drops off the rack walls
+TRIES = 1500
+SETTLE_TICKS, WINDOW_TICKS, RESET_TICKS = 150, 60, 300  # the Bosch 75 / 30 / 150 steps at 60 Hz, as seconds at 120 Hz
+STILL_RENDERS = 48
+SEQUENCE_BUILDS, SEQUENCE_NEIGHBOUR_M = 8, .15          # sequence gate: rebuilds while it learns the order; a dish
+                                                        # that does not land goes in after its neighbours (< 15 cm)
+BUILD_TICKS = 120                                       # 1 s settle after each dish while the start is built
+DEV_MAX_M = .08                                         # measured HOTEC drops reach 66.5 mm (the Bosch limit is 0.06)
+EPISODES = (("goal", "greedy_offline"), ("goal", "rrt_connect"), ("open", "first_fit"), ("open", "mcts"))
+# (the goal-track "planner" row, the fixed-goal sequencer, was dropped 2026-09-28: track A compares the executors;
+# first_fit was named "baseline" until 2026-11-01)
+
+
+def pose_distance(a, b):
+    import numpy as np
+    dp = float(np.linalg.norm(np.asarray(a["position_m"]) - b["position_m"]))
+    qa, qb = np.asarray(a["quaternion_xyzw"]), np.asarray(b["quaternion_xyzw"])
+    c = abs(float(qa @ qb) / (np.linalg.norm(qa) * np.linalg.norm(qb)))
+    return dp, float(np.degrees(2 * np.arccos(min(1., c))))
+
+
+# --------------------------------------------------------------------------- scene helpers
+
+def make_backend(args, B, entries, out_dir, counter_ids=(), cameras=False, kinematic=False):
+    from sampler.initial_state_runtime import IsaacInitialStateBackend
+    from sampler.random_poses import source_geometry_domains
+    rig = {}
+
+    class Backend(IsaacInitialStateBackend):
+        """Counter dishes ride along (no rack support required); snapshots carry the contact pairs."""
+
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.assignments = {k: v for k, v in self.assignments.items() if k not in set(counter_ids)}
+
+        def snapshot(self):
+            s = super().snapshot()
+            s["contact_pairs"] = sorted(list(p) for p in self.latest_contact["pairs"])
+            return s
+
+    def before_reset(backend):
+        if kinematic:                                   # frigidaire_planner_video.py: a written pose holds, no physics
+            import omni.usd
+            from pxr import UsdPhysics
+            stage = omni.usd.get_context().get_stage()
+            for obj in backend.objects.values():
+                UsdPhysics.RigidBodyAPI(stage.GetPrimAtPath(obj.cfg.prim_path)).CreateKinematicEnabledAttr(True)
+        if cameras:
+            from dishsim.media import CameraRig
+            sys.path.insert(0, str(ROOT / "code/sampler/scripts"))
+            from frigidaire_initial_state_render import HEIGHT, WIDTH, item_tints
+            tint_scene(item_tints([{"object_id": oid} for oid in backend.objects]), B.COUNTER_COLOR)
+            rig["rig"], rig["hw"] = CameraRig(B.BENCH_CAMERA, hw=(HEIGHT, WIDTH)), (HEIGHT, WIDTH)
+
+    slab = ("/World/Counter", tuple(B.COUNTER["size_m"]), tuple(B.COUNTER["center_m"]))
+    backend = Backend(args.usd, out_dir, device="cpu", domains=source_geometry_domains(),
+                      deadline=time.monotonic() + args.max_wall_seconds, app=args.app, candidates=entries,
+                      extra_statics=[slab], tableware=B.tableware(), before_reset=before_reset)
+    if "rig" in rig:
+        rig["rig"].apply_poses(backend.sim.device)
+        backend.tick()                                  # one physics step before any render (Fabric)
+    return backend, rig
+
+
+def tint_scene(tints, counter_color):
+    """Per-item dish tints (CLAUDE.md: one colour per item in multi-object renders) and a visible counter slab."""
+    import omni.usd
+    from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade
+    stage = omni.usd.get_context().get_stage()
+
+    def material(name, color, roughness):
+        m = UsdShade.Material.Define(stage, f"/World/BenchMaterials/{name}")
+        shader = UsdShade.Shader.Define(stage, m.GetPath().AppendChild("Surface"))
+        shader.CreateIdAttr("UsdPreviewSurface")
+        shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*color))
+        shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(roughness)
+        m.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+        return m
+
+    def bind(path, m):
+        for child in Usd.PrimRange(stage.GetPrimAtPath(path)):
+            if child.IsA(UsdGeom.Gprim):
+                UsdShade.MaterialBindingAPI.Apply(child).Bind(m, bindingStrength=UsdShade.Tokens.strongerThanDescendants)
+
+    for oid, color in tints.items():
+        bind(f"/World/InitialStateDishes/{oid}", material(oid, color, .36))
+    bind("/World/Counter", material("Counter", counter_color, .5))
+
+
+def still(backend, rig, path, title, detail):
+    if "rig" not in rig:
+        return None
+    from PIL import Image, ImageDraw
+    sys.path.insert(0, str(ROOT / "code/sampler/scripts"))
+    from frigidaire_initial_state_render import caption_fonts
+    for _ in range(STILL_RENDERS):              # RTX accumulation: fewer renders leave ghosts of moved dishes
+        backend.sim.render()
+        rig["rig"].update(backend.sim.get_physics_dt())
+    pixels = rig["rig"].grab_one("initial")
+    picture = Image.fromarray(pixels)
+    fonts, _ = caption_fonts()
+    draw = ImageDraw.Draw(picture)
+    draw.rectangle((0, 0, picture.width, 150), fill=(18, 28, 40))
+    draw.text((34, 18), title, fill=(246, 249, 252), font=fonts["title"])
+    draw.text((36, 86), detail, fill=(218, 229, 239), font=fonts["detail"])
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    picture.save(path)
+    return str(path)
+
+
+# --------------------------------------------------------------------------- --start
+
+def unstack_rehearsal(backend, ids, P, B=None, points=None, kinds=None, tries_per_step=3):
+    """Clear the settled start top-down (user, 2026-09-23): repeatedly lift away a dish nothing rests on --
+    dishes resting on another first -- park it off-scene, settle the per-move 150 + 60 ticks and judge the
+    remaining dishes by the EPISODE's rule (2026-09-28): a dish displaced > 10 mm / 20 deg is a recorded nudge
+    unless it leaves the counter band and the racks, which is what would abort an episode ("disturbed"; nothing
+    is at its goal during generation). A removal that disturbs a neighbour is undone (every dish teleported back
+    to the pre-removal state and re-settled, which must reproduce it) and the next free dish is tried, up to
+    ``tries_per_step``: accepted = some clearing order exists. Returns (ok, record). Before, any displaced dish
+    failed the rehearsal, so starts the episode would accept were re-rolled."""
+    from motion_planning.rearrange import DISTURB_POS_M, DISTURB_ROT_DEG, INIT_MATCH_POS_M, INIT_MATCH_ROT_DEG
+
+    def off_scene(oid, pose):
+        """Left the counter and the racks (the episode's fatal displacement); any displacement when no geometry."""
+        if B is None or points is None or kinds is None:
+            return True
+        now = backend.poses()
+        frames = {r: now[r] for r in ("LowerRack", "UpperRack")}
+        return not P.in_counter_band(P.pose_T(pose), B.COUNTER) and B.racked_in(points[kinds[oid]], pose, frames) is None
+    remaining, order, worst, undone, nudged = list(ids), [], (0., 0.), [], []
+    for step in range(len(ids)):
+        snap = backend.snapshot()
+        support = P.support_edges(sorted(backend.latest_contact["pairs"]), snap["poses"], remaining)
+        supporters = {a for a, _ in support}
+        supported = {b for _, b in support}
+        free = sorted((i for i in remaining if i not in supporters), key=lambda i: (i not in supported, i))
+        if not free:
+            return False, {"order": order, "undone": undone, "stuck": remaining, "reason": "every remaining dish supports another"}
+        for oid in free[:tries_per_step]:
+            pre = {i: snap["poses"][i] for i in remaining}
+            backend.set_rigid_pose(backend.objects[oid], {"position_m": [3. + .4 * step, 2., .3], "quaternion_xyzw": [0., 0., 0., 1.]})
+            for _ in range(SETTLE_TICKS + WINDOW_TICKS):
+                backend.tick()
+            post = backend.poses()
+            moved = {i: pose_distance(pre[i], post[i]) for i in pre if i != oid}
+            displaced = sorted(i for i, (dp, dr) in moved.items() if dp > DISTURB_POS_M or dr > DISTURB_ROT_DEG)
+            bad = [i for i in displaced if off_scene(i, post[i])]
+            top = max(moved.values(), key=lambda d: d[0] + d[1] / 2000, default=(0., 0.))
+            if not bad:
+                nudged += [{"step": step, "lifted": oid, "nudged": i, "mm": round(moved[i][0] * 1e3, 1), "deg": round(moved[i][1], 1)}
+                           for i in displaced]
+                break
+            undone.append({"step": step, "lifted": oid, "disturbed": bad, "max_mm": round(max(moved[i][0] for i in bad) * 1e3, 1)})
+            for i in remaining:                          # undo: the whole pre-removal state, then re-settle
+                backend.set_rigid_pose(backend.objects[i], pre[i])
+            for _ in range(RESET_TICKS):
+                backend.tick()
+            back = backend.poses()
+            if any(pose_distance(pre[i], back[i])[0] > INIT_MATCH_POS_M or pose_distance(pre[i], back[i])[1] > INIT_MATCH_ROT_DEG
+                   for i in remaining):
+                return False, {"order": order, "undone": undone, "reason": f"undoing the removal of {oid} did not reproduce the pile"}
+        else:
+            last = undone[-1]
+            return False, {"order": order, "undone": undone,
+                           "reason": f"no free dish lifts cleanly at step {step} (last: {last['lifted']} disturbs {last['disturbed']}, {last['max_mm']} mm)"}
+        worst = max(worst, top, key=lambda d: d[0] + d[1] / 2000)
+        order.append({"removed": oid, "was_resting": oid in supported, "max_neighbour_mm": round(top[0] * 1e3, 1),
+                      "max_neighbour_deg": round(top[1], 1)})
+        remaining.remove(oid)
+    return True, {"order": order, "undone": undone, "nudged": nudged, "rule": "episode: displaced and off the counter/racks",
+                  "max_neighbour_mm": round(worst[0] * 1e3, 1), "max_neighbour_deg": round(worst[1], 1)}
+
+
+def start(args, B, report):
+    import numpy as np
+    from motion_planning import planner as P
+    from sampler.initial_state_candidates import COMPONENT_NAMES
+    from asset.loading import visual_points
+    from sampler.random_poses import compose_pose, relative_pose, sample_pose, source_geometry_domains
+
+    from sampler.difficulty import roster
+    seed, attempt, n, cap = args.seed, args.attempt, args.n, args.cap
+    count = {k: int(v) for k, v in (x.split("=") for x in args.count.split(",") if x)}
+    ids = roster(count)
+    kinds = dict(ids)
+    tag = "-".join(f"{k}{v}" for k, v in count.items())
+    rng = np.random.default_rng([seed, sum(1 for v in count.values() if v) - 1, 1000 + attempt])   # (the old tier index)
+    counter_ids = sorted(ids[i][0] for i in rng.permutation(len(ids))[:n])
+    baseline = json.loads(Path(args.baseline).read_text())
+    baseline = baseline.get("snapshot", baseline)
+    frames = {name: baseline["poses"][name] for name in COMPONENT_NAMES}
+    report.update(count=count, seed=seed, attempt=attempt, n=n, cap=cap, counter_ids=counter_ids)
+    checker = B.bench_checker()
+    checker.update_components(frames)
+    slab = P.slab_body(checker, B.COUNTER)
+    points = {kind: visual_points(B.ASSETS / f"{kind}.usda") for kind in B.KINDS}
+    rack_of = {oid: "Counter" if oid in counter_ids else "LowerRack" if kind == "plate" else str(rng.choice(["LowerRack", "UpperRack"]))
+               for oid, kind in ids}
+    order = [oid for oid, _ in ids if oid not in counter_ids] + list(counter_ids)    # rack drops, then the pile
+    park = {"position_m": [3., 0., .3], "quaternion_xyzw": [0., 0., 0., 1.]}
+    entries = [{"object_id": oid, "kind": kinds[oid], "rack": "LowerRack" if rack_of[oid] == "Counter" else rack_of[oid],
+                "pose_world": park} for oid in order]
+    backend, _ = make_backend(args, B, entries, args.attempt_dir, counter_ids)
+    if backend.prepare_baseline(baseline)["result"] != "PASS":
+        report.update(result="REROLL", reason="the extended baseline did not hold")
+        return
+    backend.loaded, backend.previous_frames, backend.phase = True, None, "bench_build"
+    backend.tracker.clear()
+    backend.maximum_penetration_m, backend.peak_event, backend.global_peak_event = 0., None, None
+    bodies, drops = [], {}
+
+    def clear(body, statics):
+        return ((not statics or checker.against_components(body)["valid"]) and checker.pair(body, slab)["valid"]
+                and all(checker.pair(body, other)["valid"] for other in bodies))
+
+    domains = source_geometry_domains()["sampling_bounds_by_rack"]
+    top = B.COUNTER["top_z_m"]
+    # Counter dishes as messy STACKS (a random heap of these thin shells interlocks: 0 of 6 heaps at coverage
+    # 0.5-1.0 could be cleared without moving a neighbour > 10 mm, 2026-09-23): one kind per stack -- plates on
+    # plates, bowls nested (a bowl stack face-down half the time) -- 1..STACK_MAX high, cups alone (up or down).
+    # Every dish gets its own yaw, an offset <= STACK_OFFSET_M and a tilt <= STACK_TILT_DEG.
+    stacks = []
+    for kind in B.KINDS:
+        pool = [oid for oid in counter_ids if kinds[oid] == kind]
+        pool = [pool[i] for i in rng.permutation(len(pool))]
+        while pool:
+            h = 1 if kind == "cup" else int(rng.integers(1, min(STACK_MAX, len(pool)) + 1))
+            stacks.append({"kind": kind, "ids": pool[:h], "inverted": kind != "plate" and bool(rng.random() < .5)})
+            pool = pool[h:]
+    stacks = [stacks[i] for i in rng.permutation(len(stacks))]
+    radius = {kind: float(np.abs(points[kind][:, :2]).max()) for kind in B.KINDS}
+    rim = max((radius[s["kind"]] for s in stacks), default=0.) + PILE_EDGE_M
+    footprint = sum(np.pi * radius[s["kind"]] ** 2 for s in stacks)
+    cov = args.pile_coverage
+    hy = min(B.COUNTER["size_m"][1] / 2 - rim, (footprint / (cov * 4 * PILE_ASPECT)) ** .5)   # stack bases cluster;
+    hx = min(B.COUNTER["size_m"][0] / 2 - rim, footprint / (cov * 4 * hy))                     # every rim on the slab
+    report["pile"] = {"stacks": [{"kind": s["kind"], "ids": s["ids"], "inverted": s["inverted"]} for s in stacks],
+                      "base_footprint_m2": round(footprint, 4), "box_half_m": [round(hx, 3), round(hy, 3)],
+                      "base_coverage": round(footprint / (4 * hx * hy), 2), "offset_m": STACK_OFFSET_M, "tilt_deg": STACK_TILT_DEG,
+                      "built": f"one dish at a time, {BUILD_TICKS} ticks each"}
+
+    def dish_quat(inverted):
+        yaw, axis, tilt = rng.uniform(0, 2 * np.pi), rng.uniform(0, 2 * np.pi), np.radians(rng.uniform(0, STACK_TILT_DEG))
+        q = [0., 0., float(np.sin(yaw / 2)), float(np.cos(yaw / 2))]
+        q = compose_pose([0, 0, 0], q, [0, 0, 0], [float(np.cos(axis) * np.sin(tilt / 2)), float(np.sin(axis) * np.sin(tilt / 2)), 0.,
+                                                    float(np.cos(tilt / 2))])[1]
+        return list(compose_pose([0, 0, 0], q, [0, 0, 0], [1., 0., 0., 0.] if inverted else [0., 0., 0., 1.])[1])
+
+    def lowest(kind, q):
+        return float((points[kind] @ B.quat_matrix(q).T)[:, 2].min())
+
+    placements = [(oid, None) for oid in order if rack_of[oid] != "Counter"] + \
+                 [(oid, (si, level)) for si, s in enumerate(stacks) for level, oid in enumerate(s["ids"])]
+    base_xy = {}
+    for oid, where in placements:            # each dish is dropped onto the SETTLED scene
+        kind, rack = kinds[oid], rack_of[oid]
+        now = backend.poses()
+        bodies[:] = [checker._body(kinds[p], now[p], p) for p in drops]
+        lifted, ok = 0., False
+        if where is None:                    # a messy random drop into its rack
+            lo, hi = np.asarray(domains[rack]["lower_m"]), np.asarray(domains[rack]["upper_m"])
+            box = {"lower_m": [lo[0] + RACK_MARGIN_M, lo[1] + RACK_MARGIN_M, lo[2] + RACK_DROP_Z_M[0]],
+                   "upper_m": [hi[0] - RACK_MARGIN_M, hi[1] - RACK_MARGIN_M, lo[2] + RACK_DROP_Z_M[1]]}
+            frame = frames[rack]
+            for _ in range(TRIES):
+                sampled = sample_pose(rng, points[kind], box)
+                local = {"position_m": list(sampled["position_m"]), "quaternion_xyzw": sampled["quaternion_xyzw"]}
+                lifted = 0.
+                while True:
+                    p, q = compose_pose(frame["position_m"], frame["quaternion_xyzw"], local["position_m"], local["quaternion_xyzw"])
+                    pose = {"position_m": p.tolist(), "quaternion_xyzw": q.tolist()}
+                    ok = clear(checker._body(kind, pose, oid), True)
+                    if ok or lifted >= RACK_LIFT_MAX_M:
+                        break
+                    lifted += LIFT_STEP_M
+                    local["position_m"][2] += LIFT_STEP_M
+                if ok:
+                    break
+        else:
+            si, level = where
+            s = stacks[si]
+            for _ in range(TRIES):
+                q = dish_quat(s["inverted"])
+                if level == 0:               # the stack's base: on the slab, clear of every other stack
+                    xy = rng.uniform([-hx, -hy], [hx, hy])
+                    pose = {"position_m": [float(xy[0]), float(xy[1]), top + STACK_DROP_M - lowest(kind, q)], "quaternion_xyzw": q}
+                    ok = clear(checker._body(kind, pose, oid), False)
+                    if ok:
+                        base_xy[si] = xy
+                else:                        # onto the settled dish below: start low, lift until clear, drop
+                    below = now[s["ids"][level - 1]]
+                    r, a = STACK_OFFSET_M * np.sqrt(rng.random()), rng.uniform(0, 2 * np.pi)
+                    xy = base_xy[si] + [r * np.cos(a), r * np.sin(a)]
+                    z = float(below["position_m"][2]) + STACK_DROP_M
+                    lifted = 0.
+                    while True:
+                        pose = {"position_m": [float(xy[0]), float(xy[1]), z + lifted], "quaternion_xyzw": q}
+                        ok = clear(checker._body(kind, pose, oid), False)
+                        if ok or lifted >= STACK_LIFT_MAX_M:
+                            break
+                        lifted += STACK_LIFT_STEP_M
+                if ok:
+                    break
+        if not ok:
+            raise RuntimeError(f"could not place {oid} ({rack}{'' if where is None else f', stack {where}'}) without overlap")
+        backend.set_rigid_pose(backend.objects[oid], pose)
+        for _ in range(BUILD_TICKS):
+            backend.tick()
+        drops[oid] = {"rack": rack, "lifted_m": round(lifted, 3)} if where is None else \
+                     {"rack": "Counter", "stack": where[0], "level": where[1], "inverted": stacks[where[0]]["inverted"], "lifted_m": round(lifted, 3)}
+    for _ in range(BUILD_TICKS):
+        backend.tick()
+    # The scene PhysX built is the start. No FCL preflight (its 1 mm allowance is for sampled poses; resting hulls
+    # overlap slightly more), and landing transients are recorded, not gated: a thin HOTEC shell landing on another
+    # measured 6 mm contact depth for a few ticks (2026-09-23). The gate is the state itself: the backend's
+    # settle-and-observation hold, whose 1 s rest windows over 5 s must keep peak AND median contact depth under the
+    # LIMITS (the same thresholds), then reproduction and the unstack rehearsal below.
+    from sampler.initial_state_runtime import OBSERVATION_SECONDS, RACKS
+    build_peak, build_event = backend.maximum_penetration_m, backend.global_peak_event
+    backend.maximum_penetration_m, backend.peak_event, backend.global_peak_event = 0., None, None
+    hold = backend.hold(phase="bench_start_settle_and_observation", goal=backend.goal(RACKS), timeout=12.,
+                        observation=OBSERVATION_SECONDS, abort_on_peak=False)
+    report["build_transient_penetration_m"], report["build_transient_event"] = build_peak, build_event
+    from sampler.random_poses import motion_is_settled
+    report["hold"] = {**{key: hold.get(key) for key in ("passed", "settled", "contacts_ok", "dish_supported", "endpoints_ok",
+                                                        "unsupported_object_ids", "peak_penetration_m", "simulated_seconds")},
+                      "moving": sorted(name for name, v in (hold.get("motion") or {}).items() if not motion_is_settled(v))}
+    record = {"settled": hold, "maximum_settle_penetration_m": backend.maximum_penetration_m,
+              "maximum_settle_penetration_event": backend.global_peak_event, "initial_snapshot": backend.snapshot()}
+    if not hold["passed"]:
+        record.update(outcome="settle_failure", reason=hold.get("reason"))
+    else:
+        record.update(outcome="settled", reason="built one dish at a time; 5 s rest windows passed (contacts, motion, support)")
+    report.update(outcome=record["outcome"], backend_reason=record.get("reason"),
+                  maximum_settle_penetration_m=record.get("maximum_settle_penetration_m"),
+                  maximum_settle_penetration_event=record.get("maximum_settle_penetration_event"))
+    if record["outcome"] != "settled":
+        report.update(result="REROLL", reason=f"backend {record['outcome']}: {record.get('reason')}")
+        return
+    settled = record["initial_snapshot"]["poses"]
+    # reproduction gate: teleport back to the settled poses and re-settle (the Bosch reset semantics)
+    for oid, _ in ids:
+        backend.set_rigid_pose(backend.objects[oid], settled[oid])
+    for _ in range(RESET_TICKS):
+        backend.tick()
+    snap = backend.snapshot()
+    worst = max((pose_distance(settled[oid], snap["poses"][oid]) for oid, _ in ids), key=lambda d: d[0] + d[1] / 1500)
+    report["reproduction"] = {"max_pos_mm": round(worst[0] * 1e3, 2), "max_rot_deg": round(worst[1], 2)}
+    if any(pose_distance(settled[oid], snap["poses"][oid])[0] > .010 or pose_distance(settled[oid], snap["poses"][oid])[1] > 15.
+           for oid, _ in ids):
+        report.update(result="REROLL", reason=f"start does not reproduce: {report['reproduction']}")
+        return
+    rack_frames = {rack: snap["poses"][rack] for rack in ("LowerRack", "UpperRack")}
+    objects = []
+    for oid, kind in ids:
+        pose = snap["poses"][oid]
+        T = P.pose_T(pose)
+        on_counter = P.in_counter_band(T, B.COUNTER)
+        if oid in counter_ids and not on_counter:
+            report.update(result="REROLL", reason=f"{oid} left the counter: {np.round(pose['position_m'], 3).tolist()}")
+            return
+        rack = None if on_counter else B.racked_in(points[kind], pose, rack_frames)
+        if not on_counter and rack is None:
+            report.update(result="REROLL", reason=f"{oid} is neither racked nor on the counter")
+            return
+        o = {"object_id": oid, "kind": kind, "start": "Counter" if on_counter else rack, "pose_world": pose,
+             "source": drops[oid]}
+        if rack is not None:
+            o["rack"] = rack
+            o["rack_local_pose"] = P.local_from_world(rack_frames[rack], pose)
+        objects.append(o)
+    band = sum(o["start"] == "Counter" for o in objects)
+    if band != n:
+        report.update(result="REROLL", reason=f"{band} dishes in the counter band, drew n = {n}")
+        return
+    support = P.support_edges(snap["contact_pairs"], snap["poses"], [o["object_id"] for o in objects])
+    ok, unstack = unstack_rehearsal(backend, [oid for oid, _ in ids], P, B, points, kinds)   # mutates the scene: snap kept above
+    report["unstack"] = unstack
+    if not ok:
+        report.update(result="REROLL", reason=f"unstack rehearsal: {unstack['reason']}")
+        return
+    start_record = {
+        "schema_version": 1, "purpose": "hotec_bench_start", "instance_id": f"{tag}_s{seed}", "tier": tag, "seed": seed,
+        "attempt": attempt, "n_objects": len(objects), "inventory": count,
+        "tableware": B.tableware(), "tableware_sha256": {k: B.digest(v) for k, v in B.tableware().items()},
+        "counter": {**{k: list(v) if isinstance(v, tuple) else v for k, v in B.COUNTER.items()}, "start_count": n,
+                    "slack": cap - n, "cap": cap, "cells_pitch_m": B.CELL_PITCH_M, "pile": report["pile"]},
+        "objects": objects,
+        "initial_snapshot": {"joints": snap["joints"], "poses": snap["poses"], "step": snap["step"], "contact_pairs": snap["contact_pairs"]},
+        "support": support, "baseline": baseline,
+        "validation": {"start": {"outcome": record["outcome"], "settled": {k: record["settled"].get(k) for k in ("passed", "reason", "simulated_seconds")},
+                                 "maximum_settle_penetration_m": record.get("maximum_settle_penetration_m")},
+                       "reproduction": report["reproduction"], "unstack": unstack},
+        "hashes": {"appliance": checker.asset_sha256},
+        "generated_utc": datetime.now(timezone.utc).isoformat()}
+    path = args.attempt_dir / "start.json"
+    path.write_text(json.dumps(start_record, indent=1) + "\n")
+    report.update(result="PASS", start=str(path), support_edges=len(support), stacked=sorted({b for _, b in support}))
+
+
+# --------------------------------------------------------------------------- --sequence
+
+UNDO_TICKS = 60                                         # the re-posing sampler: 0.5 s after an attempt is undone
+
+
+def plate_bank(entry, side):
+    """(bank, rank) of a plate entry (plans/2026-10-16-lean-side-plate-order.md): bank = (rack, row, lean side) from its
+    slot 'lower_<row>_<gap>' and variant (``side`` = frigidaire_bench.lean_side: +1 when its top leans toward the rack's
+    +x); rank = -side * gap (the tine gaps are numbered along +x), so the bank's chain, the slot furthest on the lean side
+    first and outward from there, is its plates by rank. Standard library only."""
+    _, row, gap = entry["slot"].split("_")
+    s = side(entry["variant"])
+    return (entry["rack"], row, s), -s * int(gap)
+
+
+def chain_order(order, by_id, side):
+    """The lean-side plate order (plans/2026-10-16-lean-side-plate-order.md): ``order`` (a uniformly random permutation of
+    the dish ids) with the positions each plate bank holds refilled by that bank's plates in chain order (plate_bank), so
+    each plate leans onto the one before; bowls, cups and the positions of each bank stay where the permutation put them.
+    Returns (order, {plate id: {bank, index (0 = the lean-side end), slot}}). Standard library only."""
+    banks = {}
+    for i in order:
+        if by_id[i]["kind"] == "plate":
+            banks.setdefault(plate_bank(by_id[i], side)[0], []).append(i)
+    out, chains = list(order), {}
+    for bank, plates in banks.items():
+        chain = sorted(plates, key=lambda i: plate_bank(by_id[i], side)[1])
+        for n, i in zip(sorted(order.index(p) for p in plates), chain):
+            out[n] = i
+        for k, i in enumerate(chain):
+            chains[i] = {"bank": f"{bank[0]} {bank[1]} {'+x' if bank[2] > 0 else '-x'}", "index": k,
+                         "slot": by_id[i]["slot"]}
+    return out, chains
+
+
+def build_sequence(backend, B, P, by_id, targets, centroids, landing, fixed=None, release="clear", on_path=None,
+                   moves=None, order=None, repose=None, trace=None, chains=None, strict=False):
+    """Build a load in Isaac one dish at a time, lowest centre first (a valid order for "rests on"), each released at
+    its LOWEST CLEAR HOVER above the target (B.clear_release, 2026-10-14: the 1 mm checker allowance against the placed
+    dishes and the appliance, 1 mm steps, 60 mm cap; past it "no clear release" = not landed) and settled like a move
+    (150 + 60 ticks): every dish must pass ``landing`` (the goal: within the at-goal tolerance of its jointly settled
+    pose; an own load: within the episode's settle deviation of its release pose), with < 2 mm contact depth, and no
+    placed dish may be disturbed: one that was at its goal (within the at-goal tolerance of its target) before the move
+    is disturbed only when it ends outside that tolerance; any other keeps the old rule (moved > 10 mm / 20 deg).
+    Dense HOTEC loads lean on each other (shingled plates, tilted upper bowls), so "any order" is impossible (a
+    solo-clearance rule banned the standard upper bowl pair and adjacent plates); this certifies ONE order. The built
+    poses become the targets, and their support edges become the goal-order constraints the planners see.
+    ``targets`` = {id: world pose dict}; ``fixed`` = one build in exactly this order of dish ids, nothing learned (the
+    dependency kit's --certify rebuild of its witness); returns (status, record, bans). An ok record carries
+    ``support``, the final contacts (a before b, b rests on a). ``release`` = "clear" (the bench's move, above) or
+    "insertion", B.insertion_release (2026-10-15 b, the dependency kit only): lowered toward its move pose (``moves``
+    {id: world pose}, default the target; a plate upright in its slot) from above the rim in 5 mm steps until the
+    appliance stops it, and released 20 mm above that; a descent a placed dish blocks, or a blocked start, = not landed
+    (no_clear_release, with blocked, blocked_step and blocked_lift_mm), and the own-load deviation is measured from the
+    target instead of the release pose. ``on_path`` (ids, [[pose per id] per step]) gets each dish's descent before its
+    release (the recorder's frames).
+    ``repose`` with ``order`` (insertion only; plans/2026-10-15-reposing-sampler-five-samples.md): ONE build in that order
+    of dish ids. A dish that does not go in (a blocked descent, no landing, a disturbed placed dish) is undone (it is
+    parked, the placed dishes are put back where they were before it, UNDO_TICKS) and re-posed: ``repose(dish, entries,
+    placed, now)`` (entries = {id: its rack-local entry now}) returns up to 5 other poses [{entry, target, move}], tried in
+    turn, the first that goes in wins; if none does, the dish goes to the back of the order with its own pose; the build
+    fails when every dish left has failed since the last placement. With ``repose``, the settled dishes are also checked
+    pairwise and against the appliance bodies with the joint gate's 1 mm preflight (plans/2026-10-16-labelled-views-
+    overlap-rule.md): a hit is a failed landing. ``trace`` (mark() / cut(n)) drops an undone attempt's recorded frames.
+    The record adds ``entries``, ``targets`` and ``moves`` (the pose each dish went in with), ``attempts`` and
+    ``reposed``. ``chains`` (chain_order's, plans/2026-10-16-lean-side-plate-order.md): a plate that found no slot goes
+    after the plates still queued that have not failed since the last placement instead of the back of the order (to the
+    back when every queued plate has: re-inserting it among failed plates looped forever).
+    ``strict`` (plans/2026-10-22-dag-build-order.md: ``order`` is the packing's DAG order): no deferral, the build fails at
+    the first dish that does not go in, and ``repose`` runs only on a physical miss (a clear descent whose dish settles
+    more than DEV_MAX_M off its target).
+    The disturbance judgment uses B.AT_GOAL and every landing the 2 mm LIMITS contact depth. Each landed step also
+    records d_mm (its visual centroid minus its goal's, world, mm) and rack_mm (its rack's displacement since the build's
+    empty racks, mm), so a rack-local judgment can be made afterwards."""
+    import numpy as np
+    from motion_planning import rearrange as R
+    from sampler.random_poses import LIMITS
+    table = B.AT_GOAL
+    contact_limit = LIMITS["peak_penetration_m"]
+    checker = B.release_checker()
+    targets = dict(targets)
+    moves = dict(moves or targets)
+    entries = {i: dict(e) for i, e in by_id.items()}
+    park = {i: {"position_m": [3. + .4 * j, 2., .3], "quaternion_xyzw": [0., 0., 0., 1.]} for j, i in enumerate(by_id)}
+    height = {i: float(targets[i]["position_m"][2]) for i in by_id}
+    centre = {i: np.asarray(targets[i]["position_m"], dtype=float) for i in by_id}
+    near = {i: [j for j in by_id if j != i and by_id[j]["rack"] == by_id[i]["rack"]
+                and float(np.linalg.norm(centre[j] - centre[i])) < SEQUENCE_NEIGHBOUR_M] for i in by_id}
+    goals = {i: P.pose_T(targets[i]) for i in by_id}
+    kinds = {i: by_id[i]["kind"] for i in by_id}
+
+    def topo(constraints):
+        """Kahn's order of the dishes: every learned (a before b) holds, ties lowest centre first; None on a cycle."""
+        import heapq
+        cons = {(a, b) for a, b in constraints if a != b}
+        indeg = {r: 0 for r in by_id}
+        for a, b in cons:
+            indeg[b] += 1
+        heap = [(height[r], r) for r, d in indeg.items() if d == 0]
+        heapq.heapify(heap)
+        out = []
+        while heap:
+            _, r = heapq.heappop(heap)
+            out.append(r)
+            for a, b in cons:
+                if a == r:
+                    indeg[b] -= 1
+                    if indeg[b] == 0:
+                        heapq.heappush(heap, (height[b], b))
+        return out if len(out) == len(by_id) else None
+
+    def park_all():
+        for i in by_id:                                    # clear the racks: every dish parked apart
+            backend.set_rigid_pose(backend.objects[i], park[i])
+        for _ in range(60):
+            backend.tick()
+        frames = backend.poses()
+        return frames, B.appliance_bodies(checker, frames)
+
+    def attempt(r, placed, frames, appliance):
+        """One release of dish ``r`` into the racks holding ``placed``: (status ok | landing | moved, its steps, moved)."""
+        unit = [r]                                         # the release functions take a list of dishes
+        now = backend.poses()
+        pre = {i: P.pose_T(now[i]) for i in placed}
+        at_goal = {i for i in placed if not B.off_goal(kinds[i], centroids[kinds[i]], pre[i], goals[i], table)}
+        close = (B.near_poses({i: now[i] for i in placed}, kinds, targets[r]["position_m"]) if release == "clear"
+                 else {i: now[i] for i in placed})          # the insertion path reaches further: every placed dish
+        dishes = [checker._body(kinds[i], pose, i) for i, pose in close.items()]
+        up = P.pose_T(frames[entries[r]["rack"]])[:3, 2]
+        path = {}
+        if release == "clear":
+            poses_rel, hover, blockers = B.clear_release(checker, [(kinds[i], targets[i], i) for i in unit], dishes,
+                                                         appliance, up)
+        else:                                              # the insertion move toward the move pose
+            up, rim_z, top_z = B.rack_heights(frames, entries[r]["rack"])
+            m = B.insertion_release(checker, [(kinds[i], moves[i], i) for i in unit], dishes, appliance, up, rim_z, top_z)
+            poses_rel, hover, blockers, path = m["poses"], m["lift"], m["blockers"], B.path_info(m)
+            if on_path is not None:
+                on_path(unit, [[B.lifted(moves[i], h, up) for i in unit] for h in B.shown_lifts(m)])
+        if poses_rel is None:                              # no clear release (or a blocked descent): not landed
+            return "landing", [{"id": i, "hover_mm": None, "no_clear_release": True, "blockers": blockers,
+                                "disturbed": [], **path} for i in unit], None
+        for i, pose in zip(unit, poses_rel):
+            backend.set_rigid_pose(backend.objects[i], pose)
+        for _ in range(SETTLE_TICKS + WINDOW_TICKS):
+            backend.tick()
+        now = backend.poses()
+        post = {i: P.pose_T(now[i]) for i in placed}
+        old = R.disturbed_items(pre, post, None)           # dishes not at their goal keep the old rule
+        moved = sorted({i for i in placed if i in at_goal and B.off_goal(kinds[i], centroids[kinds[i]], post[i], goals[i],
+                                                                         table)}
+                       | {i for i in old if i not in at_goal})
+        landed, steps = True, []
+        for i, pose in zip(unit, poses_rel):
+            Tn = P.pose_T(now[i])
+            dist = B.goal_distance(centroids[kinds[i]], Tn, goals[i])
+            ref = pose if release == "clear" else targets[i]           # insertion: the deviation from the target
+            dev = float(np.linalg.norm(np.asarray(now[i]["position_m"]) - np.asarray(ref["position_m"])))
+            deep = max((d for name, d in backend.latest_contact["depths_m"].items() if i in name.split("|")), default=0.)
+            c, rk = np.asarray(centroids[kinds[i]], dtype=float), entries[i]["rack"]
+            d = (Tn[:3, :3] @ c + Tn[:3, 3]) - (goals[i][:3, :3] @ c + goals[i][:3, 3])
+            shift = np.asarray(now[rk]["position_m"], dtype=float) - np.asarray(frames[rk]["position_m"], dtype=float)
+            steps.append({"id": i, "lateral_mm": round(dist[0] * 1e3, 1), "dz_mm": round(dist[1] * 1e3, 1),
+                          "tilt_deg": round(dist[2], 1), "settle_dev_mm": round(dev * 1e3, 1),
+                          "contact_mm": round(deep * 1e3, 2), "hover_mm": round(hover * 1e3), "disturbed": moved,
+                          "d_mm": [round(float(v) * 1e3, 1) for v in d],
+                          "rack_mm": [round(float(v) * 1e3, 2) for v in shift], **path})
+            landed = landed and bool(landing(kinds[i], dist, dev)) and deep < contact_limit
+        if repose is not None:                             # the sampler: the joint gate's 1 mm preflight on the settled
+            ids = [*placed, *unit]                         # dishes, pairwise (plans/2026-10-16-labelled-views-overlap-rule.md)
+            bodies = [checker._body(kinds[i], now[i], i) for i in ids]
+            over = []
+            for n, a in enumerate(bodies):
+                for b in [*bodies[n + 1:], *appliance]:            # the preflight's dish-appliance pairs too (2nd run:
+                    res = checker.pair(a, b)                       # r07 failed the gate on plate_06/SilverwareBasket)
+                    if not res["valid"]:
+                        over.append([a["id"], b["id"], round(res["max_penetration_m"] * 1e3, 2)])
+            for s in steps:
+                s["overlap"] = over
+            landed = landed and not over                   # a hit is a failed landing: undone and re-posed
+        if moved:
+            return "moved", steps, moved
+        return ("ok" if landed else "landing"), steps, None
+
+    def build(order):
+        frames, appliance = park_all()
+        placed, steps = [], []
+        for r in order:
+            status, s, moved = attempt(r, placed, frames, appliance)
+            steps += s
+            if status != "ok":
+                return status, r, moved, steps
+            placed.append(r)
+        return "ok", None, None, steps
+
+    def put_back(dishes, snap, out=()):
+        """``out`` parked, ``dishes`` teleported to their poses in ``snap``, UNDO_TICKS (the re-posing sampler's undo)."""
+        for i in out:
+            backend.set_rigid_pose(backend.objects[i], park[i])
+        for i in dishes:
+            backend.set_rigid_pose(backend.objects[i], snap[i])
+        for _ in range(UNDO_TICKS):
+            backend.tick()
+
+    def sample(order):
+        """The re-posing sampler's one build (docstring): (status, failing dish, moved, steps, attempts, placed)."""
+        frames, appliance = park_all()
+        placed, steps, attempts, queue, stuck = [], [], [], list(order), set()
+        own = {i: (targets[i], moves[i], goals[i], entries[i]) for i in by_id}
+
+        def go_in(r):
+            """r at its current pose, then up to 5 re-poses, the first that goes in wins; when none does r is back at its
+            own pose. (status, steps, moved) of the last try."""
+            tries, k, last = [None], 0, None
+            while k < len(tries):
+                cand = tries[k]
+                if cand is not None:                       # a re-posed candidate: its move, its landing target
+                    targets[r], moves[r], entries[r] = cand["target"], cand["move"], cand["entry"]
+                    goals[r] = P.pose_T(cand["target"])
+                mark = trace.mark() if trace is not None else None
+                before = backend.poses()
+                status, s, moved = attempt(r, placed, frames, appliance)
+                last = (status, s, moved)
+                attempts.append({"dish": r, "try": k, "slot": entries[r].get("slot"), "variant": entries[r].get("variant"),
+                                 "status": status, "placed": len(placed), "moved": moved, "step": s[-1]})
+                if status == "ok":
+                    return last
+                if not s[-1].get("no_clear_release"):      # something was dropped: undo it
+                    put_back(placed, before, out=[r])
+                if trace is not None:
+                    trace.cut(mark)
+                if k == 0 and (not strict or (not s[-1].get("no_clear_release")
+                                              and s[-1]["settle_dev_mm"] > DEV_MAX_M * 1e3)):
+                    tries += repose(r, dict(entries), list(placed), backend.poses())
+                k += 1
+            targets[r], moves[r], goals[r], entries[r] = own[r]   # back to its own pose
+            return last
+
+        def defer(r):
+            if chains and kinds[r] == "plate":             # the lean-side order: after the plates still queued that
+                last = max((n for n, i in enumerate(queue) if kinds[i] == "plate" and i not in stuck), default=None)
+                queue.insert(len(queue) if last is None else last + 1, r)    # have not failed since the last placement,
+            else:                                          # else at the back (so the bowls and cups get their turn)
+                queue.append(r)
+
+        while queue:
+            r = queue.pop(0)
+            last = go_in(r)
+            if last[0] == "ok":
+                placed.append(r)
+                steps.extend(last[1])
+                stuck.clear()
+                continue
+            stuck.add(r)                                   # at its own pose, later in the order
+            if strict or all(i in stuck for i in [r, *queue]):
+                return last[0], r, last[2], steps + last[1], attempts, placed
+            defer(r)
+        return "ok", None, None, steps, attempts, placed
+
+    learned, builds, status, bans = set(), [], None, []
+    if repose is not None:                                 # the re-posing sampler: one build, nothing learned
+        status, x, moved, steps, attempts, placed = sample(list(order))
+        builds.append({"order": placed + ([x] if x else []), "status": status, "dish": x, "moved": moved,
+                       "steps": steps, "attempts": attempts})
+        order = None
+    else:
+        order = topo(learned) if fixed is None else list(fixed)
+    for _ in range(SEQUENCE_BUILDS if fixed is None else 1):
+        if order is None:
+            break
+        status, x, moved, steps = build(order)
+        builds.append({"order": list(order), "status": status, "dish": x, "moved": moved, "steps": steps})
+        if status == "ok" or fixed is not None:
+            break
+        if status == "moved":                               # x must go in before what it knocked
+            learned |= {(x, y) for y in moved}
+        elif release != "clear" and steps and steps[-1].get("blocked_step"):
+            blockers = steps[-1]["blockers"]                # insertion: a blocked descent is learned like a knock, x
+            if not blockers or any(y not in by_id for y in blockers):   # before the dishes that block it; an
+                break                                       # appliance block no order can fix ends the sequencing
+            learned |= {(x, y) for y in blockers}
+        else:                                               # x did not land: it leans on its neighbours, so they
+            later = sorted({y for y in near[x] if (x, y) not in learned and (y, x) not in learned})  # go in first
+            if not later:
+                break
+            learned |= {(y, x) for y in later}
+        order = topo(learned)
+    record = {"status": status, "builds": builds, "learned": sorted(learned)}
+    if status == "ok":
+        pairs = set()
+        for _ in range(60):                                  # contacts flicker: the union over 0.5 s
+            backend.tick()
+            pairs.update(tuple(p) for p in backend.latest_contact["pairs"])
+        final = backend.poses()
+        flat = builds[-1]["order"]
+        pos = {i: n for n, i in enumerate(flat)}
+        contact = [tuple(e) for e in P.support_edges(sorted(pairs), final, flat) if pos[e[0]] < pos[e[1]]]
+        record.update(order=flat, poses_world={oid: final[oid] for oid in flat}, support=sorted(contact),
+                      goal_order=sorted(set(contact) | learned),
+                      reason=f"built in {len(builds)} build(s), {len(set(contact) | learned)} order constraints "
+                             f"({len(learned)} learned), max lateral {max(s['lateral_mm'] for s in steps)} mm")
+    else:
+        last = builds[-1]
+        e = by_id[last["dish"]] if last["dish"] else None
+        if last["status"] == "moved" and e is not None:
+            bans += [sorted((B.cand_key(e), B.cand_key(by_id[m]))) for m in last["moved"] if not by_id[m].get("keep") and not e.get("keep")]
+        elif e is not None and not e.get("keep"):
+            bans.append([B.cand_key(e)])
+        record["reason"] = (f"no order built the load in {len(builds)} build(s): last {last['status']} "
+                            f"at {last['dish']} {last['moved'] or ''}")
+    if repose is not None:
+        tries = builds[-1]["attempts"]
+        record.update(entries=entries, targets=targets, moves=moves, attempts=tries,
+                      reposed={i: {"slot": entries[i].get("slot"), "variant": entries[i].get("variant"),
+                                   "from_slot": by_id[i].get("slot"), "from_variant": by_id[i].get("variant")}
+                               for i in by_id if B.cand_key(entries[i]) != B.cand_key(by_id[i])})
+        if status != "ok":
+            mine = [a for a in tries if a["dish"] == x]
+            record["reason"] = (f"the re-posing sampler placed {len(placed)} of {len(by_id)}: {x} did not go in "
+                                f"({status}; {len(mine)} attempts, own pose and re-poses)"
+                                + ("" if strict else " and no dish left went in since the last placement")
+                                + f"; {len(tries)} attempts in all")
+        else:
+            record["reason"] = (f"placed {len(placed)} of {len(by_id)} in {len(tries)} attempts "
+                                f"({len(record['reposed'])} re-posed), {len(record['support'])} support contacts")
+    return status, record, bans
+
+
+def _sequence_scene(args, B, entries, baseline, scene_dir, report):
+    """Every dish parked apart in an extended, empty baseline; None when the baseline does not hold."""
+    park = {"position_m": [3., 0., .3], "quaternion_xyzw": [0., 0., 0., 1.]}
+    backend, _ = make_backend(args, B, [{"object_id": e["id"], "kind": e["kind"], "rack": e["rack"], "pose_world": park}
+                                        for e in entries], scene_dir)
+    if backend.prepare_baseline(baseline)["result"] != "PASS":
+        report.update(result="REROLL", reason="the extended baseline did not hold")
+        return None
+    backend.loaded = True
+    return backend
+
+
+def sequence_plan(args, B, report):
+    """--sequence-plan PLAN --instance INSTANCE: certify an open-track algorithm's OWN load the way the goal is
+    certified (2026-09-28): its commanded rack-local poses are built one dish at a time in the instance's
+    extended racks; landing = the episode's settle deviation (DEV_MAX_M) and contact depth, since a commanded
+    family pose (lifted up to 60 mm) settles well past the at-goal tolerance. The built poses and the learned
+    order go to <plan>.sequence.json; the Kit-free --resequence stage turns them into the certified plan. Before
+    this, own loads were scored on paper and replayed blind: a plate leaning 24 deg was pulled through a placed
+    neighbour and every medium/hard open-track row failed 'disturbed' (pilot, 2026-09-23)."""
+    from motion_planning import planner as P
+    from asset.loading import visual_points
+    plan_path = Path(args.sequence_plan)
+    plan = json.loads(plan_path.read_text())
+    inst = json.loads(Path(args.instance).read_text())
+    out = plan_path.with_name(plan_path.name[:-len(".json")] + ".sequence.json")
+    entries = plan.get("goal") or []
+    if not entries or not plan.get("sequenced"):
+        record = {"status": "no_load", "reason": f"{plan['algorithm']} found no complete, sequenceable load"}
+        out.write_text(json.dumps(record, indent=1) + "\n")
+        report.update(result="REROLL", reason=record["reason"])
+        return
+    if args.gate:                        # the load passed the joint Isaac gate: build from its SETTLED poses, like the goal
+        gate = json.loads((Path(args.gate) / "result.json").read_text())
+        if gate.get("outcome") != "accepted":
+            record = {"status": "gate", "reason": f"the load's joint gate was {gate.get('outcome')}: {gate.get('reason')}"}
+            out.write_text(json.dumps(record, indent=1) + "\n")
+            report.update(result="REROLL", reason=record["reason"])
+            return
+        joint = gate["initial_snapshot"]["poses"]
+        targets = {e["id"]: joint[e["id"]] for e in entries}
+        landing, rule = (lambda kind, dist, dev: B.within_goal(kind, dist)), "at-goal tolerance of the jointly settled pose"
+    else:                                # no joint gate: the commanded family poses themselves (a lifted pose drops)
+        frames = {r: inst["initial_snapshot"]["poses"][r] for r in ("LowerRack", "UpperRack")}
+        targets = {e["id"]: P.world_from_local(frames[e["rack"]], {"position_m": e["position"], "quaternion_xyzw": e["quaternion_xyzw"]})
+                   for e in entries}
+        landing, rule = (lambda kind, dist, dev: dev <= DEV_MAX_M), "settle deviation <= DEV_MAX_M of the commanded pose"
+    centroids = B.kind_centroids({kind: visual_points(B.ASSETS / f"{kind}.usda") for kind in B.KINDS})
+    backend = _sequence_scene(args, B, entries, inst["baseline"], args.out / "plans" / "_kit" / plan_path.stem, report)
+    if backend is None:
+        return
+    by_id = {e["id"]: e for e in entries}
+    status, record, bans = build_sequence(backend, B, P, by_id, targets, centroids, landing)
+    record.update(plan=plan_path.name, instance=inst["instance_id"], algorithm=plan["algorithm"], bans=bans,
+                  gate=str(args.gate) if args.gate else None,
+                  landing=f"{rule}, contact depth < 2 mm; no placed dish moved > 10 mm / 20 deg")
+    out.write_text(json.dumps(record, indent=1) + "\n")
+    report.update(result="PASS" if status == "ok" else "REROLL", reason=record["reason"], sequence=str(out))
+
+
+# --------------------------------------------------------------------------- --run
+
+class Timed:
+    """Wall and CPU time of an algorithm's reset (where offline planners plan) plus every next_move; the driver
+    itself times next_move only. CPU = the calling thread's (Kit's own threads run meanwhile)."""
+
+    def __init__(self, algo):
+        self.algo, self.wall, self.cpu, self.reset_wall = algo, 0., 0., 0.
+
+    def _timed(self, fn, *a):
+        w, c = time.perf_counter(), time.thread_time()
+        out = fn(*a)
+        self.wall += time.perf_counter() - w
+        self.cpu += time.thread_time() - c
+        return out
+
+    def reset(self, instance, world):
+        before = self.wall
+        self._timed(self.algo.reset, instance, world)
+        self.reset_wall = self.wall - before
+
+    def next_move(self, obs):
+        return self._timed(self.algo.next_move, obs)
+
+    def stats(self):
+        """The wrapped planner's search statistics (rrt: nodes, samples, extends, replans) reach the record."""
+        return self.algo.stats() if hasattr(self.algo, "stats") else {}
+
+
+class BenchOracle:
+    """Teleport, settle, judge on the IsaacInitialStateBackend scene: rearrange.settle_move's verdicts, thresholds
+    and put-back, except that a displaced neighbour is FATAL only when it ends outside the counter and the racks, or
+    when it was at its goal before the move and ends outside its at-goal tolerance of that goal (2026-10-14; before,
+    any move > 10 mm / 20 deg of an at-goal dish); any other displaced dish (a messy start dish) is a recorded,
+    non-fatal "nudge". Messy rack drops lean on each other, so the Bosch rule (any neighbour > 10 mm / 20 deg is fatal)
+    aborted nearly every episode within 1-6 moves on interactions no algorithm can see (pilot, 2026-09-23). A move to
+    the dish's goal is released at the lowest clear hover above the goal (B.clear_release, 2026-10-14) instead of the
+    commanded goal + GOAL_HOVER_M; with no clear release it is a non-fatal failed settle (nothing moves)."""
+
+    def __init__(self, backend, ids, kinds, world, centroids, goal=None, points=None):
+        self.backend, self.ids, self.kinds, self.world, self.centroids, self.goal = backend, ids, kinds, world, centroids, goal
+        self.points = points
+
+    def _poses(self):
+        from motion_planning import planner as P
+        p = self.backend.poses()
+        return {i: P.pose_T(p[i]) for i in self.ids}
+
+    def poses(self):
+        return self._poses()
+
+    def measured(self, item_id):
+        from motion_planning import planner as P
+        return P.pose_T(self.backend._pose(self.backend.objects[item_id].data.root_pos_w.torch[0],
+                                           self.backend.objects[item_id].data.root_quat_w.torch[0]))
+
+    def teleport(self, item_id, T):
+        from motion_planning import planner as P
+        self.backend.set_rigid_pose(self.backend.objects[item_id], P.pose_dict(T))
+
+    def step(self, n):
+        for _ in range(n):
+            self.backend.tick()
+
+    def at_goal(self, item, T):
+        import arrangement_optimization.frigidaire_bench as B
+        if self.goal is None:
+            return False
+        kind = self.kinds[item["item_id"]]
+        return B.within_goal(kind, B.goal_distance(self.centroids[kind], T, self.goal[item["item_id"]]))
+
+    def _goal0(self, k):
+        """Dish k's settled goal (the world's goal command minus GOAL_HOVER_M)."""
+        import numpy as np
+        import arrangement_optimization.frigidaire_bench as B
+        T = np.asarray(self.world.goal_of[k], dtype=float).copy()
+        T[2, 3] -= B.GOAL_HOVER_M
+        return T
+
+    def _off(self, k, T):
+        import arrangement_optimization.frigidaire_bench as B
+        return B.off_goal(self.kinds[k], self.centroids[self.kinds[k]], T, self._goal0(k))
+
+    def _fatal(self, moved, protected, poses, ingoal=()):
+        """Protected dishes inside their at-goal tolerance before the move (``ingoal``) that end outside it; other
+        protected dishes moved > 10 mm / 20 deg (the old rule); any moved dish outside the counter and the racks."""
+        import arrangement_optimization.frigidaire_bench as B
+        from motion_planning import planner as P
+        snap = self.backend.poses()
+        frames = {r: snap[r] for r in ("LowerRack", "UpperRack")}
+        off = [k for k in sorted(ingoal) if self._off(k, poses[k])]
+        return off + [k for k in moved if k not in off and k not in ingoal and (
+            k in protected or (B.racked_in(self.points[self.kinds[k]], P.pose_dict(poses[k]), frames) is None
+                               and not self.world.in_counter(poses[k])))]
+
+    def _release(self, move):
+        """(release 4x4, hover mm, blockers): a goal move's lowest clear hover above the settled goal; other moves
+        keep their command (hover None)."""
+        import arrangement_optimization.frigidaire_bench as B
+        from motion_planning import planner as P
+        k = move.item_id
+        goal = self.world.goal_of.get(k)
+        if goal is None or P._key(move.T_base_obj) != P._key(goal):
+            return move.T_base_obj, None, []
+        T_goal, kind, now = self._goal0(k), self.kinds[k], self.backend.poses()
+        checker = B.release_checker()
+        close = B.near_poses({i: now[i] for i in self.ids if i != k}, self.kinds, T_goal[:3, 3])
+        dishes = [checker._body(self.kinds[i], pose, i) for i, pose in close.items()]
+        frames = {r: now[r] for r in ("LowerRack", "UpperRack")}
+        rack = B.racked_in(self.points[kind], P.pose_dict(T_goal), frames)
+        up = P.pose_T(now[rack])[:3, 2] if rack else (0., 0., 1.)
+        release, hover, blockers = B.clear_release(checker, [(kind, P.pose_dict(T_goal), k)], dishes,
+                                                   B.appliance_bodies(checker, now), up)
+        if release is None:
+            return None, None, blockers
+        return P.pose_T(release[0]), round(hover * 1e3), []
+
+    def settle(self, move):
+        import numpy as np
+        from motion_planning import rearrange as R
+        protected = {k for k in self.ids if k != move.item_id and self.world.at_own_goal(k)}
+        pre = self._poses()
+        ingoal = {k for k in protected if not self._off(k, pre[k])}    # judged against the goal (2026-10-14)
+        T_release, hover, blockers = self._release(move)
+        if T_release is None:                                       # no clear release: nothing moves, not landed
+            return pre, "failed-settle", {"no_clear_release": True, "blockers": blockers, "hover_mm": None,
+                                          "disturbed": [], "nudged": []}
+        self.teleport(move.item_id, T_release)
+        hist = []
+        for s in range(SETTLE_TICKS):
+            self.step(1)
+            if s >= SETTLE_TICKS - WINDOW_TICKS:
+                hist.append(self.measured(move.item_id))
+        poses = self._poses()
+        drift_p = float(np.linalg.norm(hist[-1][:3, 3] - hist[0][:3, 3]))
+        drift_deg = R.rot_angle_deg(hist[0], hist[-1])
+        dev_p = float(np.linalg.norm(poses[move.item_id][:3, 3] - np.asarray(T_release)[:3, 3]))
+        moved = R.disturbed_items(pre, poses, move.item_id)
+        fatal = self._fatal(moved, protected, poses, ingoal)
+        # the gates' contact-depth limit, per move: a placement that leaves the moved dish wedged > 2 mm into
+        # anything is put back (every finished load failed the end check with 7-9 mm resting depth otherwise)
+        from sampler.random_poses import LIMITS
+        deep = max((d for name, d in self.backend.latest_contact["depths_m"].items() if move.item_id in name.split("|")),
+                   default=0.)
+        info = {"settle_dev_mm": round(dev_p * 1e3, 1), "drift_mm": round(drift_p * 1e3, 1), "contact_mm": round(deep * 1e3, 2),
+                "disturbed": fatal, "nudged": [k for k in moved if k not in fatal], "hover_mm": hover}
+        if fatal:
+            return poses, "disturbed", info
+        if (drift_p > R.STABLE_POS_M or drift_deg > R.STABLE_ROT_DEG or dev_p > DEV_MAX_M
+                or deep >= LIMITS["peak_penetration_m"]):
+            self.teleport(move.item_id, pre[move.item_id])          # the Bosch put-back
+            for _ in range(SETTLE_TICKS):
+                self.step(1)
+            poses = self._poses()
+            back_dp = float(np.linalg.norm(poses[move.item_id][:3, 3] - pre[move.item_id][:3, 3]))
+            back_dr = R.rot_angle_deg(pre[move.item_id], poses[move.item_id])
+            info["teleport_back_mm"] = round(back_dp * 1e3, 1)
+            again = R.disturbed_items(pre, poses, move.item_id)
+            refatal = self._fatal(again, protected, poses, ingoal)
+            info["nudged"] += [k for k in again if k not in refatal and k not in info["nudged"]]
+            if refatal:
+                info["disturbed"] = refatal
+                return poses, "disturbed", info
+            if back_dp > R.INIT_MATCH_POS_M or back_dr > R.INIT_MATCH_ROT_DEG:
+                return poses, "unstable-settle", info
+            return poses, "failed-settle", info
+        return poses, None, info
+
+    def execute(self, move):
+        from motion_planning import planner as P
+        resting = self.world.resting_on(move.item_id)
+        if resting:
+            return self._poses(), "disturbed", {"reason": "support", "resting": resting}
+        poses, fault, info = self.settle(move)
+        if fault != "failed-settle":                            # a put-back dish keeps its previous command
+            self.world.note_command(move.item_id, move.T_base_obj)
+        snap = self.backend.poses()
+        self.world.support = [tuple(e) for e in P.support_edges(self.backend.latest_contact["pairs"], snap, self.ids)]
+        self.world.initial = {k: v.copy() for k, v in poses.items()}
+        info["poses_after"] = {i: P.pose_dict(poses[i]) for i in self.ids}
+        return poses, fault, info
+
+
+def run(args, B, report):
+    import numpy as np
+    from motion_planning import rearrange
+    from motion_planning import planner as P
+    from asset.loading import visual_points
+    from sampler.random_pose_runtime import EXTENSION, RACK_JOINT
+
+    if args.sample:                                           # a sample of code/sampler/scripts/bench.py (the merged benchmark)
+        inst = B.instance_of_sample(json.loads(Path(args.sample).read_text()), Path(args.sample).stem)
+    else:
+        inst = json.loads(Path(args.instance).read_text())
+    iid, tier = inst["instance_id"], inst["tier"]
+    ids = [o["object_id"] for o in inst["objects"]]
+    kinds = {o["object_id"]: o["kind"] for o in inst["objects"]}
+    counter_ids = [o["object_id"] for o in inst["objects"] if o["start"] == "Counter"]
+    points = {kind: visual_points(B.ASSETS / f"{kind}.usda") for kind in B.KINDS}
+    centroids = B.kind_centroids(points)
+    entries = [{"object_id": o["object_id"], "kind": o["kind"], "rack": o.get("rack", "LowerRack"), "pose_world": o["pose_world"]}
+               for o in inst["objects"]]
+    work = args.out / "episodes" / "_kit" / iid
+    backend, rig = make_backend(args, B, entries, work, counter_ids, cameras=args.cameras)
+    stills = Path(args.media) if args.media else ROOT / "data/media/benchmark/frigidaire_hotec/stills" / tier / iid
+    checker = B.bench_checker()
+    baseline = inst["baseline"]
+    start_poses = inst["initial_snapshot"]["poses"]
+    report.update(instance=iid, tier=tier, episodes=[])
+
+    reset_pairs = set()
+
+    def reset():
+        backend.restore(baseline)
+        for _ in range(12):
+            backend.tick()
+        for oid in ids:
+            backend.set_rigid_pose(backend.objects[oid], start_poses[oid])
+        backend.loaded = True
+        backend.assignments = {o["object_id"]: o["rack"] for o in inst["objects"] if o["start"] != "Counter"}
+        reset_pairs.clear()
+        for tick in range(RESET_TICKS):
+            backend.tick()
+            if tick >= RESET_TICKS - 60:                    # contacts flicker: take the union of the last 0.5 s
+                reset_pairs.update(tuple(p) for p in backend.latest_contact["pairs"])
+        now = backend.poses()
+        worst = max(max(pose_distance(start_poses[oid], now[oid])[0] * 1e3, pose_distance(start_poses[oid], now[oid])[1] / 1.5)
+                    for oid in ids)
+        ok = all(pose_distance(start_poses[oid], now[oid])[0] <= .010 and pose_distance(start_poses[oid], now[oid])[1] <= 15. for oid in ids)
+        return ok, round(worst, 2)
+
+    def end_check():
+        """Tub wall on the extended state, then both racks retracted and whole-mesh containment."""
+        now = backend.poses()
+        frames = {r: now[r] for r in ("LowerRack", "UpperRack")}
+        racked = {oid: B.racked_in(points[kinds[oid]], now[oid], frames) for oid in ids}
+        if any(v is None for v in racked.values()):
+            return {"ran": False, "outcome": "not_all_racked", "racked": racked}
+        tub = {oid: B.tub_clear(points[kinds[oid]], *(lambda l: (l["position_m"], l["quaternion_xyzw"]))(
+            P.local_from_world(frames[racked[oid]], now[oid]))) for oid in ids}
+        if not all(tub.values()):
+            return {"ran": True, "outcome": "tub_wall", "racked": racked, "tub_clear": tub}
+        backend.assignments = dict(racked)
+        prepared = [{"object_id": oid, "kind": kinds[oid]} for oid in ids]
+        pre = {oid: now[oid] for oid in ids}
+        tried = []
+        for order in (("UpperRack", "LowerRack"), ("LowerRack", "UpperRack")):
+            rec = {"loaded_rack_motions": []}
+            backend.maximum_penetration_m, backend.peak_event, backend.global_peak_event = 0., None, None  # clean record
+            backend.close_and_contain(rec, order, prepared)
+            deepest = sorted(backend.latest_contact["depths_m"].items(), key=lambda kv: -kv[1])[:3]
+            tried.append({"order": list(order), "outcome": rec.get("outcome"), "reason": rec.get("reason"),
+                          "deepest_contacts_mm": [[name, round(depth * 1e3, 2)] for name, depth in deepest],
+                          "motions": [{key: m.get(key) for key in ("rack", "passed", "reason", "failed_step", "unsupported_object_ids",
+                                                                    "maximum_penetration_m", "peak_measured_rack_speed_m_s")}
+                                      for m in rec.get("loaded_rack_motions", [])]})
+            if rec.get("outcome") != "closure_failure":
+                break
+            backend.ramp({RACK_JOINT[r]: EXTENSION[r] for r in ("LowerRack", "UpperRack")}, "reextend_after_flake")
+            for oid in ids:
+                backend.set_rigid_pose(backend.objects[oid], pre[oid])
+            for _ in range(RESET_TICKS):
+                backend.tick()
+        return {"ran": True, "outcome": rec.get("outcome"), "reason": rec.get("reason"), "orders_tried": tried,
+                "racked": racked, "tub_clear": tub,
+                "containment": {k: v["contained"] for k, v in rec.get("final_containment", {}).items()},
+                "rack_speed_flakes": sum(t["outcome"] == "closure_failure" for t in tried[:-1])}
+
+    ok, worst = reset()
+    report["reset_worst"] = worst
+    still(backend, rig, stills / "initial.png", f"{iid}: initial configuration",
+          f"{len(counter_ids)} dishes on the counter (allowance {inst['counter']['cap']}), {len(ids) - len(counter_ids)} in the racks")
+    goal_world = {oid: g["settled_pose_world"] for oid, g in inst["goal"]["objects"].items()}
+    for oid in ids:
+        backend.set_rigid_pose(backend.objects[oid], goal_world[oid])
+    for _ in range(60):
+        backend.tick()
+    still(backend, rig, stills / "goal.png", f"{iid}: goal (S_ref {inst['goal']['S_ref']:.3f})",
+          f"{inst['goal'].get('method', 'goal')}; {len(inst['goal']['objects'])} dishes")
+    if args.stills:                                         # stills only (the stills stage, code/sampler/stills.py)
+        got = all((stills / f"{k}.png").is_file() for k in ("initial", "goal"))
+        report.update(result="PASS" if got else "FAIL", reason=None if got else "stills not written")
+        return
+    algorithms = {"greedy_offline": rearrange.OfflineGreedy}
+    try:
+        from motion_planning import rrt
+        algorithms["rrt_connect"] = rrt.RRTConnect
+    except Exception as exc:                                   # noqa: BLE001
+        report["rrt_import_error"] = repr(exc)
+    for track, name in EPISODES:
+        if args.algorithms and name not in args.algorithms:
+            continue
+        out = args.out / "episodes" / track / tier / f"{iid}__{name}.json"
+        if out.exists():
+            report["episodes"].append({"track": track, "algorithm": name, "skipped": "exists"})
+            continue
+        ok, worst = reset()
+        if not ok:                                          # a stacked start can land ~10 mm off once; retry once
+            ok, worst = reset()
+        rinst = P.to_rearrange_instance(inst)
+        world = B.make_bench_world(inst, checker)
+        live = backend.poses()                              # the reset's live support (a stack edge can be missing
+        world.support = sorted({tuple(e) for e in inst.get("support", [])} |   # from the one-tick start snapshot)
+                               {tuple(e) for e in P.support_edges(sorted(reset_pairs), live, ids)})
+        world.initial = {oid: P.pose_T(live[oid]) for oid in ids}
+        world.sync(dict(world.initial), dict(kinds))       # the planners' support rule compares _poses with initial
+        for it in rinst.items:                              # run_episode re-syncs the world to T_base_init: make that
+            it["T_base_init"] = world.initial[it["item_id"]].copy()     # the live reset state as well
+        targets = B.goal_targets(inst, world)
+        for it in rinst.items:
+            it["target"] = {"T_base_obj": targets[it["item_id"]]}
+        world.mark_goals(targets, centroids)
+        seed = int(__import__("hashlib").sha256(f"0|{iid}|{name}".encode()).hexdigest()[:8], 16)
+        plan = None
+        if track == "open":
+            plan_path = args.out / "plans" / "open" / tier / f"{iid}__{name}.json"
+            plan = json.loads(plan_path.read_text()) if plan_path.is_file() else \
+                {"certified": False, "certification": {"reason": f"no plan file {plan_path.name}"}, "planning_time_s": None}
+            if not plan.get("certified"):                   # the load never built one dish at a time in Isaac:
+                rec = {"solved": False, "abort": "load-not-buildable", "moves": [], "moves_used": 0,   # the algorithm failed
+                       "reason": plan.get("certification", {}).get("reason"), "planning_time_total_s": plan.get("planning_time_s"),
+                       "planning_cpu_s": plan.get("planning_cpu_s"), "plan_goal": plan.get("goal"), "end_check": {"ran": False, "outcome": "aborted"}}
+                rec.update(track=track, tier=tier, instance=iid, algorithm=name, seed=seed, counter_cap=inst["counter"]["cap"],
+                           S_ref=inst["goal"]["S_ref"], success=False, nudges=0)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(json.dumps(rec, indent=1) + "\n")
+                report["episodes"].append({"track": track, "algorithm": name, "success": False, "abort": rec["abort"]})
+                continue
+            world.goal_order = [tuple(e) for e in plan.get("goal_order", [])]   # the certified build's order
+            algo = B.Replay(plan)
+        elif name == "planner":
+            world.goal_order = [tuple(e) for e in inst["goal"].get("order", [])]
+            algo = B.FixedGoalSequencer()
+        else:
+            world.goal_order = [tuple(e) for e in inst["goal"].get("order", [])]
+            cls = algorithms[name]
+            try:
+                algo = cls(seed=seed)
+            except TypeError:
+                algo = cls()
+        goal_T = {oid: B.goal_targets(inst, world, hover=0.)[oid] for oid in ids} if track == "goal" else None
+        oracle = BenchOracle(backend, ids, kinds, world, centroids, goal_T, points)
+        if not ok:
+            rec = {"solved": False, "abort": "init-mismatch", "reset_worst": worst}
+        else:
+            t0, timed = time.monotonic(), Timed(algo)
+            rec = rearrange.run_episode(rinst, timed, world, oracle, budget=None, algorithm_name=name,
+                                        time_budget_s=60., counter_cap=inst["counter"]["cap"])
+            rec["wall_s"] = time.monotonic() - t0
+            rec["planning_time_total_s"], rec["planning_cpu_s"], rec["planning_reset_s"] = timed.wall, timed.cpu, timed.reset_wall
+        if plan is not None:
+            rec["planning_time_total_s"], rec["planning_cpu_s"] = plan["planning_time_s"], plan.get("planning_cpu_s")
+            rec["plan_goal"], rec["plan_sequenced"] = plan.get("goal"), plan.get("sequenced")
+        final = backend.poses()
+        rec["nudges"] = sum(len(m.get("nudged") or []) for m in rec.get("moves", []))
+        rec["final_poses"] = {oid: final[oid] for oid in ids}
+        rec["final_components"] = {r: final[r] for r in ("LowerRack", "UpperRack", "SilverwareBasket")}
+        rec["still_finished"] = still(backend, rig, stills / f"finished__{track}__{name}.png",
+                                      f"{iid}: finished, {track} track, {name}",
+                                      f"{rec.get('moves_used', 0)} moves, abort {rec.get('abort')}")
+        rec["end_check"] = end_check() if rec.get("abort") in (None, "give-up") else {"ran": False, "outcome": "aborted"}
+        rec.update(track=track, tier=tier, instance=iid, algorithm=name, seed=seed, counter_cap=inst["counter"]["cap"],
+                   S_ref=inst["goal"]["S_ref"])
+        end_ok = rec["end_check"].get("outcome") == "accepted"
+        rec["success"] = bool(rec.get("solved") and end_ok) if track == "goal" else bool(end_ok)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(rec, indent=1, default=lambda o: o.tolist() if hasattr(o, "tolist") else str(o)) + "\n")
+        report["episodes"].append({"track": track, "algorithm": name, "success": rec["success"], "abort": rec.get("abort"),
+                                   "moves": rec.get("moves_used"), "end": rec["end_check"].get("outcome")})
+    report["result"] = "PASS"
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--start", action="store_true")
+    mode.add_argument("--run", action="store_true")
+    mode.add_argument("--stills", action="store_true", help="the initial and goal stills of --sample or --instance, no episode")
+    mode.add_argument("--sequence-plan", type=Path, metavar="PLAN", help="build an open-track plan's own load one dish at a time (needs --instance)")
+    parser.add_argument("--gate", type=Path, metavar="DIR", help="--sequence-plan: the load's joint gate (frigidaire_initial_state_validate.py --out-dir)")
+    parser.add_argument("--count", help="--start: the roster, kind=n,... (code/sampler/initial.py)")
+    parser.add_argument("--n", type=int, help="--start: dishes that start on the counter")
+    parser.add_argument("--cap", type=int, help="--start: the counter cap (n + the allowance)")
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--attempt", type=int, default=0)
+    parser.add_argument("--instance", type=Path, help="--run (an old bench instance) or --sequence-plan: the instance")
+    parser.add_argument("--sample", type=Path, help="--run, --stills: a sample of code/sampler/scripts/bench.py (converted in-process)")
+    parser.add_argument("--media", type=Path, help="--run, --stills: the stills folder (default data/media/benchmark/frigidaire_hotec/stills/<tier>/<id>)")
+    parser.add_argument("--algorithms", nargs="*", default=None)
+    parser.add_argument("--baseline", type=Path, default=ROOT / "data/results/benchmark/frigidaire_hotec/baseline/result.json")
+    parser.add_argument("--out", type=Path, default=ROOT / "data/results/benchmark/frigidaire_hotec")
+    parser.add_argument("--usd", type=Path, default=ROOT / "data/assets/frigidaire_fdpc4221as/usd/fdpc4221as.usdc")
+    parser.add_argument("--max-wall-seconds", type=float, default=7200.)
+    parser.add_argument("--pile-coverage", type=float, default=PILE_COVERAGE, help="summed dish footprint / pile box area")
+    sys.path[:0] = [str(ROOT / "code"), str(ROOT / "code/util")]
+    from dishsim.app import add_args, launch   # Kit-free; boots Kit in the try below
+    add_args(parser)
+    parser.set_defaults(device="cpu", headless=True)
+    args = parser.parse_args()
+    args.cameras = bool(getattr(args, "enable_cameras", False))
+    started = time.monotonic()
+    reroll = bool(args.start or args.sequence_plan)
+    report = {"result": "REROLL" if reroll else "FAIL", "reason": None, "started_utc": datetime.now(timezone.utc).isoformat()}
+    app = None
+    if args.sequence_plan and not args.instance:
+        raise SystemExit("[RESULT] FAIL --sequence-plan needs --instance")
+    if (args.run or args.stills) and not (args.sample or args.instance):
+        raise SystemExit("[RESULT] FAIL --run and --stills need --sample or --instance")
+    if args.start:
+        if not args.count or args.n is None or args.cap is None:
+            raise SystemExit("[RESULT] FAIL --start needs --count, --n and --cap")
+        args.attempt_dir = args.out / "instances" / "attempts" / f"s{args.seed}_a{args.attempt}"
+        if (args.attempt_dir / "start.json").exists():
+            raise SystemExit(f"[RESULT] FAIL refusing to overwrite {args.attempt_dir / 'start.json'}")
+        args.attempt_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        app = launch(args)
+        args.app = app
+        sys.path[:0] = [str(ROOT / "code"), str(ROOT / "code/util"), str(ROOT / "code/sampler/scripts")]
+        import arrangement_optimization.frigidaire_bench as B
+        (start if args.start else sequence_plan if args.sequence_plan else run)(args, B, report)
+    except Exception as exc:                                   # noqa: BLE001
+        traceback.print_exc()
+        report.update(result="REROLL" if reroll else "FAIL", reason=f"exception {exc!r}")
+    finally:
+        report.update(wall_seconds=time.monotonic() - started, finished_utc=datetime.now(timezone.utc).isoformat())
+        target = (args.attempt_dir / "generation.json") if args.start \
+            else args.sequence_plan.with_name(args.sequence_plan.name[:-len(".json")] + ".sequence_report.json") if args.sequence_plan \
+            else (args.out / "episodes" / "_kit" / f"{Path(args.sample or args.instance).stem}.json")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(report, indent=2, default=str) + "\n")
+        print(f"[RESULT] {report['result']} {report.get('reason') or report.get('start', '') or report.get('instance', '')}", flush=True)
+        if app is not None:
+            from dishsim.media import release_sim_for_close
+            release_sim_for_close()
+            app.close()
+
+
+if __name__ == "__main__":
+    main()

@@ -67,7 +67,7 @@ RUN /isaac-sim/python.sh -m pip install --no-cache-dir -r /tmp/requirements-plan
         imageio-ffmpeg==0.6.0 \
     && rm /tmp/requirements-planning.txt
 
-# CP-SAT for the bench's fit (code/src/bench/build.py, plans/2026-11-02-fit-score-prove.md). --no-deps keeps Kit's own
+# CP-SAT for the bench's fit (code/sampler/build.py, plans/2026-11-02-fit-score-prove.md). --no-deps keeps Kit's own
 # numpy (2.3.1) and protobuf: ortools.sat.python.cp_model imports numpy and pandas only (pandas 3.1.0 added when Kit's
 # python lacks it; python-dateutil comes with matplotlib). The live container got the same lines in the 2026-11-02 window.
 RUN /isaac-sim/python.sh -m pip install --no-cache-dir --no-deps ortools==9.15.6755 absl-py==2.5.1 immutabledict==4.3.1 \
