@@ -16,7 +16,9 @@ move-level MCTS) builds its own load, scored S / S_ref. A nudge is counted, and 
 was at its goal or leaves the counter and the racks. Rosters come from explicit flags; their level labels (kinds
 1 / 2 / all, count 1-8 / 9-16 / 17-24, allowance n+3 / n+2 / n+1 = easy / medium / hard) are stored in the sample.
 
-One CLI, `code/planner/bench.py`, runs the stages of `code/src/bench` in order:
+One CLI, `code/sampler/scripts/bench.py`, runs the stages of `code/sampler` in order (since 2026-11-07 code/ is laid out as the
+blocks of docs/repo_map.txt: code/asset, code/sampler with scorer/ and robot/, code/motion_planning, code/arrangement_optimization,
+code/paths, code/optimal_arrangement, plus code/util with the launchers and the `dishsim` Kit core; results/2026-11-07-code-blocks-refactor.md):
 
 1. **Bring-up**: clone the assets into `data/assets` (Commands below), record the empty-machine baseline at the
    flush rack travel (`data/results/benchmark/frigidaire_hotec/baseline/result.json`).
@@ -31,15 +33,23 @@ One CLI, `code/planner/bench.py`, runs the stages of `code/src/bench` in order:
 The Bosch 800 slot pipeline, the ArtVIP twin and the YCB props left the repo on 2026-11-01 (git history; the hub
 folders stay as history). A UR5e + Robotiq 2F-85 hardware-limits study in the Frigidaire twin ran from 2026-10-23 to
 2026-10-30 and is closed; the grasp-and-place rounds of 2026-11-04 (the arm picks each dish of s0 from the counter spot and
-places it, the pads alone holding it) stand at 12 of 15 placed in one run after the fifteen-of-fifteen rounds of 2026-11-04/05 (results/2026-11-05-fifteen-r3.md), see `code/frigidaire/docs/robot.md` and "Validation status".
+places it, the pads alone holding it) stand at 12 of 15 placed in one run after the fifteen-of-fifteen rounds of 2026-11-04/05 (results/2026-11-05-fifteen-r3.md), see `code/sampler/robot/docs/robot.md` and "Validation status".
 
 Runs on Isaac Sim **6.2.0** + Isaac Lab **v3.0.0** (python 3.12) on the Brev box since 2026-11-01, baked into the docker
 image `dishsim-isaac:6.2.0` (results/2026-11-01-stack-upgrade.md); HEAD's Kit code is 3.0-only. The repo is
 bind-mounted at `/workspace/dishsim` inside the long-lived container `dishsim-isaac`. Never upgrade or downgrade Isaac
 Sim / Isaac Lab in place. Everything runs `--headless`; media capture additionally needs `--enable_cameras` (scripts boot
 Kit through `dishsim.app`, which keeps both flags on 3.0). Full environment write-up (canonical launcher landmines):
-`docs/environment.md`. corallab is frozen on Isaac Sim 4.5 + Isaac Lab 2.1 at tag `isaac45-final` with the retired
-Bosch pipeline; nothing of HEAD runs there.
+`docs/environment.md`. the old corallab workstation (the 2 TB drive) is frozen on Isaac Sim 4.5 + Isaac Lab 2.1 at tag
+`isaac45-final` with the retired Bosch pipeline; nothing of HEAD runs there. corallab4 is a different machine (below).
+
+**corallab4** (since 2026-11-07, results/2026-11-07-corallab4-check.md and -bringup.md): the project runs on `ssh corallab4`
+(user shu4; RTX 3090 24 GB on driver 595.99.02, i9-11900KF with 8 cores / 16 threads, siblings j and j+8, 31 GiB, 937 GB NVMe,
+Ubuntu 24.04; no sudo without a password, no tmux, docker.io without the compose or buildx plugins). The repo is at
+`~/isaac-launchable/dishwasher_sim_isaaclab` (pull with `git pull --ff-only origin plan`; commits made there leave through the
+Mac's `corallab4` remote), the caches in `~/dishsim-cache`, the same image `dishsim-isaac:6.2.0` built there in 740 s, and the
+container `dishsim-isaac` was made by the `docker run` recorded in the bring-up note (not compose). At most three Kit workers.
+No billing, no start or stop. The Brev box below is history, kept as a data archive until the user deletes it.
 
 **Brev box** (`dishsim-l4` since 2026-10-22: g6.2xlarge, 1x L4 on driver 595.91.07, AMD EPYC 7R13
 with 4 cores / 8 threads, 30 GiB, 117 GB root disk, per results/2026-10-22-new-box-bringup.md; recipe under
@@ -51,7 +61,7 @@ taskset inside the container; a host taskset only pins the docker CLI): the samp
 2026-10-23 robot rounds 3 Kit processes with core 3 left for Kit-free, GPU or scoring jobs
 (results/2026-10-22-sampler-rate-easy-medium.md, results/2026-10-23-hardware-limits-mouth-up.md). On 6.2
 `--enable_cameras` works (`kit_smoke.py` renders a non-black still; the first RTX boot after a box start compiles
-shaders for about 4 min); the 4.5-era stills came from `code/planner/frigidaire/frigidaire_dot_rules_render.py` (Warp
+shaders for about 4 min); the 4.5-era stills came from `code/sampler/scorer/scripts/frigidaire_dot_rules_render.py` (Warp
 ray tracing of the same meshes). Its `data/assets` is a copy of the HF asset dataset (`hf download`). The container runs
 as root, so files it writes are root-owned: move or delete them via `docker exec dishsim-isaac ...`.
 
@@ -64,42 +74,42 @@ sessions; end each work phase with a summary and a suggested commit message (imp
 Both wrappers are dual-mode: on the host they `docker exec` themselves into `dishsim-isaac`
 (mapping the cwd); inside they exec directly. `run_kit.sh` boots Kit; `run_py.sh` runs
 Kit-free python (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` baked in). There is NO venv in the container (the Mac's Kit-free
-checks use `.venv-kitfree/bin/python` with `PYTHONPATH=code/src`). Run from the project root:
+checks use `.venv-kitfree/bin/python` with `PYTHONPATH=code:code/util`). Run from the project root:
 
 ```bash
 # assets: data/assets is a copy of the HF dataset; hf download restores and updates it
 hf download shu4dev/dishsim-assets --repo-type dataset --local-dir data/assets
 
 # tests (Kit-free)
-code/util/run_py.sh -m pytest code/tests/ code/frigidaire/tests/ -q
+code/util/run_py.sh -m pytest code -q
 
 # the empty-machine baseline at the flush travel (Kit; [RESULT] baseline_ready)
-code/util/run_kit.sh code/initialization/frigidaire/frigidaire_initial_state_validate.py --headless \
+code/util/run_kit.sh code/sampler/scripts/frigidaire_initial_state_validate.py --headless \
     --out-dir data/results/benchmark/frigidaire_hotec/baseline
 
 # the fair score's ceilings on this stack (GPU; theta 30, cells inside the arms' discs), then the ceilings file
-code/util/run_py.sh code/planner/frigidaire/frigidaire_dot_rules_grid.py --kinds plate,bowl,cup --tilts=-60:0:5 \
+code/util/run_py.sh code/sampler/scorer/scripts/frigidaire_dot_rules_grid.py --kinds plate,bowl,cup --tilts=-60:0:5 \
     --spots "<h,d nodes, d <= 20 cm>" --theta 30 --N 262144 --out data/results/dot_rules/ceiling_62/inward
-code/util/run_py.sh code/planner/frigidaire/frigidaire_dot_rules_grid.py --kinds plate,bowl,cup --tilts=0:180:5 \
+code/util/run_py.sh code/sampler/scorer/scripts/frigidaire_dot_rules_grid.py --kinds plate,bowl,cup --tilts=0:180:5 \
     --spots "<the same>" --theta 30 --N 262144 --out data/results/dot_rules/ceiling_62/outward
-PYTHONPATH=code/src python3 -m bench.score --write-ceilings     # -> data/results/dot_rules/ceiling_62/ceilings.json
+PYTHONPATH=code:code/util python3 -m sampler.scorer.score --write-ceilings     # -> data/results/dot_rules/ceiling_62/ceilings.json
 
 # one roster through every stage (inside the container; its Kit stages call run_kit.sh themselves)
-code/util/run_py.sh code/planner/bench.py --kinds bowl --count bowl=7 --counter-allowance 3 --seed 0 --to report \
+code/util/run_py.sh code/sampler/scripts/bench.py --kinds bowl --count bowl=7 --counter-allowance 3 --seed 0 --to report \
     --algorithms greedy_offline,rrt_connect,first_fit,mcts --out data/results/bench/v1
-code/util/run_py.sh code/planner/bench.py --kinds plate,bowl --count plate=8,bowl=7 --counter-allowance 2 --seed 0 --to report --out data/results/bench/v1
-code/util/run_py.sh code/planner/bench.py --kinds plate,bowl,cup --count plate=8,bowl=7,cup=8 --counter-allowance 1 --seed 0 --to report --out data/results/bench/v1
+code/util/run_py.sh code/sampler/scripts/bench.py --kinds plate,bowl --count plate=8,bowl=7 --counter-allowance 2 --seed 0 --to report --out data/results/bench/v1
+code/util/run_py.sh code/sampler/scripts/bench.py --kinds plate,bowl,cup --count plate=8,bowl=7,cup=8 --counter-allowance 1 --seed 0 --to report --out data/results/bench/v1
 
 # rerun stages on a stored sample (poses are stored, never re-derived from the seed)
-code/util/run_py.sh code/planner/bench.py --from run --to report --input data/results/bench/v1/<sample>.json
+code/util/run_py.sh code/sampler/scripts/bench.py --from run --to report --input data/results/bench/v1/<sample>.json
 
 # a sample with its two stills and no episode (--to stills; kept apart in samples/,
 # reused later with --from run --input <sample>.json --out data/results/bench/samples --algorithms <names>)
-code/util/run_py.sh code/planner/bench.py --kinds plate,bowl,cup --count plate=5,bowl=5,cup=5 --counter-allowance 3 --seed 0 --to stills \
+code/util/run_py.sh code/sampler/scripts/bench.py --kinds plate,bowl,cup --count plate=5,bowl=5,cup=5 --counter-allowance 3 --seed 0 --to stills \
     --out data/results/bench/samples
 
 # schema-1 pair files -> samples in place (Mac, Kit-free; the original stays at _work/<sample>/schema1.json)
-PYTHONPATH=code/src python3 -m bench.convert data/results/bench/v3
+PYTHONPATH=code:code/util python3 -m sampler.convert data/results/bench/v3
 ```
 
 Outputs: samples and `index.jsonl` under `data/results/bench/v1/`, the algorithms' results in its `runs/<sample>.json`
@@ -139,8 +149,8 @@ twin's maximal-coordinate world weld, so its pairs with the appliance are filter
 Frigidaire Kit processes can hang in `app.close()` after their `[RESULT]` line, so `bench.run()` kills them 90 s later.
 Pairs are PER-STACK artifacts (PhysX settle fixed points differ between stacks): the 4.5 bench's instances, the 27
 sampler pairs and the Bosch pins are history. The fault knobs are module constants in
-`code/src/dishsim/rearrange.py` and `frigidaire_bench_kit.py` and are widened only against a measurement, never to
-make a run pass. `code/tests/` and `code/frigidaire/tests/` hold the Kit-free tests; the packed-model test
+`code/motion_planning/rearrange.py` and `code/sampler/scripts/frigidaire_bench_kit.py` and are widened only against a measurement, never to
+make a run pass. Each block's `tests/` folder holds its Kit-free tests (`pytest code`); the packed-model test
 `test_r05_00027_access_edges_and_witness` fails since 2026-10-23.
 The robot layer (2026-11-04, results/2026-11-04-s0-rerun.md): the UR5e with the side-mounted 2F-85 (posture_v1, the
 hardware frozen) spawns each dish of s0 at the counter spot (0.20, -0.12), picks it and places it with the pads alone
@@ -178,9 +188,10 @@ or silent import shadowing, not clean errors:
    scene modules, or `pxr`.
 2. **The package is `dishsim`, deliberately not matching the repo directory name** — Kit's
    extension scan turns a same-named directory into a shadowing namespace package. No
-   `dishsim` module imports Kit at module scope. The benchmark package is `bench` (code/src/bench):
-   a script that puts `code/planner` on `sys.path` would shadow it with `code/planner/bench.py`, so
-   that CLI replaces its own folder on `sys.path`.
+   `dishsim` module imports Kit at module scope. Since 2026-11-07 the packages are the block folders under
+   `code/` (asset, sampler, motion_planning, arrangement_optimization, paths, optimal_arrangement) plus `dishsim`
+   in `code/util`; every script puts `code` and `code/util` on `sys.path`, pyproject finds only regular packages
+   (`namespaces = false`), and the CLI `code/sampler/scripts/bench.py` still drops its own folder from `sys.path`.
 3. **Isaac Lab 3.0 API**: the PROJECT convention is XYZW everywhere (configs, caches,
    records) and 3.0 is XYZW too, so the two functions in `dishsim/quats.py` are the identity;
    they still stand at every boundary crossing and no other file reorders a quaternion. `.data` reads end in `.torch`, writes use
@@ -191,7 +202,7 @@ or silent import shadowing, not clean errors:
 
 ## Architecture traps (full tree: docs/architecture.md)
 
-- The sample file is the unit (plans/2026-11-02-sample-schema.md, `code/src/bench/schema/sample.json`): exactly four
+- The sample file is the unit (plans/2026-11-02-sample-schema.md, `code/sampler/schema/sample.json`): exactly four
   blocks. `metadata` holds the params, the ledger, the maker summary, provenance (the `_work` start and build record
   paths, settle, gate, certify and score figures) and media (the two stills); `initial` and `goal` hold {dish: world
   pose} and the rack joints, plus the counter, or the slots and the score; `dag` the certified edges, layers and build
@@ -202,7 +213,7 @@ or silent import shadowing, not clean errors:
   (teleport -> re-settle -> compare) and the unstack, re-rolling failures. Do not "simplify" this to a single settle.
 - `build` packs by CP-SAT (ortools) over the packer's level-0 masks, its collision and two-cycle conflicts cached per family
   digest beside them (the upper bowl family was resampled on 2026-11-02: caches of the old digest are stale), then
-  ascends at N / 16 rays (`bench.build.GAIN_RAY_FRACTION`); `score` scores the chosen load once at N 262144 for S_ref.
+  ascends at N / 16 rays (`sampler.build.GAIN_RAY_FRACTION`); `score` scores the chosen load once at N 262144 for S_ref.
   Both read the ceilings from `data/results/dot_rules/ceiling_62/ceilings.json` (the 6.2 grids); a missing file fails
   the stage, the 4.5 ceilings are never a default.
 - `rearrange.py` is the episode driver, Kit-free by the oracle/world seam. New algorithms: implement
@@ -220,14 +231,14 @@ or silent import shadowing, not clean errors:
 
 A Kit-free ray-cast proxy that ranks arrangements of the SAME objects in the Frigidaire
 FDPC4221AS by how much of their food-contact surface the spray arms can reach; it is not a
-cleaning measurement. Lives in the `code/frigidaire/` package (tracked in git): `exposure.py` (the
-scorer, used by the HOTEC bench and top-5 code) and `code/frigidaire/tests/test_exposure.py` (two of
-its tests run on settled states kept in `code/frigidaire/tests/fixtures/settled_states/`). The v3-era
+cleaning measurement. Lives in `code/sampler/scorer/` (tracked in git): `exposure.py` (the
+scorer, used by the HOTEC bench and top-5 code) and `code/sampler/scorer/tests/test_exposure.py` (two of
+its tests run on settled states kept in `code/sampler/scorer/tests/fixtures/settled_states/`). The v3-era
 demo, summary, search and settled-best scripts, their results, and the organized/packing
 pipelines they read were retired 2026-09-29: code in git history (last at commit 4455813), result
 folders in `dishsim/_trash_20260929/` until 2026-10-29; their numbers ran on the v3 racks and are
-history. Reference and landmines: `code/frigidaire/docs/exposure.md`; quickstart
-`code/frigidaire/docs/exposure_quickstart.md`. Live outputs: `data/results/exposure/frigidaire/{hotec,hotec_heightfix}`
+history. Reference and landmines: `code/sampler/scorer/docs/exposure.md`; quickstart
+`code/sampler/scorer/docs/exposure_quickstart.md`. Live outputs: `data/results/exposure/frigidaire/{hotec,hotec_heightfix}`
 (pre-2026-09-28 racks, history). Trap: Warp kernels must live in a file (never `python -c`).
 
 ## Frigidaire planner helpers (live half of the 2026-09-20 arrangement planner)
@@ -235,13 +246,13 @@ history. Reference and landmines: `code/frigidaire/docs/exposure.md`; quickstart
 The pool-search arrangement planner (ExposurePlanner, FirstFitBaseline, the geometric pool, the
 `frigidaire_planner_{instances,generate,run}.py` scripts, `data/results/planner/frigidaire/`) was retired
 2026-09-29 (code in git history, results in `dishsim/_trash_20260929/` until 2026-10-29); the HOTEC
-bench and the MCTS replaced it. What remains in `code/frigidaire/src/dishsim_frigidaire/planner.py` serves
+bench and the MCTS replaced it. What remains in `code/motion_planning/planner.py` serves
 the bench: the FCL `PlannerWorld` (appliance mirror, counter slab at top 0.914 m, objects), the support
 graph and the greedy sequencer with the counter cap, on the episode driver `rearrange.run_episode`;
-reference `code/frigidaire/docs/planner.md`; `frigidaire_planner_video.py` renders episodes. Two traps:
+reference `code/motion_planning/docs/planner.md`; `frigidaire_planner_video.py` renders episodes. Two traps:
 the backend's rack-speed gate flakes (retry the other rack order), and `code/util/run_py.sh` exports
 Kit's USD extension so `pxr` imports Kit-free (the FCL checker needs it).
-Geometry (2026-09-28): the twin's racks and basket are tape-measured (48/64 tines, 1x4 basket 320 x 95 x 130 with a 220 mm handle; revisions `upper_tines_4x13_v5` / `lower_tines_6x12_v4` / `basket_1x4_320x95_v4` since the 2026-09-28 re-measurement: non-uniform column/row gaps, front/left margins from the tape, rear/right margins the rim's leftover, lower rack 561 deep and 108 tall), claims variant B retired; since 2026-10-21 the twin ships in `data/assets/frigidaire_fdpc4221as/` (`usd/`, `parameters.json`, `components.json`, which the runtime `geometry.py`/`asset.py` read) with the generator, staging, packaging, preview and evidence scripts in its `source/`, and the v3, v4 and v5 builds are not kept (they were only ever in corallab's `data/build/frigidaire_collection/history/`, never in the HF archive; the code that built each is in this repo's git history); reference `code/frigidaire/docs/geometry.md`. Every Isaac result before 2026-09-28 (HOTEC v11-v13, exposure, the whole HOTEC benchmark) is stale on the new racks.
+Geometry (2026-09-28): the twin's racks and basket are tape-measured (48/64 tines, 1x4 basket 320 x 95 x 130 with a 220 mm handle; revisions `upper_tines_4x13_v5` / `lower_tines_6x12_v4` / `basket_1x4_320x95_v4` since the 2026-09-28 re-measurement: non-uniform column/row gaps, front/left margins from the tape, rear/right margins the rim's leftover, lower rack 561 deep and 108 tall), claims variant B retired; since 2026-10-21 the twin ships in `data/assets/frigidaire_fdpc4221as/` (`usd/`, `parameters.json`, `components.json`, which the runtime `geometry.py`/`asset.py` read) with the generator, staging, packaging, preview and evidence scripts in its `source/`, and the v3, v4 and v5 builds are not kept (they were only ever in corallab's `data/build/frigidaire_collection/history/`, never in the HF archive; the code that built each is in this repo's git history); reference `code/asset/docs/geometry.md`. Every Isaac result before 2026-09-28 (HOTEC v11-v13, exposure, the whole HOTEC benchmark) is stale on the new racks.
 
 ## HOTEC wheat-straw dinnerware assets (2026-09-21)
 
@@ -256,9 +267,9 @@ generator never overwrites a folder), the dataset keeping the latest version and
 ones. Brimful capacities are computed to the lowest rim
 point (bowl 764 vs 769 mL advertised; cup 283 vs 355 mL — the envelope cannot hold 12 oz, documented,
 not tuned). Report: `docs/hotec_wheatstraw_asset.md`; the Frigidaire
-load/settle/orbit script is `code/planner/frigidaire/frigidaire_hotec_load.py` (`--layout-only`
+load/settle/orbit script is `code/asset/scripts/frigidaire_hotec_load.py` (`--layout-only`
 first, then Kit). Landmine: the loading helpers assume centre-origin pieces — place by centroid.
-Top-5 exposure loads of all 24 pieces (2026-09-29): `code/planner/frigidaire/frigidaire_hotec_top5.py --all`
+Top-5 exposure loads of all 24 pieces (2026-09-29): `code/sampler/scorer/scripts/frigidaire_hotec_top5.py --all`
 (nesting scored, dishes may touch 0.8 mm, front-bank plates, joint gate with a 5 mm peak); see the report's dated section.
 
 ## HOTEC rearrangement benchmark (2026-09-23, merged 2026-11-01)
@@ -266,9 +277,9 @@ Top-5 exposure loads of all 24 pieces (2026-09-29): `code/planner/frigidaire/fri
 The merged benchmark of "What this is" keeps the 2026-09-23 bench's start generator, fault rule, episodes and track B
 own-load certification (plan -> joint gate -> one-dish-at-a-time build -> resequence) and replaces its goal (the
 coordinate-ascent load, retired with `--goal`, `--finalize`, `--generate` and `--full`) with the score-greedy pair. The
-first-fit planner is `first_fit` (named `baseline` until 2026-11-01). Kit-free library `code/planner/frigidaire/frigidaire_bench.py`
+first-fit planner is `first_fit` (named `baseline` until 2026-11-01). Kit-free library `code/arrangement_optimization/frigidaire_bench.py`
 (`instance_of_sample`, the own-load plans), Kit side `frigidaire_bench_kit.py` (`--start`, `--sequence-plan`, `--run`, `--stills`);
-reference, decisions and landmines of the old bench: `code/frigidaire/docs/hotec_bench.md`; its 4.5 outputs under
+reference, decisions and landmines of the old bench: `code/sampler/docs/hotec_bench.md`; its 4.5 outputs under
 `data/results/benchmark/frigidaire_hotec/` are history (the baseline there is live). Two traps: pass host paths into
 the container only through `rel()` (a `/home/...` path lands in the container's writable layer), and stop jobs by
 PID, never broad `pkill -f` in the shared container.
@@ -288,7 +299,7 @@ under the explorer, added by hand patch; results/2026-10-22-tilt-score-check.md;
 still, goal and S, witness video and graphs, beside r05_00027 and the 70-packing yield;
 results/2026-10-23-one-sample-per-difficulty.md).
 
-- **Fair score** (`code/frigidaire/docs/exposure.md`, beside revision 5): a dish's object-level New+J over its kind's
+- **Fair score** (`code/sampler/scorer/docs/exposure.md`, beside revision 5): a dish's object-level New+J over its kind's
   ceiling under its own arm, clipped at 1, and 0 for a dish that pools (interior more than 2 mm below its rim); a load's
   S is the plain mean over its dishes, "surface reached" the area-weighted mean. Since 2026-10-22 the ceilings are
   computed per arm, never typed: the largest `<kind>_obj` New+J at θ 30° over every grid cell inside the arm's disc and
@@ -297,19 +308,19 @@ results/2026-10-23-one-sample-per-difficulty.md).
   results/2026-10-22-inward-ceilings-and-smokes.md): lower arm (r 0.233 m) plate 0.8758, bowl 0.6012, cup 0.2287;
   middle arm (r 0.191 m) plate 0.8587, bowl 0.5525, cup 0.2099. `frigidaire_dot_rules_relative.py` computes them and
   writes them with S into the saved `.relative.json` files.
-- **Samples and graph** (`frigidaire_dependency_kit.py --sample`, reference `code/frigidaire/docs/dependency.md`): a
+- **Samples and graph** (`frigidaire_dependency_kit.py --sample`, reference `code/sampler/docs/dependency.md`): a
   restricted packing is built one dish at a time by the insertion move (lowered from 20 mm above the rim in 5 mm steps,
   plates upright and 3 mm toward their packed lean's side in the front bank and toward the other side in the rear bank, let go 20 mm above where the rack stops it), in a random order with each plate bank filled from its
   lean side, with re-posing, deferral and the joint gate's 1 mm overlap rule after each drop. Valid = the built poses
   pass the joint gate, the witness order rebuilds all 24 in a fresh Kit process, and every arrow is a physical cause (a
   hard support confirmed by drops, or a covered insertion path).
-- **Rebuild** (Mac, Kit-free): `python3 code/planner/frigidaire/frigidaire_dependency_page.py --records
+- **Rebuild** (Mac, Kit-free): `python3 code/sampler/scripts/frigidaire_dependency_page.py --records
   r05_00027=data/results/dot_rules/dependency/samples_v5/r05_00027.json --clips
   r05_00027=data/media/dot_rules/dependency_samples_v6/r05_00027 --state
   data/logs/dot_rules/samples_v6b/scheduler_state_merged.json --out <dir>` gave Version 13 byte for byte before the
   2026-10-22 rescore (Version 18 adds `--pairs` and the three tier samples: the command is in
   results/2026-10-23-one-sample-per-difficulty.md);
-  `python3 code/planner/frigidaire/frigidaire_dot_rules_page.py --grid-payload data/media/dot_rules/page_v22/index.html
+  `python3 code/sampler/scorer/scripts/frigidaire_dot_rules_page.py --grid-payload data/media/dot_rules/page_v22/index.html
   --figures-dir data/media/dot_rules/page_v22/media --out <dir>` gives Version 23 except the numbers only the box's grid
   holds (header tiles, the rules' cases, the per-dot captions: nan); Versions 24 to 30 are hand patches of that page
   (results/2026-10-22-tilt-score-check.md), Version 30 in `data/media/dot_rules/page_v30/`. On the box
@@ -339,12 +350,12 @@ results/2026-10-23-one-sample-per-difficulty.md).
 ## Research workflow (repo)
 - Files: research/ (lit notes), plans/ (plans), results/ (run notes; the ones written to data/results/ before 2026-10-15 moved here). Templates: research/TEMPLATE.md, plans/TEMPLATE.md.
 - Runners: experiment-runner for experiments, refactorer for structure changes. Invoke with the plan path.
-- How to run things here: plan on the Mac, run on the Brev box (see "Brev box" above). It bills while running: start it only to run, stop it right after.
+- How to run things here: plan on the Mac, run on corallab4 since 2026-11-07 (see "corallab4" above): `ssh corallab4`, `cd ~/isaac-launchable/dishwasher_sim_isaaclab && git pull --ff-only origin plan`, then the same launcher commands as below (steps 1 and 5 do not apply; `taskset -c <j>,<j+8>`). The Brev steps that follow are history.
   - Environment: the `dishsim-isaac` container on the box, which runs what is pushed on `plan` (the user commits and pushes, see the git rule above).
     1. Mac: `brev start dishsim-l4`; wait until `ssh dishsim-l4 true` works (`brev refresh` if the hostname changed).
     2. `ssh dishsim-l4`, then `cd ~/isaac-launchable/dishwasher_sim_isaaclab && git pull --ff-only` (public repo, no credentials).
     3. From the repo root: `code/util/run_kit.sh <script> --headless` (Kit) or `code/util/run_py.sh <script>` (Kit-free); both docker exec into the container. Long or parallel jobs: `setsid nohup docker exec -w /workspace/dishsim -e OMP_NUM_THREADS=2 dishsim-isaac taskset -c <j>,<j+4> nice -n 10 code/util/run_kit.sh ... > data/logs/<area>/<log>.log 2>&1 &`.
     4. Write results/<slug>.md and end with a suggested commit message. The box has no GitHub credentials, so commits made there leave through the Mac: `git pull --ff-only brev plan && git push` (remote `brev` = `dishsim-l4:isaac-launchable/dishwasher_sim_isaaclab`).
     5. Mac: `brev stop dishsim-l4`.
-  - Smoke run, under 2 min: `code/util/run_py.sh -m pytest code/tests/ -q` (Kit-free; with `code/frigidaire/tests/` added it took 64 s on dishsim-l4 on 2026-10-22, 263 passed and 24 subtests, results/2026-10-22-window-sampling-v7-and-section2.md; `kit_smoke.py --enable_cameras` passes there since the 6.2.0 port of 2026-11-01, when pytest gave 264 passed, 24 subtests, 2 failed: test_compat before its re-pin and the packed-model test failing since 2026-10-23).
+  - Smoke run, under 2 min: `code/util/run_py.sh -m pytest code -q` (Kit-free; corallab4 2026-11-07: 246 passed, 1 known failure, 1 skip in 27 s; on dishsim-l4 the two old test folders took 64 s on dishsim-l4 on 2026-10-22, 263 passed and 24 subtests, results/2026-10-22-window-sampling-v7-and-section2.md; `kit_smoke.py --enable_cameras` passes there since the 6.2.0 port of 2026-11-01, when pytest gave 264 passed, 24 subtests, 2 failed: test_compat before its re-pin and the packed-model test failing since 2026-10-23).
   - Data / checkpoints / logs: on the box only, gitignored under data/: outputs `data/results/<area>/`, media and pages `data/media/<area>/`, logs `data/logs/<area>/`.

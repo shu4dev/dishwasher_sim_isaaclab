@@ -1,6 +1,6 @@
 2a · MOTION PLANNING   detail of block 2a in docs/repo_map.txt   state 2026-11-07
 
-┌─ 2a · MOTION PLANNING  (initial state to goal state; code/src/dishsim rearrange.py, rrt.py) ─┐
+┌─ 2a · MOTION PLANNING  (initial state to goal state; motion_planning rearrange.py, rrt.py)  ─┐
 │  ┌──────────────┬───────────────────────────────────────────────────────────────┬──────────┐ │
 │  │ algorithm    │ method                                                        │ track    │ │
 │  ╞══════════════╪═══════════════════════════════════════════════════════════════╪══════════╡ │

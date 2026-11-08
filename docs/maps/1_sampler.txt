@@ -1,6 +1,6 @@
 1 · SAMPLER   detail of block 1 in docs/repo_map.txt   state 2026-11-07
 
-┌─ 1 · SAMPLER  (code/src/bench, stages load ► stills; the Kit stages one process each) ───────┐
+┌─ 1 · SAMPLER  (code/sampler, stages load ► stills; the Kit stages one process each) ─────────┐
 │  ┌──────────────┬───────────────────────────────────────────────────────────────┬──────────┐ │
 │  │ stage        │ what it does                                                  │ runs on  │ │
 │  ╞══════════════╪═══════════════════════════════════════════════════════════════╪══════════╡ │

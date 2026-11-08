@@ -8,7 +8,7 @@ arrows = what feeds what, each labelled with what flows along it; every block's 
 │    │ 0  ASSETS   the scene                                                                │  │
 │    │ what    the dishwasher twin and the dish set that every block loads                  │  │
 │    │ params  machine · dishes                                                             │  │
-│    │ source  data/assets/<folder>/ with its source/ generators; HF shu4dev/dishsim-assets │  │
+│    │ source  code/asset · data/assets/<folder>/ with source/ · HF shu4dev/dishsim-assets  │  │
 │    │ map     docs/maps/0_assets.txt                                                       │  │
 │    └──────────────────────────────────────────┬───────────────────────────────────────────┘  │
 │                                               ▼  USDs + manifests (metres, Z up, XYZW)       │
@@ -17,7 +17,7 @@ arrows = what feeds what, each labelled with what flows along it; every block's 
 │    │ what    a messy start and a valid goal for one roster, with its dependency graph;    │  │
 │    │         every dish of both pickable and placeable by the robot (the hardware gate)   │  │
 │    │ params  kinds · count · seed · hardware (mount) · basket in / out                    │  │
-│    │ source  code/src/bench (hwgate.py) · code/planner/bench.py · frigidaire_bench_kit.py │  │
+│    │ source  code/sampler: hwgate.py · scripts/bench.py · scripts/frigidaire_bench_kit.py │  │
 │    │ map     docs/maps/1_sampler.txt                                                      │  │
 │    │                                                                                      │  │
 │    │   ┌──────────────────────────────────────┐  ┌──────────────────────────────────────┐ │  │
@@ -25,7 +25,7 @@ arrows = what feeds what, each labelled with what flows along it; every block's 
 │    │   │ what   food-contact surface the      │  │ what   the UR5e + 2F-85 picks each   │ │  │
 │    │   │        spray arms reach: S, S_ref    │  │        dish and places it at goal    │ │  │
 │    │   │ params rays · theta · ceilings       │  │ params grasp · mount · release       │ │  │
-│    │   │ source code/frigidaire exposure.py   │  │ source code/execution/frigidaire/    │ │  │
+│    │   │ source sampler/scorer/exposure.py    │  │ source sampler/robot/, its scripts/  │ │  │
 │    │   │ map    docs/maps/1a_scorer.txt       │  │ map    docs/maps/1b_robot.txt        │ │  │
 │    │   └──────────────────────────────────────┘  └──────────────────────────────────────┘ │  │
 │    │                                                                                      │  │
@@ -38,8 +38,8 @@ arrows = what feeds what, each labelled with what flows along it; every block's 
 │    │         to the goal, one teleport move  │  │         start alone, scored S / S_ref   │  │
 │    │         at a time; Isaac settles each   │  │         (RL style: start plus reward)   │  │
 │    │ params  budget · slack · seed           │  │ params  budget · slack · seed           │  │
-│    │ source  dishsim rearrange.py, rrt.py:   │  │ source  frigidaire_bench.py first_fit · │  │
-│    │         greedy_offline · rrt_connect    │  │         dishsim_frigidaire mcts.py      │  │
+│    │ source  motion_planning rearrange, rrt: │  │ source  arrangement_optimization/:      │  │
+│    │         greedy_offline · rrt_connect    │  │         frigidaire_bench.py · mcts.py   │  │
 │    │ map     docs/maps/2a_motion_plan.txt    │  │ map     docs/maps/2b_arrangement.txt    │  │
 │    └────────────────────┬────────────────────┘  └────────────────────┬────────────────────┘  │
 │                         ▼  moves · faults · solved                   ▼  its own load · S     │
@@ -51,9 +51,9 @@ arrows = what feeds what, each labelled with what flows along it; every block's 
 │    │         within budget, moves, faults    │  │         joint gate, scored S / S_ref    │  │
 │    │ params  budget 60 s · fault rule        │  │ params  rays · joint gate · fault rule  │  │
 │    │ where   runs/<sample>.json, video, page │  │ where   runs/<sample>.json, video, page │  │
-│    │ source  code/src/bench episodes.py,     │  │ source  code/src/bench episodes.py,     │  │
-│    │         video.py, report.py ·           │  │         video.py, report.py ·           │  │
-│    │         frigidaire_bench_kit.py --run   │  │         frigidaire_bench_kit.py --run   │  │
+│    │ source  paths/ episodes.py, video.py,   │  │ source  optimal_arrangement/certify.py  │  │
+│    │         report.py · sampler/scripts/    │  │         · paths/ episodes.py, video.py, │  │
+│    │         frigidaire_bench_kit.py --run   │  │         report.py (shared with 3a)      │  │
 │    │ map     docs/maps/3a_paths.txt          │  │ map     docs/maps/3b_optimal_load.txt   │  │
 │    └────────────────────┬────────────────────┘  └────────────────────┬────────────────────┘  │
 │                         ▼  solved · moves ► you                      ▼  S / S_ref ► you      │

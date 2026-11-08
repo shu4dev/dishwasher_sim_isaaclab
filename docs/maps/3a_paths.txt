@@ -1,6 +1,6 @@
 3a · PATHS   detail of block 3a in docs/repo_map.txt   state 2026-11-07
 
-┌─ 3a · PATHS  (what 2a hands back; code/src/bench run ► video ► report; bench.py --from run)  ┐
+┌─ 3a · PATHS  (what 2a hands back; code/paths run ► video ► report; bench.py --from run)  ────┐
 │  ┌──────────────┬───────────────────────────────────────────────────────────────┬──────────┐ │
 │  │ stage        │ what it does                                                  │ runs on  │ │
 │  ╞══════════════╪═══════════════════════════════════════════════════════════════╪══════════╡ │
