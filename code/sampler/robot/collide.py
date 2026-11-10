@@ -31,11 +31,12 @@ def _hull(points):
 
 
 def link_hulls(stage, robot_root="/World/Robot", robot=None):
-    """{link: [(fcl.Convex, vertices)]} in each Isaac link prim's frame; the gripper's hull goes to wrist_3_link.
+    """{link: [(fcl.Convex, vertices)]} in each Isaac link prim's frame; the tool's hull ("gripper") goes to wrist_3_link.
 
-    The gripper hangs off wrist_3 by a PHYSICS joint, so its authored USD transforms do not place it (measured:
-    a hull built from them sat sideways at the flange). With ``robot`` (after ``sim.reset``), each gripper
-    collider is placed by its rigid body's LIVE pose and expressed in the live wrist_3 frame."""
+    The tool (the EPick body epick.author puts at ``{robot_root}/epick``) hangs off wrist_3 by a PHYSICS joint, so its
+    authored USD transforms do not place it (measured on the 2F-85: a hull built from them sat sideways at the flange).
+    With ``robot`` (after ``sim.reset``), each tool collider is placed by its rigid body's LIVE pose and expressed in the
+    live wrist_3 frame."""
     from pxr import Usd, UsdGeom, UsdPhysics
     cache = UsdGeom.XformCache()
     out = {}
@@ -66,15 +67,24 @@ def link_hulls(stage, robot_root="/World/Robot", robot=None):
         return T_of(p, q)
     w3 = live(paths.index(f"{robot_root}/wrist_3_link"))
     grip = []
-    for prim in Usd.PrimRange(stage.GetPrimAtPath(f"{robot_root}/Gripper"), Usd.TraverseInstanceProxies()):
-        if not (prim.HasAPI(UsdPhysics.CollisionAPI) and prim.IsA(UsdGeom.Mesh)):
+    for prim in Usd.PrimRange(stage.GetPrimAtPath(f"{robot_root}/epick"), Usd.TraverseInstanceProxies()):   # epick.author's tool
+        if not prim.HasAPI(UsdPhysics.CollisionAPI):
+            continue
+        if prim.IsA(UsdGeom.Cylinder):                # the EPick body: two 32-gon rings at its end faces (axis Z, centred)
+            cyl = UsdGeom.Cylinder(prim)
+            r, h, a = cyl.GetRadiusAttr().Get(), cyl.GetHeightAttr().Get(), np.linspace(0., 2 * np.pi, 32, endpoint=False)
+            assert cyl.GetAxisAttr().Get() == "Z", f"{prim.GetPath()}: cylinder axis {cyl.GetAxisAttr().Get()}"
+            pts = np.vstack([np.c_[r * np.cos(a), r * np.sin(a), np.full(32, z), np.ones(32)] for z in (-h / 2, h / 2)])
+        elif prim.IsA(UsdGeom.Mesh):
+            pts = pts_of(prim)
+        else:
             continue
         body = prim
         while body and not body.HasAPI(UsdPhysics.RigidBodyAPI):
             body = body.GetParent()
         if not body or str(body.GetPath()) not in paths:
             continue
-        world = live(paths.index(str(body.GetPath()))) @ rel(body, prim) @ pts_of(prim).T
+        world = live(paths.index(str(body.GetPath()))) @ rel(body, prim) @ pts.T
         grip.append((np.linalg.inv(w3) @ world).T[:, :3])
     if grip:                                          # one hull PER collider: a single hull would fill the jaw gap
         out["gripper"] = [_hull(g) for g in grip]
