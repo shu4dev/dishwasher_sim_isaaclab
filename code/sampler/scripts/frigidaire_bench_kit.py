@@ -53,8 +53,7 @@ SEQUENCE_BUILDS, SEQUENCE_NEIGHBOUR_M = 8, .15          # sequence gate: rebuild
                                                         # that does not land goes in after its neighbours (< 15 cm)
 BUILD_TICKS = 120                                       # 1 s settle after each dish while the start is built
 DEV_MAX_M = .08                                         # measured HOTEC drops reach 66.5 mm (the Bosch limit is 0.06)
-LIFT_PROBE_M, LIFT_PROBE_TICKS = .15, 180               # --start-graph lift: 5 mm per 6 ticks (0.1 m/s), 0.83 mm a tick
-                                                        # (a 5 mm jump could pass through a 2.8 mm shell)
+LIFT_PROBE_M, LIFT_PROBE_TICKS = .15, 180               # --start-graph lift: 150 mm in 1.5 s (5 mm per 6 ticks, 0.1 m/s)
 EPISODES = (("goal", "greedy_offline"), ("goal", "rrt_connect"), ("open", "first_fit"), ("open", "mcts"))
 # (the goal-track "planner" row, the fixed-goal sequencer, was dropped 2026-09-28: track A compares the executors;
 # first_fit was named "baseline" until 2026-11-01)
@@ -1217,9 +1216,9 @@ def run(args, B, report):
 def start_graph(args, backend, ids, reset, report):
     """--start-graph (plans/2026-11-10-start-dependency-graph.md): two probes of each start dish b on the reset start, the
     others in place, each judged by the episode's disturbed rule (10 mm / 20 deg). Support: b parked as unstack_rehearsal
-    does, 210 ticks; a displaced dish a gives a -> b support (a rests on b). Lift: b raised straight up 150 mm, its pose
-    rewritten every tick, then held there 210 ticks; a displaced dish that is no support edge gives a -> b access (a sits
-    in b's lift path). Each probe ends with run()'s reset (300 ticks, 10 mm / 15 deg) or the mode fails. The probe table
+    does, 210 ticks; a displaced dish a gives a -> b support (a rests on b). Lift: b driven straight up 150 mm and held
+    there 210 ticks by a velocity command each tick (the velocity that puts it on the schedule, orientation held); a
+    displaced dish that is no support edge gives a -> b access (a sits in b's lift path). Each probe ends with run()'s reset (300 ticks, 10 mm / 15 deg) or the mode fails. The probe table
     goes to _work/<sample>/initial/start_graph.json, its reduction (graph.start_dag) to the sample's initial.dag."""
     from motion_planning.rearrange import DISTURB_POS_M, DISTURB_ROT_DEG
     from sampler import sample as S
@@ -1232,11 +1231,20 @@ def start_graph(args, backend, ids, reset, report):
                 backend.set_rigid_pose(obj, {"position_m": [3. + .4 * k, 2., .3], "quaternion_xyzw": [0., 0., 0., 1.]})
                 for _ in range(SETTLE_TICKS + WINDOW_TICKS):
                     backend.tick()
-            else:
+            else:                                   # driven by velocity: pose writes passed b through a resting dish
+                import torch
+                from scipy.spatial.transform import Rotation
                 x, y, z = pre[b]["position_m"]
+                hold = Rotation.from_quat(pre[b]["quaternion_xyzw"])
                 for t in range(1, LIFT_PROBE_TICKS + SETTLE_TICKS + WINDOW_TICKS + 1):
-                    up = LIFT_PROBE_M * min(t, LIFT_PROBE_TICKS) / LIFT_PROBE_TICKS
-                    backend.set_rigid_pose(obj, {"position_m": [x, y, z + up], "quaternion_xyzw": pre[b]["quaternion_xyzw"]})
+                    now = backend.poses()[b]
+                    goal = (x, y, z + LIFT_PROBE_M * min(t, LIFT_PROBE_TICKS) / LIFT_PROBE_TICKS)
+                    v = [(g - n) / backend.dt for g, n in zip(goal, now["position_m"])]   # on the schedule after this step
+                    v[2] += 9.81 * backend.dt                                            # gravity's share of the step
+                    w = (hold * Rotation.from_quat(now["quaternion_xyzw"]).inv()).as_rotvec() / backend.dt
+                    cmd = [max(-.5, min(.5, c)) for c in v] + [max(-5., min(5., float(c))) for c in w]   # m/s, rad/s caps
+                    obj.write_root_velocity_to_sim_index(root_velocity=torch.tensor([cmd], dtype=torch.float32,
+                                                                                    device=backend.sim.device))
                     backend.tick()
             post = backend.poses()
             for a in ids:
@@ -1250,8 +1258,8 @@ def start_graph(args, backend, ids, reset, report):
                 return
     table = path.parent / "_work" / path.stem / "initial" / "start_graph.json"
     S.dump(table, {"sample": S.rel_root(path), "ids": ids, "rows": rows,
-                   "rule": "displaced: > 10 mm or > 20 deg; support: b parked, 210 ticks; lift: b up 150 mm over 180 ticks, "
-                           "held 210; reset after each probe"})
+                   "rule": "displaced: > 10 mm or > 20 deg; support: b parked, 210 ticks; lift: b driven up 150 mm by velocity "
+                           "over 180 ticks, held 210; reset after each probe"})
     dag = start_dag({"ids": ids, "rows": rows})
     state = json.loads(path.read_text())
     state["initial"]["dag"] = {k: dag[k] for k in ("nodes", "edges", "layers", "order")}
