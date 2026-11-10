@@ -8,13 +8,13 @@ invariants, samples and video frames cover the whole simulated timeline.
   dish prim (plan decision D10: on the prims, the benchmark backend is untouched) and on every robot link, and a
   zero-threshold ``PhysxContactReportAPI`` on the dishes and robot links; ``is_sleeping`` is polled as an invariant.
 - Contacts: PhysX contact REPORTS (``get_contact_report`` per step): every pair TOUCHING (impulse > 0 or separation
-  <= 0; pairs merely inside the contact offset are "near" and ignored), resolved to colliders (pads = the
-  ``fingertips`` colliders; the rest of a finger is a finger side / knuckle), with the normal force (sum over the
-  points of |impulse . normal| / dt), the total |impulse| / dt and the deepest separation. A pair begins at its
-  first touching report and ends after ``CONTACT_GAP_TICKS`` without one (resting contacts flicker).
-- Invariants (auto-fail): arm or palm touching anything (except the mount pairs present at reset), the carried dish
-  touching anything outside pads, counter, racks and its at-close partners (D4), a teleport after reset, a sleeping
-  body, a NaN frame, a joint-limit violation, a pad normal force above 235 N.
+  <= 0; pairs merely inside the contact offset are "near" and ignored), resolved to colliders (the tool = the EPick
+  body and its cup, ``GRIPPER``), with the normal force (sum over the points of |impulse . normal| / dt), the total
+  |impulse| / dt and the deepest separation. A pair begins at its first touching report and ends after
+  ``CONTACT_GAP_TICKS`` without one (resting contacts flicker).
+- Invariants (auto-fail): an arm link touching anything (except the mount pairs present at reset), the carried dish
+  touching anything outside the tool, counter, racks and its at-close partners (D4), a teleport after reset, a
+  sleeping body, a NaN frame, an arm joint-limit violation, a tool normal force above 235 N.
 - Settle: the benchmark per-move settle (150 ticks, drift window of the last 60) lives in the episode; the plan's
   velocity routine (< 1 mm/s and 0.01 rad/s for 1 s, cap 5 s) is ``diag_settle`` (D3: a diagnostic column only).
 - Media: a FIXED camera, 1280x720, one video frame per 8 physics steps (15 fps of simulated time) with the
@@ -27,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
-PAD_FORCE_MAX_N = 235.           # Robotiq 2F-85 maximum grip force (plan Section 3)
+PAD_FORCE_MAX_N = 235.           # the cap on a tool contact's normal force (plan Section 3: the pinch-era hand's maximum grip)
 SAMPLE_EVERY = 6                 # ticks between time-series rows (20 Hz of simulated time)
 FRAME_EVERY = 8                  # ticks between video frames (15 fps of simulated time at 120 Hz)
 SLEEP_CHECK_EVERY = 12           # ticks between is_sleeping polls
@@ -35,13 +35,12 @@ CONTACT_GAP_TICKS = 6            # a pair ends after this many ticks without a r
 TOUCH_FORCE_N = 1e-3             # a reported pair TOUCHES when it carries impulse or its separation is <= 0; PhysX also
                                  # reports pairs that are merely within the contact offset (+1-2 mm, 0 N): those are
                                  # "near" pairs and never count as contacts (measured 2026-09-30, p0_upright3_legacy)
-FINGER_LIMIT_TOL_RAD = .01       # PhysX joint-limit overshoot allowed on the gripper joints
 DIAG_SETTLE = {"v_max_m_s": 1e-3, "w_max_rad_s": .01, "hold_s": 1., "cap_s": 5.}   # plan Phase 0.3 routine
-CARRIED_ALLOWED = ("pad", "counter", "rack", "basket")   # D4 default list; the silverware basket counts as rack
+CARRIED_ALLOWED = ("tool", "counter", "rack", "basket")  # D4 default list; the silverware basket counts as rack
                                                           # furniture (the benchmark's support rule seats it on the
                                                           # lower rack) -- an INTERPRETATION, flagged in the report
 MOUNT_LINKS = ("base_link", "base_link_inertia", "base")                            # may rest on the pedestal
-GRIPPER = "/World/Robot/Gripper/Robotiq_2F_85/"
+GRIPPER = "/World/Robot/epick/"  # the EPick body (epick.author, at /World/Robot/epick in frigidaire_epick_test.py)
 DISHES = "/World/InitialStateDishes/"
 APPLIANCE = "/World/InitialStateDishwasher/"
 INVARIANTS = ("arm_or_palm_contact", "carried_contact", "teleport_after_reset", "sleeping_body", "nan_frame",
@@ -60,22 +59,16 @@ def is_touch(force_N, sep_m):
 
 
 def classify(path, roots=("/World/Robot",)):
-    """(label, category) of a collider or rigid-body path. Categories: pad, finger, palm, arm, dish, rack, basket,
-    appliance, counter, pedestal, ground, other. Robot labels carry a "<root name>:" prefix unless the root is the
+    """(label, category) of a collider or rigid-body path. Categories: tool (the EPick body and its cup), arm, dish, rack,
+    basket, appliance, counter, pedestal, ground, other. Robot labels carry a "<root name>:" prefix unless the root is the
     episode's /World/Robot."""
     p = str(path)
     for root in roots:
         if p == root or p.startswith(root + "/"):
             tag = "" if root == "/World/Robot" else root.rsplit("/", 1)[-1] + ":"
             rest = p[len(root) + 1:]
-            if rest.startswith("Gripper/Robotiq_2F_85/"):
-                body = rest[len("Gripper/Robotiq_2F_85/"):].split("/")[0]
-                if body == "base_link":
-                    return tag + "palm", "palm"
-                side = "L" if body.startswith("left") else "R" if body.startswith("right") else "?"
-                if "inner_finger" in body and "fingertips" in p:
-                    return f"{tag}pad_{side}", "pad"
-                return tag + body, "finger"
+            if rest.split("/")[0] == "epick":                 # the EPick's root, body and cup (epick.author)
+                return tag + "epick", "tool"
             return tag + (rest.split("/")[0] or "root"), "arm"
     if p.startswith(DISHES):
         return p.split("/")[3], "dish"
@@ -132,7 +125,7 @@ def deinstance(stage, root):
 
 
 class ContactMonitor:
-    """Per-step PhysX contact reports -> active pairs, per-pad normal force, begin/end events."""
+    """Per-step PhysX contact reports -> active pairs, the tool's normal force, begin/end events."""
 
     def __init__(self, dt, roots=("/World/Robot",)):
         from omni.physx import get_physx_simulation_interface
@@ -144,9 +137,9 @@ class ContactMonitor:
         self._labels = {}
         self.active = {}          # key -> {"since": tick, "last": tick, "peak_N": f, "cats": (c0, c1), "colliders": set}
         self.step_pairs = {}      # key -> force of the latest step
-        self.pad_N = {"pad_L": 0., "pad_R": 0.}
-        self.pad_F = {"pad_L": 0., "pad_R": 0.}
-        self.pad_peak = {"pad_L": 0., "pad_R": 0.}
+        self.pad_N = {}           # tool label -> normal force of the latest step
+        self.pad_F = {}
+        self.pad_peak = {}
         self.step_total = {}
         self.counts = {"FOUND": 0, "PERSIST": 0, "LOST": 0, "headers": 0, "points": 0, "near": 0}
 
@@ -198,7 +191,7 @@ class ContactMonitor:
             row["colliders"].update((x[2].rsplit("/", 1)[-1], y[2].rsplit("/", 1)[-1]))
             row.setdefault("paths", set()).update((x[2], y[2]))      # full collider paths (the knuckle-contact dump)
             for lab in (a, b):
-                if lab[1] == "pad":
+                if lab[1] == "tool":
                     pads[lab[0]] = pads.get(lab[0], 0.) + normal
                     pads_total[lab[0]] = pads_total.get(lab[0], 0.) + force
         begun, ended = [], []
@@ -247,9 +240,6 @@ class Harness:
         self.arm_limits = np.asarray(joint_limits_arm, dtype=float)
         names = list(robot.joint_names)
         self.names = names
-        self.gripper_joints = [i for i, n in enumerate(names) if i not in self.arm]
-        lim = getattr(robot.data, "joint_pos_limits", None)
-        self.all_limits = None if lim is None else lim[0].detach().cpu().numpy().astype(float)
         self.stage_id = omni.usd.get_context().get_stage_id()
         self.sim_iface = get_physx_simulation_interface()
         self.sleep_bodies = [(oid, PhysicsSchemaTools.sdfPathToInt(DISHES + oid)) for oid in self.ids]
@@ -263,7 +253,7 @@ class Harness:
         self.tick_counts = {}             # name -> ticks in violation
         self.abort_on = bool(flags.invariants_abort)
         self.aborted = False
-        self.pad_max_interval = {"pad_L": 0., "pad_R": 0.}
+        self.pad_max_interval = {}
         self.last_frames = None
         self.tick0 = backend.tick_index
         self.robot_update = True
@@ -365,11 +355,6 @@ class Harness:
         if bad:
             self.violate("joint_limit", {"arm": {self.names[self.arm[i]]: round(float(qa[i]), 4) for i in bad},
                                          "limits": "UR description (kin.JOINT_LIMITS)"})
-        if self.all_limits is not None:
-            gbad = {self.names[i]: round(float(q[i]), 4) for i in self.gripper_joints
-                    if q[i] < self.all_limits[i, 0] - FINGER_LIMIT_TOL_RAD or q[i] > self.all_limits[i, 1] + FINGER_LIMIT_TOL_RAD}
-            if gbad:
-                self.violate("joint_limit", {"gripper": gbad, "limits": "PhysX joint limits + 0.01 rad"})
         for pad, f in self.contacts.pad_N.items():
             if f > PAD_FORCE_MAX_N:
                 self.violate("pad_force", {"pad": pad, "normal_N": round(f, 1), "max_N": PAD_FORCE_MAX_N}, sig=pad)
@@ -377,8 +362,8 @@ class Harness:
             if act["last"] != tick:
                 continue
             cats = act["cats"]
-            if ("arm" in cats or "palm" in cats) and key not in self.mount_pairs:
-                if all(c in ("arm", "palm", "pad", "finger") for c in cats):          # robot self-pairs are off
+            if "arm" in cats and key not in self.mount_pairs:
+                if all(c in ("arm", "tool") for c in cats):                           # robot self-pairs are off
                     continue
                 if "pedestal" in cats and any(lab in MOUNT_LINKS for lab in key):    # the base standing on its column
                     continue
@@ -423,7 +408,6 @@ class Harness:
         row = {"t_trial_s": round(self.trial_time(), 4),
                "q": [round(float(v), 5) for v in q[self.arm]], "q_cmd": [round(float(v), 5) for v in qt[self.arm]],
                "lag": [round(float(v), 5) for v in (q[self.arm] - qt[self.arm])],
-               "fingers": {self.names[i]: round(float(q[i]), 5) for i in self.gripper_joints},
                "pad_N": {k: round(v, 3) for k, v in self.contacts.pad_N.items()},
                "pad_F": {k: round(v, 3) for k, v in self.contacts.pad_F.items()},
                "pad_N_max": {k: round(v, 3) for k, v in self.pad_max_interval.items()},
@@ -432,7 +416,7 @@ class Harness:
                           for oid in self.ids if oid in frames},
                "racks": {k: round(v, 5) for k, v in self.backend.joints().items()},
                "n_contacts": len(self.contacts.active)}
-        self.pad_max_interval = {"pad_L": 0., "pad_R": 0.}
+        self.pad_max_interval = {}
         self.tlog.write("sample", **row)
 
     # ------------------------------------------------------------------ settle routines

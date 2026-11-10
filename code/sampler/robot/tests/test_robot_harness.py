@@ -12,14 +12,12 @@ from pathlib import Path
 sys.path[:0] = [str(Path(__file__).resolve().parents[4] / "code"), str(Path(__file__).resolve().parents[4] / "code/util")]
 from sampler.robot import harness as H, triallog as TL  # noqa: E402
 
-G = "/World/Robot/Gripper/Robotiq_2F_85/"
+G = "/World/Robot/epick/"          # the EPick's root as frigidaire_epick_test.py passes it to epick.author
 
 
 def test_classify_robot_parts_and_scene_bodies():
-    assert H.classify(G + "left_inner_finger/visuals/Defeatured_2F_85_PAD_OPEN_fingertipsstep_01/Defeatured_2F_85_PAD_OPEN_fingertipsstep") == ("pad_L", "pad")
-    assert H.classify(G + "right_inner_finger/visuals/Defeatured_2F_85_PAD_OPEN_finger4step_01/Defeatured_2F_85_PAD_OPEN_finger4step") == ("right_inner_finger", "finger")
-    assert H.classify(G + "left_inner_knuckle/visuals/x/y") == ("left_inner_knuckle", "finger")
-    assert H.classify(G + "base_link/visuals/x/y") == ("palm", "palm")
+    assert H.classify(G + "body") == ("epick", "tool")      # epick.author's body cylinder (the collider)
+    assert H.classify(G + "cup") == ("epick", "tool")       # and its visual cup
     assert H.classify("/World/Robot/wrist_3_link/collisions/wrist3/mesh") == ("wrist_3_link", "arm")
     assert H.classify("/World/Robot/base_link") == ("base_link", "arm")
     assert H.classify("/World/InitialStateDishes/bowl_03/Collisions/Shell_007") == ("bowl_03", "dish")
@@ -29,9 +27,8 @@ def test_classify_robot_parts_and_scene_bodies():
     assert H.classify("/World/Counter/geometry/mesh") == ("Counter", "counter")
     assert H.classify("/World/Pedestal") == ("Pedestal", "pedestal")
     assert H.classify("/World/Ground/geometry") == ("Ground", "ground")
-    # a second robot root gets a prefix (the conventions script runs two robots)
-    assert H.classify("/World/RobotB/Gripper/Robotiq_2F_85/right_inner_finger/visuals/a_fingertipsstep_01/a_fingertipsstep",
-                      roots=("/World/RobotA", "/World/RobotB")) == ("RobotB:pad_R", "pad")
+    # a second robot root gets a prefix
+    assert H.classify("/World/RobotB/epick/body", roots=("/World/RobotA", "/World/RobotB")) == ("RobotB:epick", "tool")
 
 
 def test_touching_rule_excludes_contact_offset_proximity():
@@ -43,8 +40,8 @@ def test_touching_rule_excludes_contact_offset_proximity():
 
 
 def test_carried_allowed_list_is_the_plan_default_plus_the_basket_interpretation():
-    assert set(H.CARRIED_ALLOWED) == {"pad", "counter", "rack", "basket"}
-    assert "finger" not in H.CARRIED_ALLOWED and "palm" not in H.CARRIED_ALLOWED and "arm" not in H.CARRIED_ALLOWED
+    assert set(H.CARRIED_ALLOWED) == {"tool", "counter", "rack", "basket"}
+    assert "arm" not in H.CARRIED_ALLOWED
     assert H.PAD_FORCE_MAX_N == 235.
     assert set(H.INVARIANTS) == {"arm_or_palm_contact", "carried_contact", "teleport_after_reset", "sleeping_body",
                                  "nan_frame", "joint_limit", "pad_force"}

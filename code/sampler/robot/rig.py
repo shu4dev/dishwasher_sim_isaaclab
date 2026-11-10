@@ -1,20 +1,19 @@
-"""Kit-side UR5e + 2F-85 controller: joint moves, straight TCP lines (analytic IK), gripper, pick and place.
+"""Kit-side UR5e controller: joint moves and straight TCP lines (analytic IK), the TCP at the EPick's cup tip by default.
 
 Created AFTER Kit boots (imports torch / Isaac Lab objects passed in). Position control: every physics step
-writes the arm joint targets of the current waypoint and the gripper targets (inner fingers mimic-consistent).
-A move aborts (returns False) when the arm lags its target by more than ``LAG_MAX_RAD`` (a collision stops it)
-or IK loses branch continuity. No weld, no attachment: a dish is held only by the pads.
+writes the arm joint targets of the current waypoint. A move aborts (returns False) when the arm lags its target by
+more than ``LAG_MAX_RAD`` (a collision stops it) or IK loses branch continuity. The EPick's surface gripper is driven
+by the caller (frigidaire_epick_test.py), not by the rig.
 """
 from __future__ import annotations
 
 import numpy as np
 
-from . import kin, ur5e
+from . import epick, kin, ur5e
 
 LAG_MAX_RAD = .15            # measured-vs-commanded arm lag that counts as blocked (with velocity feed-forward)
 SETTLED_LAG_RAD = .03        # lag left 20 steps after the last waypoint: something holds the arm
 IK_JUMP_MAX_RAD = .6         # joint jump between consecutive line waypoints (branch continuity)
-CLOSE_STEPS, OPEN_STEPS = 90, 60
 # plans/2026-10-27-posture-fix.md: IK solutions come wrapped to (-180, 180] deg; a joint is unwrapped toward the seed only
 # while it stays inside +-190 deg (the elbow +-180), so no joint winds past a turn (round 6 wound wrist 1 to -353 deg)
 POSTURE_LIMITS = np.radians([[-190., 190.], [-190., 190.], [-180., 180.], [-190., 190.], [-190., 190.], [-190., 190.]])
@@ -52,26 +51,23 @@ def orthonormal(T):
 
 
 class Rig:
-    def __init__(self, sim, robot, T_world_base, on_step=None, grip_close=.8, physics_step=None,
+    def __init__(self, sim, robot, T_world_base, on_step=None, physics_step=None,
                  lag_max=LAG_MAX_RAD, settled_lag=SETTLED_LAG_RAD, update_robot=True, on_teleport=None, T_w3_tcp=None):
         """``lag_max`` / ``settled_lag``: the blocked-motion limits (run flags R7/D8; the defaults are the pre-R7
         values). ``update_robot=False`` when ``physics_step`` already refreshes the articulation's buffers (the
         episode's harness tick). ``on_teleport(what)`` is called before every state write (the teleport guard).
-        ``T_w3_tcp``: the TCP in wrist_3_link's frame (default the 2F-85's; epick.T_W3_TIP moves the cup tip). An arm
-        without ``finger_joint`` (the bare 6.2 arm) gets no finger targets."""
+        ``T_w3_tcp``: the TCP in wrist_3_link's frame (default epick.T_W3_TIP, the cup tip)."""
         import torch
         self.torch, self.sim, self.robot = torch, sim, robot
         self.T_wb = np.asarray(T_world_base, dtype=float)
         self.T_bw = np.linalg.inv(self.T_wb)
-        self.T_w3_tcp = T_of(ur5e.T_WRIST3_TCP_POS, ur5e.T_WRIST3_TCP_QUAT_XYZW) if T_w3_tcp is None else np.asarray(T_w3_tcp, dtype=float)
+        self.T_w3_tcp = np.asarray(epick.T_W3_TIP if T_w3_tcp is None else T_w3_tcp, dtype=float)
         self.names, self.bodies = list(robot.joint_names), list(robot.body_names)
         self.arm = [self.names.index(j) for j in ur5e.ARM_JOINTS]
-        self.fj = self.names.index("finger_joint") if "finger_joint" in self.names else None
         self.w3 = self.bodies.index("wrist_3_link")
         self.target = robot.data.default_joint_pos.torch.clone()
         self.on_step = on_step or (lambda: None)
         self.physics_step = physics_step or (lambda: sim.step())   # e.g. the Frigidaire backend's tick()
-        self.grip_close, self.theta = grip_close, 0.
         self.lag_max, self.settled_lag = float(lag_max), float(settled_lag)
         self.update_robot = update_robot
         self.on_teleport = on_teleport
@@ -86,8 +82,6 @@ class Rig:
 
     def step(self, n=1):
         for _ in range(n):
-            if self.fj is not None:
-                ur5e.set_gripper(self.target, self.names, self.theta)
             self.robot.actuators.target_command.set_position_index(value=self.target)
             self.robot.write_data_to_sim()
             self.physics_step()
@@ -207,31 +201,3 @@ class Rig:
     def move_line(self, T_to, n=60):
         qs = self.line_q(self.tcp(), T_to, n, self.q())
         return qs is not None and self.follow(qs)
-
-    def set_grip_drive(self, stiffness, damping):
-        """finger_joint's PhysX drive gains at runtime (plans/2026-11-04-fifteen-of-fifteen.md, flags R2 per hold): Isaac Lab
-        3.0's implicit-actuator gains are articulation-owned, so the whole joint_stiffness / joint_damping rows are read, only
-        finger_joint's entry changed, and written back (write_joint_stiffness_to_sim_index / write_joint_damping_to_sim_index,
-        as asset.twin.apply_mode does) only where the value differs; the effort limit stays the spawn's
-        (ur5e.robot_cfg). Returns {before, after: [stiffness, damping] read back, written: the gains written}."""
-        def read():
-            return [float(self.robot.data.joint_stiffness.torch[0, self.fj]), float(self.robot.data.joint_damping.torch[0, self.fj])]
-        before, written = read(), []
-        for name, val, cur in (("stiffness", stiffness, before[0]), ("damping", damping, before[1])):
-            if abs(cur - float(val)) > 1e-6 * max(1., abs(float(val))):
-                row = getattr(self.robot.data, f"joint_{name}").torch.clone()
-                row[0, self.fj] = float(val)
-                getattr(self.robot, f"write_joint_{name}_to_sim_index")(**{name: row})
-                written.append(name)
-        return {"before": before, "after": read(), "written": written}
-
-    def gripper(self, closed, to=None):
-        """Ramp finger_joint's target to the close (``grip_close``) or the open, then 30 steps; returns finger_joint's measured
-        position. ``to`` (an open only; plans/2026-11-04-fifteen-of-fifteen.md, the partial open): the open's finger_joint target
-        (rad, 0 = the full open; None = the full open)."""
-        a, b = self.theta, (self.grip_close if closed else (0. if to is None else float(to)))
-        for s in np.linspace(a, b, CLOSE_STEPS if closed else OPEN_STEPS):
-            self.theta = float(s)
-            self.step(1)
-        self.step(30)
-        return float(self.robot.data.joint_pos.torch[0, self.fj])

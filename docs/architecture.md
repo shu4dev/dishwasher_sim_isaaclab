@@ -40,9 +40,9 @@ dishwasher_sim_isaaclab/
 │   ├── scorer/                       [1a SCORER (sampler.scorer): exposure.py, dot_rules.py,
 │   │                                  score.py (the fair score, S_ref, the 6.2 ceilings file);
 │   │                                  scripts/ the ceiling grids, dot rules, HOTEC exposure, top-5]
-│   ├── robot/                        [1b ROBOT (sampler.robot): the UR5e + Robotiq 2F-85 bring-up
-│   │                                  and robot episode, scripts/ (hardware-limits study closed
-│   │                                  2026-10-30)]
+│   ├── robot/                        [1b ROBOT (sampler.robot): the native 6.2 UR5e with an EPick
+│   │                                  suction body since 2026-11-09 (the pinch layer in git at
+│   │                                  9f700e1), scripts/ the EPick test, arm model and replay]
 │   └── tests/, docs/                 [the bench package, initial-state and random-pose tests;
 │                                      hotec_bench.md, dependency.md, history/]
 │

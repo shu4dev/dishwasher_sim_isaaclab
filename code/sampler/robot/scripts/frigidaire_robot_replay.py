@@ -44,6 +44,151 @@ MATERIAL_RGB = {"Stainless": (.57, .60, .63), "TubPlastic": (.55, .58, .59), "Bl
 DOOR_OPEN = ((0., -.27425, .19125), (np.sqrt(.5), 0., 0., np.sqrt(.5)))
 STILL_LOOK = {"bg": (.20, .20, .21), "ground": (52 / 255, 52 / 255, 53 / 255)}
 
+# ---------------------------------------------------------------------------- moved from robot/grasp.py
+# grasp.py's pull_counter, tilted_grasps and hover_along with what they need, moved here verbatim when the pinch layer
+# was deleted (plans/2026-11-09-delete-pinch-layer.md; grasp.py is in git at 9f700e1 on plan), so the old pinch rows
+# still replay. Poses are world 4x4 of the TCP (x, y = closing axis, z = approach).
+RIM_R, WALL, HEIGHT = .074, .0035, .075          # HOTEC bowl (data/assets/hotec_wheatstraw/parameters.json)
+FOOT_R, FOOT_W = .035, .005
+RIM_INSERT_M = .025                              # rim top above the TCP
+FOOT_INSERT_M = .006                             # ring top above the TCP
+SIDE_INSET_M, SIDE_DROP_M = .008, .016           # pads 8 mm inside the rim edge, pad height centred on the rim point
+# mouth-up rim pinch per HOTEC kind: (rim radius, wall, height, rim top above the TCP); parameters.json nominal/estimated
+# values (2026-10-23 limits round). Plate: the TCP 10 mm under the rim top so the fingertips stay ~24 mm above the counter.
+KIND_RIM = {"bowl": (RIM_R, WALL, HEIGHT, RIM_INSERT_M), "cup": (.0711 / 2, .0025, .1049, .025),
+            "plate": (.2286 / 2, .0035, .040, .010)}
+# mouth-down foot-ring clamp per kind: (ring radius, ring width); plate = parameters.json foot_diameter_m / foot_width_m
+KIND_FOOT = {"bowl": (FOOT_R, FOOT_W), "plate": (.14 / 2, .006)}
+UPRIGHT, INVERTED = .7, -.7                      # bowl axis z component thresholds
+AXIS_EPS = 1e-6                                  # a direction shorter than this is degenerate (plan Phase 0.5)
+
+
+def unit(v, what="axis"):
+    """``v`` normalised; raises ValueError when it is not finite or degenerate (never divides by ~0: a NaN closing
+    axis from two coincident points was one of the previous session's process errors)."""
+    v = np.asarray(v, dtype=float)
+    n = float(np.linalg.norm(v))
+    if not np.isfinite(v).all() or not np.isfinite(n) or n < AXIS_EPS:
+        raise ValueError(f"degenerate {what}: {v.tolist()} (norm {n:.3g})")
+    return v / n
+
+
+def tcp_frame(p, closing):
+    """TCP pose at ``p`` approaching straight down with the closing axis ``closing`` (made horizontal)."""
+    y = unit([closing[0], closing[1], 0.], "closing axis (horizontal part)")
+    z = np.array([0., 0., -1.])
+    x = np.cross(y, z)
+    T = np.eye(4)
+    T[:3, 0], T[:3, 1], T[:3, 2], T[:3, 3] = x, y, z, p
+    return T
+
+
+def bowl_class(T_obj):
+    a = np.asarray(T_obj)[:3, 2]
+    return "rim" if a[2] > UPRIGHT else "foot" if a[2] < INVERTED else "side"
+
+
+def bowl_grasps(T_obj, n_yaw=12, dish="bowl"):
+    """Candidate grasps [{"kind", "T_tcp", "yaw"}] for a bowl whose base-centred origin pose is ``T_obj``; ``dish``
+    cup/plate = the same mouth-up rim pinch with that kind's KIND_RIM (upright only)."""
+    T_obj = np.asarray(T_obj, dtype=float)
+    if not np.isfinite(T_obj).all():
+        raise ValueError("non-finite bowl pose")
+    o, a = T_obj[:3, 3], T_obj[:3, 2]
+    unit(a, "bowl axis")                         # validated only: the values stay bit-identical to the PASS run
+    kind = bowl_class(T_obj)
+    if dish != "bowl" and kind != "rim" and not (dish == "plate" and kind == "foot"):
+        raise ValueError(f"{dish}: only the mouth-up rim pinch exists (got {kind})")
+    rim_r, wall, height, insert = KIND_RIM[dish]
+    out = []
+    if kind in ("rim", "foot"):
+        # a direction perpendicular to the axis to start the yaw sweep
+        e1 = unit(np.cross(a, [1., 0., 0.]) if abs(a[0]) < .9 else np.cross(a, [0., 1., 0.]), "yaw-sweep start")
+        e2 = np.cross(a, e1)
+        for k in range(n_yaw):
+            phi = 2 * np.pi * k / n_yaw
+            n = np.cos(phi) * e1 + np.sin(phi) * e2                  # radial direction in the ring plane
+            if kind == "rim":
+                c = o + height * a
+                p = c + (rim_r - wall / 2) * n
+                top = p[2]
+                p = np.array([p[0], p[1], top - insert])
+            else:
+                p = o + (KIND_FOOT[dish][0] - KIND_FOOT[dish][1] / 2) * n   # the ring top is the base plane (mouth down)
+                p = np.array([p[0], p[1], o[2] - FOOT_INSERT_M])
+            if np.linalg.norm(n[:2]) < .5:                           # the wall is not vertical enough here
+                continue
+            out.append({"kind": kind, "T_tcp": tcp_frame(p, n), "yaw": float(phi)})
+    else:
+        c = o + HEIGHT * a
+        side = unit(np.cross(a, [0., 0., 1.]), "side-grasp direction (bowl axis must not be vertical)")
+        for s in (1., -1.):
+            p = c + s * (RIM_R - WALL / 2) * side - SIDE_INSET_M * a
+            p = np.array([p[0], p[1], p[2] - SIDE_DROP_M])
+            out.append({"kind": kind, "T_tcp": tcp_frame(p, s * side), "yaw": float(s)})
+    return out
+
+
+# ---------------------------------------------------------------------------- tilted approaches under the counter
+# The pulled-out lower rack's rear ~12 cm lies under the 0.914 m counter's front edge (y = -0.30): a straight-down
+# gripper there hits the slab (easy_s0 bowl_01 at y -0.291, goals at -0.289 / -0.306). Tilting the approach toward
+# the front (-y) reaches under the overhang; the gripper body is checked against the slab as a capsule.
+COUNTER_BOX = ((-.90, .90), (-.30, .30), (.874, .914))
+COUNTER_FRONT_Y = -.17                            # robot runs since 2026-10-27 (plans/2026-10-27-cup-side-drop.md)
+
+
+def pull_counter(B, front_y=COUNTER_FRONT_Y):
+    """The counter slab's front edge (the robot side) moved to ``front_y``, its back edge and top kept, in the bench module
+    ``B`` (B.COUNTER: the Kit slab, the FCL slab, the counter band) and in COUNTER_BOX; frigidaire_bench.py keeps -0.30."""
+    global COUNTER_BOX
+    (x0, x1), (_, y1), zs = COUNTER_BOX
+    COUNTER_BOX = ((x0, x1), (front_y, y1), zs)
+    (cx, cy, cz), (sx, sy, sz) = B.COUNTER["center_m"], B.COUNTER["size_m"]
+    back = cy + sy / 2
+    B.COUNTER = {**B.COUNTER, "size_m": (sx, back - front_y, sz), "center_m": (cx, (back + front_y) / 2, cz)}
+    return B.COUNTER
+TILTS_DEG = (0., 15., 25., 35.)
+GRIPPER_RADIUS_M, GRIPPER_LENGTH_M = .09, .30     # the 2F-85 + wrist behind the TCP (open fingers reach +-65 mm), as a capsule
+
+
+def tilt(T_tcp, deg):
+    """Rotate the TCP frame about the grasp point so the approach leans toward -y (the gripper body moves to -y)."""
+    b = np.radians(deg)
+    R = np.array([[1, 0, 0], [0, np.cos(b), -np.sin(b)], [0, np.sin(b), np.cos(b)]])   # about world +x
+    T = np.array(T_tcp, dtype=float, copy=True)
+    T[:3, :3] = R @ T[:3, :3]
+    return T
+
+
+def hover_along(T_tcp, d=.10):
+    """Back off along the approach axis (TCP -z), where the arm comes from."""
+    H = np.array(T_tcp, dtype=float, copy=True)
+    H[:3, 3] -= d * H[:3, 2]
+    return H
+
+
+def hits_counter(T_tcp, box=None, radius=GRIPPER_RADIUS_M, length=GRIPPER_LENGTH_M, above_to=1.3):
+    """Gripper capsule (TCP back along -approach) or the vertical transit line above its hover vs the slab."""
+    box = COUNTER_BOX if box is None else box                                 # pull_counter's edge
+    lo = np.array([box[0][0] - radius, box[1][0] - radius, box[2][0] - .01])
+    hi = np.array([box[0][1] + radius, box[1][1] + radius, box[2][1] + .01])   # sideways by the radius, 1 cm on top
+    pts = [T_tcp[:3, 3] - s * T_tcp[:3, 2] for s in np.linspace(.04, length, 12)]   # behind the fingertips
+    h = hover_along(T_tcp)[:3, 3]
+    pts += [np.array([h[0], h[1], z]) for z in np.linspace(h[2], above_to, 12)]
+    return any(np.all(p > lo) and np.all(p < hi) for p in pts)
+
+
+def tilted_grasps(T_obj, n_yaw=12, dish="bowl"):
+    """``bowl_grasps`` with the least tilt that keeps the gripper and its transit line off the counter slab."""
+    out = []
+    for g in bowl_grasps(T_obj, n_yaw, dish):
+        for deg in TILTS_DEG:
+            T = tilt(g["T_tcp"], deg)
+            if not hits_counter(T):
+                out.append({**g, "T_tcp": T, "tilt_deg": deg})
+                break
+    return out
+
 
 def quat_wxyz_R(q):
     w, x, y, z = q
@@ -285,8 +430,7 @@ def drop_load(a):
         raise SystemExit(f"[RESULT] FAIL {L}: no variant {var} trajectory in {a.load_dir}/dishes.jsonl")
     fy = rows[trajs[0]].get("counter_front_y")
     if fy is not None:                                             # the run's counter edge (the D rows: -0.30, unrecorded)
-        from sampler.robot import grasp as G
-        G.pull_counter(B, fy)
+        pull_counter(B, fy)
     body_tris, grip = robot_tris((ROOT / rows[trajs[0]]["traj"]).parent / "robot_meshes.json")
     home = np.load(ROOT / rows[trajs[0]]["traj"])                  # sample 0: the arm at home
     dish_local = np.concatenate(E.dish_visuals(f"hotec_{kind}"))
@@ -418,7 +562,6 @@ def pose_still(kind, site_name, target, yaw, out, label):
     sys.path.insert(0, str(ROOT / "code/sampler/robot/scripts"))
     import frigidaire_robot_reach as RC
     from sampler.scorer import exposure as E
-    from sampler.robot import grasp as G
     from sampler.robot.rig import T_of
     B = RD.B
     wp.init()
@@ -428,12 +571,12 @@ def pose_still(kind, site_name, target, yaw, out, label):
     site = next(x for x in reach["sites"][kind] if x["site"] == site_name)
     arm = W.arms[site["rack"]]
     T_o = RC.counter_obj()
-    g = G.tilted_grasps(T_o, RC.N_YAW, kind)[yaw]
+    g = tilted_grasps(T_o, RC.N_YAW, kind)[yaw]
     M = np.linalg.inv(g["T_tcp"]) @ T_o
     pose = site["world"][target]
     T_rel = T_of(pose["position_m"], pose["quaternion_xyzw"]) @ np.linalg.inv(M)
     T_rel[2, 3] += RC.RELEASE_ABOVE_M
-    T_pp = G.hover_along(T_rel, RC.HOVER_M)
+    T_pp = hover_along(T_rel, RC.HOVER_M)
     qs = W.kr.ik_all(T_pp, W.seed)
     if not qs:
         raise SystemExit(f"no IK at the pre-place of {kind} {site_name} yaw {yaw}")
@@ -530,8 +673,7 @@ def main():
     d = np.load(a.traj)
     body_tris, grip = robot_tris(a.traj.parent / "robot_meshes.json")
     if "counter_front_y" in d.files:                   # samples_v1 trajectories carry the run's counter edge and pedestal
-        from sampler.robot import grasp as G
-        G.pull_counter(B, float(d["counter_front_y"]))
+        pull_counter(B, float(d["counter_front_y"]))
     base = statics(d["lower"][0], d["upper"][0], mount=[float(v) for v in d["mount"]] if "mount" in d.files else None,
                    twin=a.load is not None)
     for fx in (d["fixtures"] if "fixtures" in d.files else ()):   # the plate presentation's backstop (center, size, axes)

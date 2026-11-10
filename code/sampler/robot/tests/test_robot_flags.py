@@ -39,8 +39,7 @@ def test_legacy_profile_freezes_the_upright3_pass_values():
     assert lg.place_down_contact_lag == .05
     # R1: rose > 5 cm and within 20 cm of the TCP after 90 ticks
     assert (lg.hold_gate, lg.legacy_rise_min_m, lg.legacy_near_tcp_m, lg.in_hand_settle_ticks) == ("legacy_rise", .05, .20, 90)
-    # R2 and the geometry of the PASS run
-    assert (lg.gripper_effort, lg.gripper_stiffness) == (8., 400.)
+    # the geometry of the PASS run
     assert lg.jaw_wall_rad == (.45, .795)
     assert (lg.z_safe_m, lg.hover_m, lg.release_above_m) == (1.25, .10, .006)
     assert lg.mount == "data/results/robot/mount/easy_s0_any.json"          # D17

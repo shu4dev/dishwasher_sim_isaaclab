@@ -1,7 +1,8 @@
-"""FCL model of the UR5e + 2F-85 for collision-aware IK choice and joint planning in the Frigidaire scene.
+"""FCL model of the UR5e and its tool for collision-aware IK choice and joint planning in the Frigidaire scene.
 
 Built inside the Kit process from the SPAWNED stage: each arm link's collision meshes (convex hull per mesh, in
-the Isaac link frame) and one hull of the whole open gripper (in wrist_3_link's frame). The fixed offsets between
+the Isaac link frame) and the tool's hulls under the "gripper" key (in wrist_3_link's frame; since 2026-11-09
+frigidaire_arm_model.py writes the EPick body there). The fixed offsets between
 the Isaac link frames and the analytic kinematics' frames (``kin.fk_all_links``) are calibrated once from the
 simulator at a known joint state, so FK alone places the geometry afterwards (no simulator in the loop).
 Checked against: the appliance components of an ``InitialCollisionChecker`` (tub, door, racks, basket at their

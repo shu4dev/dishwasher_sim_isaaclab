@@ -1,5 +1,34 @@
 # UR5e + Robotiq 2F-85 in the Frigidaire twin (bring-up 2026-09-29; hardware-limits study closed 2026-10-30)
 
+## The pinch layer retired, the EPick in its place (2026-11-09)
+
+Plans: plans/2026-11-09-native-ur5e-epick.md (Plan A, run note results/2026-11-09-native-ur5e-epick.md) and
+plans/2026-11-09-delete-pinch-layer.md (Plan B, results/2026-11-09-delete-pinch-layer.md). The rest of this page, from
+"Goal (user)" on, is the history of the pinch layer (the parallel-jaw hand). The files it names that are gone (grasp.py,
+the pinch gates and probes, the robot episode, the reach, mount and site sweeps, the access order, the placing loads,
+the report pages, the conventions test and its fixture) are in git at 9f700e1 on plan, the last commit with the pinch
+layer; the asset-mirror script went earlier, in Plan A's 0172d16.
+
+- Hardware: the native Isaac Sim 6.2 UR5e, streamed from NVIDIA's asset root (`ur5e.UR5E_USD`, ETag
+  "65086b45ae6bcb7ec269e092de811645"; the bare arm, arm actuators only), with an EPick-sized body coaxial on the flange
+  (`epick.py`: a 102.3 mm cylinder of 44 mm radius at 788 g carrying one 40 mm cup, the cup an Isaac surface-gripper
+  attachment with limits of 100 N coaxial and 30 N shear; the cup tip is `epick.T_W3_TIP`).
+- Plan A (corallab4, one Kit process, `[RESULT] PASS`): the 20 joint poses match `kin.fk_wrist3` within 0.0006 mm and
+  0.0001 deg, and the wrist_3 offset calibrated at HOME_Q is 0.0003 mm and 0 deg. The plate face up, the bowl and the
+  cup mouth down each attached on the first close, rose 100 mm, drifted at most 0.122 mm over the 5 s hold and came
+  back down within 0.421 mm; the peak forces were at most 1.012 N coaxial and 0.065 N shear.
+- Landmine: Isaac Lab 3.0 builds no PhysX scene-query structure unless `SimulationCfg(enable_scene_query_support=True)`
+  (PhysxCfg's field of the same name is overwritten by it). Without it every raycast finds nothing, the surface
+  gripper's included, and the gripper stays in Closing. The 6.2 asset also starts at its authored zero pose, not at
+  init_state (the EPick test teleports to HOME_Q before it calibrates).
+- Code now: `ur5e.py` (the bare arm's cfg), `epick.py`, `kin.py`, `collide.py` (the tool hull still under the
+  "gripper" key), `rig.py` (arm moves; the TCP defaults to the cup tip), `harness.py` (one `tool` category for the
+  EPick body and its cup, arm joints only), `flags.py` (without the grip-drive fields), `triallog.py`; the scripts are
+  listed in code/sampler/robot/README.md.
+- Open: the suction episode and its gate, built from the EPick test's cycle, the rig and the harness. Until then
+  `code/sampler/hwgate.py` stops at the deleted `frigidaire_access_order.py`, and `frigidaire_drop_curve.py`,
+  `frigidaire_tines_test.py` and the replay's `--still` stop at their imports of deleted scripts.
+
 Goal (user): execute an instance's moves with a real arm instead of teleports; test case easy_s0 (greedy plan).
 Decisions: pure friction grasp (no weld); pedestal mount chosen by a reachability search; upper rack pushed in
 while the lower rack is loaded (the extended upper rack covers the lower rack: no gap); one re-grasp per move.
