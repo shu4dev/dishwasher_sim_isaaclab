@@ -83,6 +83,24 @@
           "type": "object",
           "required": ["size_m", "center_m", "top_z_m", "start_count", "cap", "stacks"],
           "properties": {"stacks": {"type": "array"}}
+        },
+        "dag": {
+          "type": ["object", "null"],
+          "description": "Optional: the start's removal order in the dag shape (plans/2026-11-10-start-dependency-graph.md, frigidaire_bench_kit.py --start-graph). a -> b = a is moved before b: support when parking b displaced a (a rests on b), access when lifting b straight up displaced a; measured in Isaac on the stored start, the transitive reduction of the probe table in _work/<sample>/initial/start_graph.json.",
+          "required": ["nodes", "edges", "layers", "order"],
+          "properties": {
+            "nodes": {"type": "array", "items": {"type": "string"}},
+            "edges": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["a", "b", "kind"],
+                "properties": {"a": {"type": "string"}, "b": {"type": "string"}, "kind": {"type": "string", "enum": ["support", "access"]}}
+              }
+            },
+            "layers": {"type": "object"},
+            "order": {"type": "array", "items": {"type": "string"}}
+          }
         }
       }
     },

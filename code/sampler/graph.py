@@ -2,7 +2,8 @@
 
 Support edges come from the certify run's confirmation drops (Kit, frigidaire_dependency_kit.py --certify), access
 edges from its path check; this module only draws the graph from them (read from the build record in _work) and writes
-the sample's dag block. Standard library only.
+the sample's dag block. start_dag draws the start's graph (initial.dag) from the Isaac probes of
+frigidaire_bench_kit.py --start-graph. Standard library only.
 """
 
 
@@ -60,3 +61,32 @@ def stage_graph(state, params):
     state["dag"] = dag_of(graph, order)
     prov["certify"]["counts"] = graph["counts"]
     return state, "PASS", f"{graph['counts']}"
+
+
+def start_dag(table):
+    """The start's dag (plans/2026-11-10-start-dependency-graph.md) from the probe table of frigidaire_bench_kit.py
+    --start-graph ({ids, rows: {probe support | lift, b, a, displaced}}): a -> b (a is moved before b) support when parking
+    b displaced a, access when lifting b displaced a and parking b did not. A pair with arcs both ways loses both
+    (conflicts, as in physical_graph); the edges are the transitive reduction, so a three-dish stack reads as a two-edge
+    chain; layers as physical_graph's (0 = nothing has to move first); order by layer, then the table's dish order.
+    Returns nodes, edges {a, b, kind}, layers, order (the dag shape) and conflicts. Raises ValueError on a longer cycle."""
+    nodes, hit = list(table["ids"]), {}
+    for r in table["rows"]:
+        if r["displaced"] and hit.get((r["a"], r["b"])) != "support":
+            hit[(r["a"], r["b"])] = "support" if r["probe"] == "support" else "access"
+    conflicts = sorted({tuple(sorted(p)) for p in hit if p[::-1] in hit})
+    arcs = {p: kind for p, kind in hit.items() if tuple(sorted(p)) not in conflicts}
+    after = {i: {b for a, b in arcs if a == i} for i in nodes}
+    for m in nodes:                                          # Warshall: after[i] = every dish reachable from i
+        for i in nodes:
+            if m in after[i]:
+                after[i] |= after[m]
+    if any(i in after[i] for i in nodes):
+        raise ValueError(f"cycle among {sorted(i for i in nodes if i in after[i])}")
+    edges = [{"a": a, "b": b, "kind": kind} for (a, b), kind in sorted(arcs.items())
+             if not any(b in after[c] for c in after[a] if c != b)]
+    layer = {}
+    for i in sorted(nodes, key=lambda i: sum(i in after[j] for j in nodes)):   # fewer ancestors first: topological
+        layer[i] = 1 + max((layer[e["a"]] for e in edges if e["b"] == i), default=-1)
+    return {"nodes": nodes, "edges": edges, "layers": {i: layer[i] for i in nodes},
+            "order": sorted(nodes, key=lambda i: (layer[i], nodes.index(i))), "conflicts": [list(c) for c in conflicts]}

@@ -20,6 +20,10 @@ when --enable_cameras is set.
 --stills: the initial and goal stills of --sample (or --instance) only, no episode (code/sampler/stills.py); PASS when
 both PNGs exist.
 
+--start-graph <sample.json>: the start's dependency graph, measured (start_graph; plans/2026-11-10-start-dependency-graph.md):
+two probes per dish on the reset start, the probe table to _work/<sample>/initial/start_graph.json, its transitive
+reduction to the sample's initial.dag with a graph ledger entry.
+
     code/util/run_kit.sh code/sampler/scripts/frigidaire_bench_kit.py --start --count bowl=7 --n 3 --cap 6 --seed 0 --attempt 0 --headless
     code/util/run_kit.sh code/sampler/scripts/frigidaire_bench_kit.py --run --sample <sample.json> --out <dir> --headless --enable_cameras
 """
@@ -49,6 +53,8 @@ SEQUENCE_BUILDS, SEQUENCE_NEIGHBOUR_M = 8, .15          # sequence gate: rebuild
                                                         # that does not land goes in after its neighbours (< 15 cm)
 BUILD_TICKS = 120                                       # 1 s settle after each dish while the start is built
 DEV_MAX_M = .08                                         # measured HOTEC drops reach 66.5 mm (the Bosch limit is 0.06)
+LIFT_PROBE_M, LIFT_PROBE_TICKS = .15, 180               # --start-graph lift: 5 mm per 6 ticks (0.1 m/s), 0.83 mm a tick
+                                                        # (a 5 mm jump could pass through a 2.8 mm shell)
 EPISODES = (("goal", "greedy_offline"), ("goal", "rrt_connect"), ("open", "first_fit"), ("open", "mcts"))
 # (the goal-track "planner" row, the fixed-goal sequencer, was dropped 2026-09-28: track A compares the executors;
 # first_fit was named "baseline" until 2026-11-01)
@@ -1100,6 +1106,12 @@ def run(args, B, report):
 
     ok, worst = reset()
     report["reset_worst"] = worst
+    if args.start_graph:
+        if ok:
+            start_graph(args, backend, ids, reset, report)
+        else:
+            report.update(result="FAIL", reason=f"the stored start does not reproduce (worst {worst})")
+        return
     still(backend, rig, stills / "initial.png", f"{iid}: initial configuration",
           f"{len(counter_ids)} dishes on the counter (allowance {inst['counter']['cap']}), {len(ids) - len(counter_ids)} in the racks")
     goal_world = {oid: g["settled_pose_world"] for oid, g in inst["goal"]["objects"].items()}
@@ -1202,6 +1214,56 @@ def run(args, B, report):
     report["result"] = "PASS"
 
 
+def start_graph(args, backend, ids, reset, report):
+    """--start-graph (plans/2026-11-10-start-dependency-graph.md): two probes of each start dish b on the reset start, the
+    others in place, each judged by the episode's disturbed rule (10 mm / 20 deg). Support: b parked as unstack_rehearsal
+    does, 210 ticks; a displaced dish a gives a -> b support (a rests on b). Lift: b raised straight up 150 mm, its pose
+    rewritten every tick, then held there 210 ticks; a displaced dish that is no support edge gives a -> b access (a sits
+    in b's lift path). Each probe ends with run()'s reset (300 ticks, 10 mm / 15 deg) or the mode fails. The probe table
+    goes to _work/<sample>/initial/start_graph.json, its reduction (graph.start_dag) to the sample's initial.dag."""
+    from motion_planning.rearrange import DISTURB_POS_M, DISTURB_ROT_DEG
+    from sampler import sample as S
+    from sampler.graph import start_dag
+    path, rows = Path(args.start_graph), []
+    for k, b in enumerate(ids):
+        for probe in ("support", "lift"):
+            pre, obj = backend.poses(), backend.objects[b]
+            if probe == "support":
+                backend.set_rigid_pose(obj, {"position_m": [3. + .4 * k, 2., .3], "quaternion_xyzw": [0., 0., 0., 1.]})
+                for _ in range(SETTLE_TICKS + WINDOW_TICKS):
+                    backend.tick()
+            else:
+                x, y, z = pre[b]["position_m"]
+                for t in range(1, LIFT_PROBE_TICKS + SETTLE_TICKS + WINDOW_TICKS + 1):
+                    up = LIFT_PROBE_M * min(t, LIFT_PROBE_TICKS) / LIFT_PROBE_TICKS
+                    backend.set_rigid_pose(obj, {"position_m": [x, y, z + up], "quaternion_xyzw": pre[b]["quaternion_xyzw"]})
+                    backend.tick()
+            post = backend.poses()
+            for a in ids:
+                if a != b:
+                    dp, dr = pose_distance(pre[a], post[a])
+                    rows.append({"probe": probe, "b": b, "a": a, "mm": round(dp * 1e3, 1), "deg": round(dr, 1),
+                                 "displaced": dp > DISTURB_POS_M or dr > DISTURB_ROT_DEG})
+            ok, worst = reset()
+            if not ok:
+                report.update(result="FAIL", reason=f"the start did not reproduce after the {probe} probe of {b} (worst {worst})")
+                return
+    table = path.parent / "_work" / path.stem / "initial" / "start_graph.json"
+    S.dump(table, {"sample": S.rel_root(path), "ids": ids, "rows": rows,
+                   "rule": "displaced: > 10 mm or > 20 deg; support: b parked, 210 ticks; lift: b up 150 mm over 180 ticks, "
+                           "held 210; reset after each probe"})
+    dag = start_dag({"ids": ids, "rows": rows})
+    state = json.loads(path.read_text())
+    state["initial"]["dag"] = {k: dag[k] for k in ("nodes", "edges", "layers", "order")}
+    kinds = [e["kind"] for e in dag["edges"]]
+    note = (f"start graph: {kinds.count('support')} support, {kinds.count('access')} access edges, conflicts "
+            f"{dag['conflicts']}; probe table {S.rel_root(table)}")
+    state["metadata"]["stages"].append({"stage": "graph", "params": {"dag": "initial"}, "code_sha": S.code_sha(),
+                                        "utc": S.utc(), "result": "PASS", "note": note})
+    S.write(path, state)
+    report.update(result="PASS", reason=note)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -1209,6 +1271,7 @@ def main():
     mode.add_argument("--run", action="store_true")
     mode.add_argument("--stills", action="store_true", help="the initial and goal stills of --sample or --instance, no episode")
     mode.add_argument("--sequence-plan", type=Path, metavar="PLAN", help="build an open-track plan's own load one dish at a time (needs --instance)")
+    mode.add_argument("--start-graph", type=Path, metavar="SAMPLE", help="a scored sample's start dependency graph, measured, into its initial.dag")
     parser.add_argument("--gate", type=Path, metavar="DIR", help="--sequence-plan: the load's joint gate (frigidaire_initial_state_validate.py --out-dir)")
     parser.add_argument("--count", help="--start: the roster, kind=n,... (code/sampler/initial.py)")
     parser.add_argument("--n", type=int, help="--start: dishes that start on the counter")
@@ -1234,6 +1297,8 @@ def main():
     reroll = bool(args.start or args.sequence_plan)
     report = {"result": "REROLL" if reroll else "FAIL", "reason": None, "started_utc": datetime.now(timezone.utc).isoformat()}
     app = None
+    if args.start_graph:                                       # run()'s reset of the stored start, then start_graph()
+        args.sample = args.start_graph
     if args.sequence_plan and not args.instance:
         raise SystemExit("[RESULT] FAIL --sequence-plan needs --instance")
     if (args.run or args.stills) and not (args.sample or args.instance):
