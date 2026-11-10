@@ -4,7 +4,8 @@ A generic body of the Robotiq EPick's size, coaxial on the flange (no CAD): a so
 1.5-bellows cup, the cup modelled as one Isaac surface-gripper attachment point (a D6 joint with every DOF locked:
 rigid this round). The flange is wrist_3_link's origin with +z out of the flange (kin.fk_wrist3's frame; the 6.0
 asset calibrated to it with X = identity), so the body frame is the flange frame and the cup tip sits TIP_M along +z.
-The cup is visual only: the attachment ray starts at the tip, and only the body's cylinder collides.
+The cup is visual only: the attachment frame sits CLEARANCE_M inside the cup tip and the ray clears that much (the
+extension's own examples author a non-zero clearance), and only the body's cylinder collides.
 Kit-side helpers import pxr / Isaac Lab lazily (boot-first).
 """
 from __future__ import annotations
@@ -22,7 +23,8 @@ T_W3_TIP[2, 3] = TIP_M
 MAX_GRIP_DISTANCE_M = .010
 COAXIAL_FORCE_LIMIT_N = 100.  # one 40 mm cup at 80 % vacuum (schema units: N per attachment point)
 SHEAR_FORCE_LIMIT_N = 30.     # the same cup at mu 0.3
-RETRY_INTERVAL_S = .150       # tries for the manual's grip time
+RETRY_INTERVAL_S = 1.         # how long a close keeps casting (gripper_grasp.py's value); the cycle still waits 150 ms
+CLEARANCE_M = .001            # the attachment frame's offset inside the cup tip, cleared by the ray
 GRIP_S, RELEASE_S = .150, .180  # the manual's grip and release times, no blow-off
 
 
@@ -73,9 +75,9 @@ def author(stage, w3_path, root):
     attach = UsdPhysics.Joint.Define(stage, f"{root}/attach")
     attach.CreateBody0Rel().SetTargets([root])
     attach.CreateBody1Rel().SetTargets([w3_path])
-    attach.CreateLocalPos0Attr().Set(Gf.Vec3f(0., 0., TIP_M))
+    attach.CreateLocalPos0Attr().Set(Gf.Vec3f(0., 0., TIP_M - CLEARANCE_M))
     attach.CreateLocalRot0Attr().Set(Gf.Quatf(1., 0., 0., 0.))
-    attach.CreateLocalPos1Attr().Set(Gf.Vec3f(0., 0., TIP_M))
+    attach.CreateLocalPos1Attr().Set(Gf.Vec3f(0., 0., TIP_M - CLEARANCE_M))
     attach.CreateLocalRot1Attr().Set(Gf.Quatf(1., 0., 0., 0.))
     attach.CreateExcludeFromArticulationAttr().Set(True)
     prim = attach.GetPrim()
@@ -84,10 +86,14 @@ def author(stage, w3_path, root):
         lim.CreateLowAttr().Set(1.)
         lim.CreateHighAttr().Set(-1.)
     robot_schema.ApplyAttachmentPointAPI(prim)
-    for attr, val in ((robot_schema.Attributes.FORWARD_AXIS, "Z"), (robot_schema.Attributes.CLEARANCE_OFFSET, 0.)):
+    for attr, val in ((robot_schema.Attributes.FORWARD_AXIS, "Z"), (robot_schema.Attributes.CLEARANCE_OFFSET, CLEARANCE_M)):
         prim.CreateAttribute(attr.name, attr.type).Set(val)
     sg = robot_schema.CreateSurfaceGripper(stage, f"{root}/SurfaceGripper")
     sg.GetRelationship(robot_schema.Relations.ATTACHMENT_POINTS.name).SetTargets([prim.GetPath()])
+    A = robot_schema.Attributes                             # authored before play too, whatever reads them first
+    for attr, val in ((A.MAX_GRIP_DISTANCE, MAX_GRIP_DISTANCE_M), (A.COAXIAL_FORCE_LIMIT, COAXIAL_FORCE_LIMIT_N),
+                      (A.SHEAR_FORCE_LIMIT, SHEAR_FORCE_LIMIT_N), (A.RETRY_INTERVAL, RETRY_INTERVAL_S)):
+        sg.CreateAttribute(attr.name, attr.type).Set(val)
     return str(sg.GetPath())
 
 

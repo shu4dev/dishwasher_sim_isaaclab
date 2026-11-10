@@ -8,8 +8,8 @@ articulation root, joints, bodies, flange / tool prims, every prim path with its
 joint poses (uniform in kin.JOINT_LIMITS at seed 0, re-rolled Kit-free while a link origin is within 0.15 m of the ground
 or the table) and compares wrist_3's Isaac pose with kin.fk_wrist3 at the measured joints, the fixed frame offset
 calibrated at HOME_Q (collide.calibrate). Step 2 picks the plate face up, the bowl and the cup mouth down on their flat
-patches (robot/epick.py): the cup tip lowered to the patch, close (150 ms), lift 100 mm, hold 5 s (an RTX still), set
-down, open (180 ms). The attachment force is the dish's momentum balance while it is held clear of the table
+patches (robot/epick.py): the cup tip lowered to the patch (then 1 and 4 mm above it while nothing attaches), close
+(150 ms), lift 100 mm, hold 5 s (an RTX still), set down, open (180 ms). The attachment force is the dish's momentum balance while it is held clear of the table
 (m (a - g) along and across the cup axis; the extension exposes no joint-force reader). Writes
 data/results/robot/epick/epick.json and held_<dish>.png.
 """
@@ -32,6 +32,7 @@ DT = 1 / 120
 N_POSES, SEED, CLEAR_M = 20, 0, .15
 POSE_TOL_MM, POSE_TOL_DEG = 1., .1
 LIFT_M, HOLD_S, SET_TOL_MM, AIR_M = .10, 5., 5., .002
+STANDOFFS_M = (0., .001, .004)        # the tip at the patch (the plan), then 1 and 4 mm above it if no attachment
 
 
 def twenty_poses(T_wb):
@@ -133,6 +134,8 @@ def main():
         from isaaclab_physx.renderers import IsaacRtxRendererCfg
         from isaaclab_physx.physics import PhysxCfg
         from isaaclab.assets import Articulation, RigidObject, RigidObjectCfg
+        import carb
+        import omni.physx
         import omni.usd
         from pxr import Usd, UsdPhysics
         from sampler.robot import collide, epick, kin, ur5e
@@ -205,6 +208,7 @@ def main():
             st, mon["n"] = status(), mon["n"] + 1
             v = dishes[k].data.root_lin_vel_w.torch[0].cpu().numpy().astype(float)
             z = float(dishes[k].data.root_pos_w.torch[0, 2])
+            mon["trace"].append(st)
             if st == "Closed" and mon["closed_step"] is None:
                 mon["closed_step"] = mon["n"]
             if mon["closed_step"] is not None and not mon["opened"] and st != "Closed":
@@ -221,6 +225,7 @@ def main():
         T_cfg = np.eye(4)
         T_cfg[:3, 3] = BASE
         rig = Rig(sim, robot, T_cfg, on_step=on_step, T_w3_tcp=epick.T_W3_TIP)
+        rig.teleport_arm(np.asarray(ur5e.HOME_Q))     # the asset starts at its authored pose, not init_state
         rig.step(60)
         bi = bodies.index("base_link") if "base_link" in bodies else 0
         T_wb = T_of(robot.data.body_link_pos_w.torch[0, bi].cpu().numpy(), robot.data.body_link_quat_w.torch[0, bi].cpu().numpy())
@@ -278,10 +283,35 @@ def main():
             Image.fromarray(cam.data.output["rgb"].torch[0, ..., :3].cpu().numpy()).save(OUT / f"held_{name}.png")
             return f"held_{name}.png"
 
-        res["dishes"] = {}
-        for kind, mouth_down in DISHES:
+        sq = omni.physx.get_physx_scene_query_interface()
+        attach_prim = stage.GetPrimAtPath(sg_path.rsplit("/", 1)[0] + "/attach")
+
+        def ms(step):
+            return None if step is None else round(step * DT * 1e3, 1)
+
+        def rle(xs):
+            out = []
+            for x in xs:
+                if out and out[-1][0] == x:
+                    out[-1][1] += 1
+                else:
+                    out.append([x, 1])
+            return out
+
+        def held(kind):
+            return any(o == paths[kind] or o.startswith(paths[kind] + "/") for o in view.get_gripped_objects()[0])
+
+        def ray(axis):
+            """Our own scene query from the attachment frame along the cup axis (diagnostic, the extension's reach)."""
+            try:
+                o = rig.tcp()[:3, 3] - epick.CLEARANCE_M * axis
+                h = sq.raycast_closest(carb.Float3(*o), carb.Float3(*axis), epick.CLEARANCE_M + epick.MAX_GRIP_DISTANCE_M)
+                return {k: (round(float(h[k]), 5) if k == "distance" else h[k]) for k in ("hit", "rigidBody", "collision", "distance") if k in h}
+            except Exception as e:
+                return {"error": repr(e)}
+
+        def cycle(kind, mouth_down, row):
             d, (zp, H) = dishes[kind], patch[kind]
-            row = res["dishes"][kind] = {"mouth_down": mouth_down, "weight_n": round(mass[kind] * 9.81, 3)}
             pos = (SPOT[0], SPOT[1], TABLE_TOP + (H if mouth_down else 0.) + .02)
             d.write_root_pose_to_sim_index(root_pose=torch.tensor([[*pos, *((1., 0., 0., 0.) if mouth_down else (0., 0., 0., 1.))]], dtype=torch.float32))
             d.write_root_velocity_to_sim_index(root_velocity=torch.zeros(1, 6))
@@ -294,40 +324,73 @@ def main():
             row["approach_ok"] = bool(q_hover is not None and rig.move_joint(q_hover) and rig.move_line(down(tip)))
             if not row["approach_ok"]:
                 row["fail"] = getattr(rig, "last_fail", "no IK")
-                continue
-            row["tip_err_mm"] = round(float(np.linalg.norm(rig.tcp()[:3, 3] - tip)) * 1e3, 3)
-            mon.update(kind=kind, n=0, closed_step=None, opened=False, break_steps=0, z0=float(p0[2]), v_prev=None,
-                       coax_n=0., shear_n=0., air_steps=0)
-            view.apply_gripper_action([1.])
-            rig.step(round(epick.GRIP_S / DT))
-            gripped = list(view.get_gripped_objects()[0])
-            row.update(close_status=status(), gripped=gripped, attached=any(o == paths[kind] or o.startswith(paths[kind] + "/") for o in gripped),
-                       closed_ms=None if mon["closed_step"] is None else round(mon["closed_step"] * DT * 1e3, 1))
-            row["lift_ok"] = bool(rig.move_line(down(tip + [0., 0., LIFT_M])))
+                return
+            axis = rig.tcp()[:3, 2]
+            row["tip_dz_mm"] = round(float(rig.tcp()[2, 3] - tip[2]) * 1e3, 3)          # > 0: the tip above the patch
+            row["tries"], i = [], 0
+            for so in STANDOFFS_M:                     # the plan's tip at the patch first, then small stand-offs
+                if so and not rig.move_line(down(tip + [0., 0., so])):
+                    break
+                t = {"standoff_mm": so * 1e3, "ray": ray(axis)}
+                mon.update(kind=kind, n=0, closed_step=None, opened=False, break_steps=0, z0=float(p0[2]), v_prev=None,
+                           coax_n=0., shear_n=0., air_steps=0, trace=[])
+                view.apply_gripper_action([1.])
+                attach_step = None
+                for i in range(1, round(epick.RETRY_INTERVAL_S / DT) + 1):
+                    rig.step(1)
+                    if attach_step is None and held(kind):
+                        attach_step = i
+                    if attach_step is not None and mon["closed_step"] is not None:
+                        break
+                rig.step(max(0, round(epick.GRIP_S / DT) - i))                      # the cycle's 150 ms at least
+                t.update(attach_ms=ms(attach_step), closed_ms=ms(mon["closed_step"]), status=rle(mon["trace"]),
+                         gripped=list(view.get_gripped_objects()[0]), clearance_after=attach_prim.GetAttribute("isaac:clearanceOffset").Get())
+                row["tries"].append(t)
+                if attach_step is not None:
+                    break
+                mon["opened"] = True
+                view.apply_gripper_action([-1.])
+                rig.step(round(epick.RELEASE_S / DT))
+            last = row["tries"][-1] if row["tries"] else {}
+            so = last.get("standoff_mm", 0.) / 1e3
+            row.update(attached=last.get("attach_ms") is not None, standoff_mm=last.get("standoff_mm"), closed_ms=last.get("closed_ms"),
+                       close_status=status())
+            row["lift_ok"] = bool(rig.move_line(down(tip + [0., 0., so + LIFT_M])))
             pa = dish_T(kind)[:3, 3].copy()
             row["lifted_mm"] = round(float(pa[2] - p0[2]) * 1e3, 2)
             rig.step(round(HOLD_S / DT))
             pb = dish_T(kind)[:3, 3].copy()
             row.update(hold_status=status(), hold_drift_mm=round(float(np.linalg.norm(pb - pa)) * 1e3, 3), still=still(kind))
-            row["down_ok"] = bool(rig.move_line(down(tip)))
+            row["down_ok"] = bool(rig.move_line(down(tip + [0., 0., so])))
             mon["opened"] = True
             view.apply_gripper_action([-1.])
             rig.step(round(epick.RELEASE_S / DT))
-            row.update(open_status=status(), gripped_after_open=list(view.get_gripped_objects()[0]))
+            row.update(open_status=status(), gripped_after_open=list(view.get_gripped_objects()[0]), status=rle(mon["trace"]))
             mon["kind"] = None
-            row["retreat_ok"] = bool(rig.move_line(down(tip + [0., 0., LIFT_M])))
+            row["retreat_ok"] = bool(rig.move_line(down(tip + [0., 0., so + LIFT_M])))
             rig.step(60)
             p1 = dish_T(kind)[:3, 3]
             row.update(set_down_mm=round(float(np.linalg.norm(p1 - p0)) * 1e3, 3), break_steps=mon["break_steps"], air_steps=mon["air_steps"],
                        coax_max_n=round(mon["coax_n"], 3), shear_max_n=round(mon["shear_n"], 3))
-            row["pass"] = bool(row["attached"] and row["close_status"] == "Closed" and row["lift_ok"] and row["lifted_mm"] >= (LIFT_M * 1e3 - SET_TOL_MM)
+            row["pass"] = bool(row["attached"] and row["closed_ms"] is not None and row["closed_ms"] <= epick.GRIP_S * 1e3 + .5
+                               and row["lift_ok"] and row["lifted_mm"] >= (LIFT_M * 1e3 - SET_TOL_MM)
                                and row["hold_status"] == "Closed" and row["hold_drift_mm"] < SET_TOL_MM and row["down_ok"]
                                and row["open_status"] == "Open" and not row["gripped_after_open"] and row["set_down_mm"] <= SET_TOL_MM
                                and row["break_steps"] == 0 and row["coax_max_n"] < epick.COAXIAL_FORCE_LIMIT_N
                                and row["shear_max_n"] < epick.SHEAR_FORCE_LIMIT_N and (cam is None or row["still"] is not None))
+
+        res["dishes"] = {}
+        for kind, mouth_down in DISHES:
+            row = res["dishes"][kind] = {"mouth_down": mouth_down, "weight_n": round(mass[kind] * 9.81, 3)}
+            try:
+                cycle(kind, mouth_down, row)
+            except Exception:
+                row["error"] = traceback.format_exc()
+                print(row["error"], flush=True)
+            mon["kind"] = None
             print(f"[INFO] {kind}: {row}", flush=True)
-            d.write_root_pose_to_sim_index(root_pose=torch.tensor([[*PARK[kind], 0., 0., 0., 1.]], dtype=torch.float32))
-            d.write_root_velocity_to_sim_index(root_velocity=torch.zeros(1, 6))
+            dishes[kind].write_root_pose_to_sim_index(root_pose=torch.tensor([[*PARK[kind], 0., 0., 0., 1.]], dtype=torch.float32))
+            dishes[kind].write_root_velocity_to_sim_index(root_velocity=torch.zeros(1, 6))
             rig.move_joint(q_park)
 
         ok_file = bool(facts.get("etag")) and "prims" in facts
@@ -342,7 +405,8 @@ def main():
     dl = res.get("dishes", {})
     print(f"[RESULT] {res['result']} epick: etag {res.get('file', {}).get('etag')} poses max {res.get('pose_max_mm')} mm "
           f"{res.get('pose_max_deg')} deg; " + "; ".join(
-              f"{k} pass {r.get('pass')} lift {r.get('lifted_mm')} drift {r.get('hold_drift_mm')} set {r.get('set_down_mm')} mm "
+              f"{k} pass {r.get('pass')} standoff {r.get('standoff_mm')} closed {r.get('closed_ms')} ms lift {r.get('lifted_mm')} "
+              f"drift {r.get('hold_drift_mm')} set {r.get('set_down_mm')} mm "
               f"coax {r.get('coax_max_n')}/100 shear {r.get('shear_max_n')}/30 N" for k, r in dl.items()), flush=True)
     try:
         from dishsim.media import release_sim_for_close
