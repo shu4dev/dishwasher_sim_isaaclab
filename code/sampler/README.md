@@ -102,7 +102,7 @@ and `frigidaire_dependency_page.py` (reference `docs/dependency.md`), `frigidair
 
 The two render helpers. Scripts in `code/sampler/scripts/`, `code/asset/scripts/`, `code/paths/scripts/` and
 `code/sampler/robot/scripts/` import them by bare name after putting `code/sampler/scripts` on `sys.path`: `frigidaire_bench_kit.py`, `frigidaire_hotec_load.py`,
-`frigidaire_planner_video.py`, `frigidaire_robot_episode.py`. Keep the two files together: the render helper
+`frigidaire_planner_video.py`, `frigidaire_robot_replay.py`. Keep the two files together: the render helper
 imports the report helper from its own folder. Defaults are defined in the script itself.
 
 ## Retired experiments (2026-09-29)

@@ -6,8 +6,8 @@ Plans: plans/2026-11-09-native-ur5e-epick.md (Plan A, run note results/2026-11-0
 plans/2026-11-09-delete-pinch-layer.md (Plan B, results/2026-11-09-delete-pinch-layer.md). The rest of this page, from
 "Goal (user)" on, is the history of the pinch layer (the parallel-jaw hand). The files it names that are gone (grasp.py,
 the pinch gates and probes, the robot episode, the reach, mount and site sweeps, the access order, the placing loads,
-the report pages, the conventions test and its fixture) are in git at 9f700e1 on plan, the last commit with the pinch
-layer; the asset-mirror script went earlier, in Plan A's 0172d16.
+the report pages, the conventions test and its fixture, the drop curve and the tines test) are in git at 9f700e1 on
+plan, the last commit with the pinch layer; the asset-mirror script went earlier, in Plan A's 0172d16.
 
 - Hardware: the native Isaac Sim 6.2 UR5e, streamed from NVIDIA's asset root (`ur5e.UR5E_USD`, ETag
   "65086b45ae6bcb7ec269e092de811645"; the bare arm, arm actuators only), with an EPick-sized body coaxial on the flange
@@ -26,8 +26,8 @@ layer; the asset-mirror script went earlier, in Plan A's 0172d16.
   EPick body and its cup, arm joints only), `flags.py` (without the grip-drive fields), `triallog.py`; the scripts are
   listed in code/sampler/robot/README.md.
 - Open: the suction episode and its gate, built from the EPick test's cycle, the rig and the harness. Until then
-  `code/sampler/hwgate.py` stops at the deleted `frigidaire_access_order.py`, and `frigidaire_drop_curve.py`,
-  `frigidaire_tines_test.py` and the replay's `--still` stop at their imports of deleted scripts.
+  `code/sampler/hwgate.py` stops at the deleted `frigidaire_access_order.py`. `frigidaire_drop_curve.py`,
+  `frigidaire_tines_test.py` and the replay's `--still` mode imported deleted scripts and went in the same round.
 
 Goal (user): execute an instance's moves with a real arm instead of teleports; test case easy_s0 (greedy plan).
 Decisions: pure friction grasp (no weld); pedestal mount chosen by a reachability search; upper rack pushed in

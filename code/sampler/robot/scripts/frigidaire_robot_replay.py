@@ -553,76 +553,8 @@ def drop_load(a):
           f"{'' if sfx else f'goal_{L}.png, '}landed_{L}{sfx}.png; {out_}", flush=True)
 
 
-def pose_still(kind, site_name, target, yaw, out, label):
-    """Kit-free still of the arm at the first IK solution of a packer-pose pre-place (the colliding pose): the arm
-    model's hulls at the analytic link poses, the carried dish, the racks of the cell, the counter and the pedestal."""
-    import warp as wp
-    from PIL import Image, ImageDraw
-    import frigidaire_dot_rules_render as RD
-    sys.path.insert(0, str(ROOT / "code/sampler/robot/scripts"))
-    import frigidaire_robot_reach as RC
-    from sampler.scorer import exposure as E
-    from sampler.robot.rig import T_of
-    B = RD.B
-    wp.init()
-    B.HX().register_hotec(B.ASSETS)
-    W = RC.World()
-    reach = json.loads((RC.OUT / "reach.json").read_text())
-    site = next(x for x in reach["sites"][kind] if x["site"] == site_name)
-    arm = W.arms[site["rack"]]
-    T_o = RC.counter_obj()
-    g = tilted_grasps(T_o, RC.N_YAW, kind)[yaw]
-    M = np.linalg.inv(g["T_tcp"]) @ T_o
-    pose = site["world"][target]
-    T_rel = T_of(pose["position_m"], pose["quaternion_xyzw"]) @ np.linalg.inv(M)
-    T_rel[2, 3] += RC.RELEASE_ABOVE_M
-    T_pp = hover_along(T_rel, RC.HOVER_M)
-    qs = W.kr.ik_all(T_pp, W.seed)
-    if not qs:
-        raise SystemExit(f"no IK at the pre-place of {kind} {site_name} yaw {yaw}")
-    q = qs[0]
-    hits = arm.collisions(q, first=False, held=(kind, M, "dish"))
-    parts, cols = [], []
-    for link, T in arm.link_poses(q).items():
-        for _, verts in arm.hulls.get(link, ()):
-            tri = hull_tris(verts)
-            if len(tri):
-                parts.append(tri @ T[:3, :3].T + T[:3, 3])
-                cols.append(COLORS["gripper"] if link == "gripper" else COLORS["arm"])
-    frames = RC.frames_for(B, site["rack"])
-    for name in ("LowerRack", "UpperRack"):
-        f = frames[name]
-        parts.append(E.posed(E.component_triangles(name), f["position_m"], f["quaternion_xyzw"]))
-        cols.append(COLORS["rack"])
-    parts.append(box_tris(B.COUNTER["center_m"], B.COUNTER["size_m"]))
-    cols.append(COLORS["counter"])
-    m = json.loads(RC.MOUNT.read_text())["best"]["base"]
-    parts.append(box_tris((m[0], m[1], m[2] / 2), (.16, .16, m[2])))
-    cols.append(COLORS["pedestal"])
-    T_d = T_pp @ M
-    from scipy.spatial.transform import Rotation
-    parts.append(E.posed(np.concatenate(E.dish_visuals(f"hotec_{kind}")), T_d[:3, 3], Rotation.from_matrix(T_d[:3, :3]).as_quat()))
-    cols.append((.95, .2, .2))                                      # the carried dish in red
-    face_obj = np.concatenate([np.full(len(p_), j, np.int32) for j, p_ in enumerate(parts)])
-    tri = np.concatenate(parts).astype(np.float32)
-    cols_a = np.asarray(cols, np.float32)
-    tgt = T_d[:3, 3]
-    views = [RD.render(tri, face_obj, cols_a, EPISODE_EYE, EPISODE_TARGET, W=640, H=480, fov_deg=EPISODE_FOV, ss=2),
-             RD.render(tri, face_obj, cols_a, tgt + np.array([-.6, -.8, .5]), tgt, W=640, H=480, fov_deg=45., ss=2)]
-    img = Image.new("RGB", (1280, 536), (18, 28, 40))
-    img.paste(Image.fromarray(np.concatenate(views, axis=1)), (0, 56))
-    dr = ImageDraw.Draw(img)
-    dr.text((10, 6), label[:150], fill=(246, 249, 252), font=RD.font(18, True))
-    dr.text((10, 32), f"pre-place IK solution 1 of {len(qs)} · contacts within 15 mm: {hits[:4]} · Kit-free render (arm model hulls)",
-            fill=(190, 207, 222), font=RD.font(14))
-    out.parent.mkdir(parents=True, exist_ok=True)
-    img.save(out)
-    print(f"[RESULT] PASS still {out} hits {hits[:6]}", flush=True)
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--still", default=None, help="kind,site,target,yaw: a Kit-free still of the pre-place pose instead")
     ap.add_argument("--traj", type=Path, default=None)
     ap.add_argument("--kind", default=None, help="dish kind (not needed with --load-dir: the load's)")
     ap.add_argument("--load-dir", type=Path, default=None,
@@ -660,9 +592,6 @@ def main():
                          "and stop before Warp")
     a = ap.parse_args()
     a.wh = a.wh or ("1280x960" if a.load else "640x480")
-    if a.still:
-        kind, site, target, yaw = a.still.split(",")
-        return pose_still(kind, site, target, int(yaw), a.out, a.label)
     from sampler.scorer import exposure as E
     B.HX().register_hotec(B.ASSETS)
     if a.load_dir:
