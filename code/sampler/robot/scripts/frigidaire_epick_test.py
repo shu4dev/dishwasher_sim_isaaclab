@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Kit test of the native 6.2 UR5e with an EPick-sized suction body (plans/2026-11-09-native-ur5e-epick.md, Plan A).
 
-    code/util/run_kit.sh code/sampler/robot/scripts/frigidaire_epick_test.py --headless --enable_cameras
+    code/util/run_kit.sh code/sampler/robot/scripts/frigidaire_epick_test.py --headless --enable_cameras [--video]
 
 Step 0 opens the streamed arm file and records its facts (the ETag from one HTTP HEAD, layers, variant sets,
 articulation root, joints, bodies, flange / tool prims, every prim path with its type). Step 1 teleports the arm to 20
@@ -11,7 +11,8 @@ calibrated at HOME_Q (collide.calibrate). Step 2 picks the plate face up, the bo
 patches (robot/epick.py): the cup tip lowered to the patch (then 1 and 4 mm above it while nothing attaches), close
 (150 ms), lift 100 mm, hold 5 s (an RTX still), set down, open (180 ms). The attachment force is the dish's momentum balance while it is held clear of the table
 (m (a - g) along and across the cup axis; the extension exposes no joint-force reader). Writes
-data/results/robot/epick/epick.json and held_<dish>.png.
+data/results/robot/epick/epick.json and held_<dish>.png. --video (plans/2026-11-09-epick-video.md) raises the camera to
+1280x960 and writes epick.mp4: the three cycles in real time from one fixed view (the stills' offsets), a frame every 4 steps.
 """
 from __future__ import annotations
 
@@ -33,6 +34,8 @@ N_POSES, SEED, CLEAR_M = 20, 0, .15
 POSE_TOL_MM, POSE_TOL_DEG = 1., .1
 LIFT_M, HOLD_S, SET_TOL_MM, AIR_M = .10, 5., 5., .002
 STANDOFFS_M = (0., .001, .004)        # the tip at the patch (the plan), then 1 and 4 mm above it if no attachment
+VIDEO_EVERY = 4                       # physics steps per video frame: 30 fps of simulated time at 120 Hz
+VIDEO_AIM = (SPOT[0], SPOT[1], TABLE_TOP + LIFT_M + .06)   # the stills' rule around the mean hold (patch 8/67/103 mm up)
 
 
 def twenty_poses(T_wb):
@@ -120,8 +123,11 @@ def main():
     sys.path[:0] = [str(ROOT / "code"), str(ROOT / "code/util")]
     from dishsim.app import add_args, launch   # Kit-free; boots Kit below
     add_args(parser)
+    parser.add_argument("--video", action="store_true", help="1280x960 camera, data/results/robot/epick/epick.mp4")
     args = parser.parse_args()
     cameras = bool(getattr(args, "enable_cameras", False))
+    if args.video and not cameras:
+        parser.error("--video needs --enable_cameras")
     app = launch(args)
     res = {"result": "FAIL"}
     try:
@@ -181,10 +187,11 @@ def main():
         patch = {k: patch_z(DISH_USD / f"{k}.usda", down, epick.CUP_R_M) for k, down in DISHES}
         res.update(w3_path=w3_path, gripper_prim=sg_path, dish_mass_kg=mass, table=table.cfg.prim_path,
                    patch_local_m={k: [round(v, 5) for v in zh] for k, zh in patch.items()})
-        cam = None
+        cam = vw = None
         if cameras:
             from isaaclab.sensors import Camera, CameraCfg
-            cam = Camera(CameraCfg(prim_path="/World/Cam", height=480, width=640, data_types=["rgb"], renderer_cfg=IsaacRtxRendererCfg(),
+            h, w = (960, 1280) if args.video else (480, 640)
+            cam = Camera(CameraCfg(prim_path="/World/Cam", height=h, width=w, data_types=["rgb"], renderer_cfg=IsaacRtxRendererCfg(),
                                    spawn=sim_utils.PinholeCameraCfg(focal_length=18.)))
         sim.reset()
         view, gstat = gripper.gripper_view, _surface_gripper.GripperStatus
@@ -203,6 +210,9 @@ def main():
         g = np.array([0., 0., -9.81])
 
         def on_step():
+            if vw is not None and sim.get_physics_step_count() % VIDEO_EVERY == 0:   # sim.step() rendered (Camera sets rtx_sensors)
+                cam.update(DT)
+                vw.add(cam.data.output["rgb"].torch[0, ..., :3].cpu().numpy())
             for d in dishes.values():
                 d.update(DT)
             k = mon["kind"]
@@ -272,18 +282,22 @@ def main():
         rig.teleport_arm(q_park)
         rig.step(30)
 
+        def aim(c):
+            cam.set_world_poses_from_view(torch.tensor([c + np.array([.30, .35, .05])], dtype=torch.float32),
+                                          torch.tensor([c + np.array([0., 0., -.05])], dtype=torch.float32))
+
         def still(name):
             if cam is None:
                 return None
             from PIL import Image
-            c = rig.tcp()[:3, 3]
-            cam.set_world_poses_from_view(torch.tensor([c + np.array([.30, .35, .05])], dtype=torch.float32),
-                                          torch.tensor([c + np.array([0., 0., -.05])], dtype=torch.float32))
+            aim(rig.tcp()[:3, 3])
             for _ in range(30):
                 sim.render()
             cam.update(DT)
             OUT.mkdir(parents=True, exist_ok=True)
             Image.fromarray(cam.data.output["rgb"].torch[0, ..., :3].cpu().numpy()).save(OUT / f"held_{name}.png")
+            if vw is not None:
+                aim(np.asarray(VIDEO_AIM))        # back to the video's fixed view
             return f"held_{name}.png"
 
         sq = omni.physx.get_physx_scene_query_interface()
@@ -382,6 +396,12 @@ def main():
                                and row["break_steps"] == 0 and row["coax_max_n"] < epick.COAXIAL_FORCE_LIMIT_N
                                and row["shear_max_n"] < epick.SHEAR_FORCE_LIMIT_N and (cam is None or row["still"] is not None))
 
+        if args.video:
+            from dishsim.media import VideoWriter
+            aim(np.asarray(VIDEO_AIM))
+            for _ in range(30):                   # warm-up renders, as the stills do
+                sim.render()
+            vw = VideoWriter(str(OUT / "epick.mp4"), fps=round(1 / (DT * VIDEO_EVERY)))
         res["dishes"] = {}
         for kind, mouth_down in DISHES:
             row = res["dishes"][kind] = {"mouth_down": mouth_down, "weight_n": round(mass[kind] * 9.81, 3)}
@@ -395,6 +415,9 @@ def main():
             dishes[kind].write_root_pose_to_sim_index(root_pose=torch.tensor([[*PARK[kind], 0., 0., 0., 1.]], dtype=torch.float32))
             dishes[kind].write_root_velocity_to_sim_index(root_velocity=torch.zeros(1, 6))
             rig.move_joint(q_park)
+        if vw is not None:
+            vw.close()
+            print(f"[INFO] video: {vw.path} {vw.frames} frames, {vw.frames * DT * VIDEO_EVERY:.1f} s at 1280x960", flush=True)
 
         ok_file = bool(facts.get("etag")) and "prims" in facts
         ok_poses = res["pose_max_mm"] < POSE_TOL_MM and res["pose_max_deg"] < POSE_TOL_DEG
