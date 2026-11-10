@@ -153,9 +153,10 @@ def main():
               f"{facts.get('frames')} prims {len(facts.get('prims', []))}", flush=True)
 
         # ---- scene
-        # scene queries on: Isaac Lab 3.0 defaults them off, and then every raycast, the surface gripper's included, hits nothing
-        sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=DT, device="cpu", physics=PhysxCfg(
-            enable_external_forces_every_iteration=False, enable_scene_query_support=True)))
+        # scene queries on: Isaac Lab 3.0 defaults them off, and then every raycast, the surface gripper's included, hits nothing;
+        # the SimulationCfg field decides (physx_manager.py copies it over PhysxCfg's own enable_scene_query_support)
+        sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=DT, device="cpu", enable_scene_query_support=True,
+                                                                  physics=PhysxCfg(enable_external_forces_every_iteration=False)))
         sim_utils.GroundPlaneCfg().func("/World/Ground", sim_utils.GroundPlaneCfg())
         sim_utils.DomeLightCfg(intensity=2000.).func("/World/Light", sim_utils.DomeLightCfg(intensity=2000.))
         robot = Articulation(ur5e.robot_cfg(pos=BASE, articulation_root=root_rel))
