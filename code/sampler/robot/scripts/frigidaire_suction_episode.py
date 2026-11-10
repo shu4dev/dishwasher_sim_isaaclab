@@ -7,8 +7,8 @@
 
 Driver (no --dish; boots no Kit): the rack chain's dishes in the dag order, one Kit process per dish (this script with --dish),
 each restoring the scene its predecessor left (--state). A dish without a hold in check.json for the run stays out (a row, no
-process). A process that dies on "malloc(): corrupted top size" is killed by its process group and run once more; one still
-alive 90 s after its [RESULT] line is killed. Writes <check dir>/<run>/<chain>/rows.jsonl and, with --video, joins the dish
+process). A process that dies on "malloc(): corrupted top size", or has not built its scene after BOOT_S, is killed by its process
+group and run once more; one still alive 90 s after its [RESULT] line is killed. Writes <check dir>/<run>/<chain>/rows.jsonl and, with --video, joins the dish
 clips into data/media/robot/suction_s0/suction_<run>_<chain>.mp4.
 
 Dish process (--dish): the twin backend (initial_state_runtime) on CPU physics with PhysX scene queries on (the surface gripper's
@@ -47,6 +47,7 @@ SPAWN_TICKS, STATE_TICKS, SETTLE_TICKS, WINDOW_TICKS = 240, 120, 150, 60
 REST_MM, REST_DEG = 5., 3.
 CLOSE_TRIES_M = (0., .002)                      # the tip at the hold, then 2 mm back
 RRT_S = 60.
+BOOT_S = 360.                                   # a dish process that has not built its scene by then is killed and run again
 
 
 def dirs(args):
@@ -77,6 +78,9 @@ def run_one(cmd, log, limit):
         if "malloc(): corrupted top size" in txt:
             kill()
             return "malloc"
+        if "Surface gripper initialized" not in txt and time.monotonic() - t0 > BOOT_S:
+            kill()                                    # Kit stuck before the scene (seen twice: a forked child, spinning carb threads)
+            return "boot hang"
         if t_res is None and "[RESULT]" in txt:
             t_res = time.monotonic()
         if t_res is not None and time.monotonic() - t_res > 90:
@@ -115,9 +119,9 @@ def drive(args):
         for attempt in (1, 2):
             ends.append(run_one(cmd, log, args.max_wall_seconds + 300))
             print(f"[INFO] {oid}: attempt {attempt} {ends[-1]} ({time.monotonic() - t0:.0f} s)", flush=True)
-            if ends[-1] != "malloc":
+            if ends[-1] not in ("malloc", "boot hang"):
                 break
-            log.rename(log.with_name(log.stem + f"_malloc{attempt}.log"))
+            log.rename(log.with_name(log.stem + f"_{ends[-1].replace(' ', '_')}{attempt}.log"))
         row = json.loads(rowp.read_text()) if rowp.exists() else {"dish": oid, "kind": d["kind"], "run": args.run,
                                                                     "chain": args.chain, "k": k, "outcome": "no row"}
         row["process"] = {"ends": ends, "log": str(log.relative_to(ROOT))}
@@ -239,7 +243,7 @@ def episode(args, app, rdir, mdir, row, rec):
     state = json.loads(Path(args.state).read_text()) if args.state else {"dishes": {}}
     row.update(kind=kind, rack=rack, slot=d.get("slot"), hold=hold, standoff_mm=cand.get("standoff_mm"),
                approach=[cand.get("approach"), cand.get("approach_m")], spawn=d["spawn"]["xy_yaw"], spawn_draw=d["spawn"]["draws"],
-               spawn_pose=pick["spawn_pose"], state_in=args.state, scene=sorted(state["dishes"]))
+               spawn_pose=pick["spawn_pose"], state_in=str(args.state) if args.state else None, scene=sorted(state["dishes"]))
     B = SC.bench()
     T_wb, mount = SC.mount_T(ROOT / chk["mount"])
     base = json.loads((B.OUT / "baseline" / "result.json").read_text())["snapshot"]
