@@ -53,18 +53,20 @@ def orthonormal(T):
 
 class Rig:
     def __init__(self, sim, robot, T_world_base, on_step=None, grip_close=.8, physics_step=None,
-                 lag_max=LAG_MAX_RAD, settled_lag=SETTLED_LAG_RAD, update_robot=True, on_teleport=None):
+                 lag_max=LAG_MAX_RAD, settled_lag=SETTLED_LAG_RAD, update_robot=True, on_teleport=None, T_w3_tcp=None):
         """``lag_max`` / ``settled_lag``: the blocked-motion limits (run flags R7/D8; the defaults are the pre-R7
         values). ``update_robot=False`` when ``physics_step`` already refreshes the articulation's buffers (the
-        episode's harness tick). ``on_teleport(what)`` is called before every state write (the teleport guard)."""
+        episode's harness tick). ``on_teleport(what)`` is called before every state write (the teleport guard).
+        ``T_w3_tcp``: the TCP in wrist_3_link's frame (default the 2F-85's; epick.T_W3_TIP moves the cup tip). An arm
+        without ``finger_joint`` (the bare 6.2 arm) gets no finger targets."""
         import torch
         self.torch, self.sim, self.robot = torch, sim, robot
         self.T_wb = np.asarray(T_world_base, dtype=float)
         self.T_bw = np.linalg.inv(self.T_wb)
-        self.T_w3_tcp = T_of(ur5e.T_WRIST3_TCP_POS, ur5e.T_WRIST3_TCP_QUAT_XYZW)
+        self.T_w3_tcp = T_of(ur5e.T_WRIST3_TCP_POS, ur5e.T_WRIST3_TCP_QUAT_XYZW) if T_w3_tcp is None else np.asarray(T_w3_tcp, dtype=float)
         self.names, self.bodies = list(robot.joint_names), list(robot.body_names)
         self.arm = [self.names.index(j) for j in ur5e.ARM_JOINTS]
-        self.fj = self.names.index("finger_joint")
+        self.fj = self.names.index("finger_joint") if "finger_joint" in self.names else None
         self.w3 = self.bodies.index("wrist_3_link")
         self.target = robot.data.default_joint_pos.torch.clone()
         self.on_step = on_step or (lambda: None)
@@ -84,7 +86,8 @@ class Rig:
 
     def step(self, n=1):
         for _ in range(n):
-            ur5e.set_gripper(self.target, self.names, self.theta)
+            if self.fj is not None:
+                ur5e.set_gripper(self.target, self.names, self.theta)
             self.robot.actuators.target_command.set_position_index(value=self.target)
             self.robot.write_data_to_sim()
             self.physics_step()

@@ -1,19 +1,18 @@
-"""UR5e + Robotiq 2F-85 articulation config and gripper constants.
+"""UR5e articulation config, plus the Robotiq 2F-85 constants kept for Plan B (plans/2026-11-09-native-ur5e-epick.md).
 
-Ported from ``src/dishsim/robots.py`` on branch on-corrallab (cdc3f51). The asset is the Isaac Sim 6.0
-``Robots/UniversalRobots/ur5e/ur5e.usd`` with the ``Gripper = Robotiq_2f_85`` variant, mirrored into
-``data/assets/robots/`` by ``code/sampler/robot/scripts/mirror_robot_usd.sh`` (two crate-0.9 layers converted to usda for
-Isaac Sim 4.5). ``finger_joint`` (0 = open, 0.8 = closed) is the only commanded finger joint; the others follow
-through PhysX mimic constraints. Actuator gains are the on-corrallab values; the finger armature/damping are
-load-bearing (the near-massless finger links resonate without them).
+Since 2026-11-09 the arm is the bare Isaac Sim 6.2 ``Robots/UniversalRobots/ur5e/ur5e.usd``, streamed from NVIDIA's asset
+root at run time (no gripper variant, no project copy; every result records the file's ETag); the EPick-sized suction
+body is authored on its flange by ``epick.py``. The 2F-85 helpers below (``finger_joint`` 0 = open, 0.8 = closed, the
+inner fingers mimic-driven, the TCP 130 mm off wrist_3) served the 6.0 mirror with the ``Gripper = Robotiq_2f_85``
+variant and go with Plan B. Arm actuator gains are the on-corrallab values.
 """
 from __future__ import annotations
 
 import os
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-UR5E_USD = os.path.join(ROOT, "data", "assets", "robots", "Assets", "Isaac", "6.0", "Isaac", "Robots", "UniversalRobots", "ur5e",
-                        "ur5e.usd")
+UR5E_USD = ("https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.2/Isaac/Robots/UniversalRobots/"
+            "ur5e/ur5e.usd")
 ARM_JOINTS = ("shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint", "wrist_1_joint", "wrist_2_joint", "wrist_3_joint")
 HOME_Q = (0.0, -1.712, 1.712, -1.571, -1.571, 0.0)              # code/util/dishsim/config.py (elbow up, facing +x)
 T_WRIST3_TCP_POS = (0.0, 0.130, 0.0)                              # code/util/dishsim/config.py (frozen anchors)
@@ -32,31 +31,25 @@ def set_gripper(target, joint_names, theta):
         target[0, joint_names.index(name)] = sign * float(theta)
 
 
-def robot_cfg(prim_path="/World/Robot", pos=(0., 0., 0.), rot_xyzw=(0., 0., 0., 1.), gripper_effort=10.,
-              gripper_stiffness=40., gripper_damping=1., finger_effort=10., finger_stiffness=10., finger_damping=.05):
-    """ArticulationCfg of the arm; the finger drives are parameters (the friction gate and plans/2026-11-04-grip-force.md
-    vary them): finger_joint's effort limit, stiffness and damping (gripper_*) and the inner finger joints' (finger_*)."""
+def robot_cfg(prim_path="/World/Robot", pos=(0., 0., 0.), rot_xyzw=(0., 0., 0., 1.), articulation_root=None):
+    """ArticulationCfg of the bare 6.2 arm, arm actuators only. ``articulation_root``: the root prim relative to
+    ``prim_path`` as step 0 of frigidaire_epick_test.py reads it from the file (None = Isaac Lab finds the single root)."""
     import isaaclab.sim as sim_utils
     from isaaclab.actuators import ImplicitActuatorCfg
     from isaaclab.assets import ArticulationCfg
     from isaaclab_physx.sim.schemas import PhysxArticulationCfg, PhysxRigidBodyCfg
 
-    if not os.path.isfile(UR5E_USD):
-        raise FileNotFoundError(f"{UR5E_USD} missing: run code/sampler/robot/scripts/mirror_robot_usd.sh")
     return ArticulationCfg(
         prim_path=prim_path,
-        articulation_root_prim_path="/root_joint",   # the asset carries a second, disabled root on the gripper
+        articulation_root_prim_path=articulation_root,
         spawn=sim_utils.UsdFileCfg(
-            usd_path=UR5E_USD, variants={"Gripper": "Robotiq_2f_85"},
+            usd_path=UR5E_USD,
             rigid_props=[sim_utils.UsdPhysicsRigidBodyCfg(),
                          PhysxRigidBodyCfg(disable_gravity=True, max_depenetration_velocity=5.0)],
             articulation_props=[PhysxArticulationCfg(
                 enabled_self_collisions=False, solver_position_iteration_count=16, solver_velocity_iteration_count=1)],
             activate_contact_sensors=True),
-        init_state=ArticulationCfg.InitialStateCfg(
-            joint_pos={**dict(zip(ARM_JOINTS, HOME_Q)), "finger_joint": 0.0, ".*_inner_finger_joint": 0.0,
-                       ".*_inner_finger_knuckle_joint": 0.0, ".*_outer_.*_joint": 0.0},
-            pos=tuple(pos), rot=tuple(rot_xyzw)),
+        init_state=ArticulationCfg.InitialStateCfg(joint_pos=dict(zip(ARM_JOINTS, HOME_Q)), pos=tuple(pos), rot=tuple(rot_xyzw)),
         actuators={
             "shoulder": ImplicitActuatorCfg(joint_names_expr=["shoulder_.*"], joint_effort_limit=150.0, joint_velocity_limit=3.14,
                                             stiffness=1320.0, damping=72.6636085, friction=0.0, armature=0.0),
@@ -64,15 +57,6 @@ def robot_cfg(prim_path="/World/Robot", pos=(0., 0., 0.), rot_xyzw=(0., 0., 0., 
                                          stiffness=600.0, damping=34.64101615, friction=0.0, armature=0.0),
             "wrist": ImplicitActuatorCfg(joint_names_expr=["wrist_.*"], joint_effort_limit=28.0, joint_velocity_limit=3.14,
                                          stiffness=216.0, damping=29.39387691, friction=0.0, armature=0.0),
-            "gripper_drive": ImplicitActuatorCfg(joint_names_expr=["finger_joint"], joint_effort_limit=gripper_effort,
-                                                 joint_velocity_limit=1.0, stiffness=gripper_stiffness, damping=gripper_damping,
-                                                 friction=0.0, armature=0.001),
-            "gripper_finger": ImplicitActuatorCfg(joint_names_expr=[".*_inner_finger_joint"], joint_effort_limit=finger_effort,
-                                                  joint_velocity_limit=1.0, stiffness=finger_stiffness, damping=finger_damping,
-                                                  friction=0.0, armature=0.001),
-            "gripper_passive": ImplicitActuatorCfg(joint_names_expr=[".*_inner_finger_knuckle_joint", "right_outer_knuckle_joint"],
-                                                   joint_effort_limit=1.0, joint_velocity_limit=1.0, stiffness=0.0, damping=0.05,
-                                                   friction=0.0, armature=0.001),
         },
     )
 
